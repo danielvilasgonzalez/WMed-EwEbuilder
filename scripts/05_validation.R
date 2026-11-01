@@ -1238,6 +1238,98 @@ f_hi <- tryCatch({
 .add_summary_row("Fishing mortality above 1 (F_above_1_REVIEW.csv)", file.path(csv_out_dir, "F_above_1_REVIEW.csv"), if (is.null(f_hi)) NA_integer_ else nrow(f_hi))
 if (!is.null(f_hi) && nrow(f_hi)) message("[05_validation.R] F > 1 for ", nrow(f_hi), " FG(s): ", paste(sprintf("%s (%.2f)", f_hi$FG_name, f_hi$F), collapse = ", "))
 
+## (a2) Where does a high F come from? F by country (the catch data are by
+## country; MEDITS biomass is by GSA, grouped to the country of each GSA).
+## For each FG with F >= REGIONAL_F_MIN (0.5) in the Ecopath years:
+##   catch share  c_k = C_k / sum(C)       C_k = mean catch of country k, Ecopath years
+##   biomass share b_k = B_k / sum(B)      B_k = sum over its GSAs of D_g x A_g
+##     D_g = MEDITS mean density of the FG in GSA g (t/km2, Ecopath years),
+##     A_g = model area of GSA g (model_area_by_gsa.csv). GSAs without MEDITS
+##     (3 Morocco, 4 Algeria, 12 Tunisia) get the area-weighted mean D of the
+##     surveyed GSAs (ASSUMPTION, as in 01's imputation).
+##   F_k = F x c_k / b_k                   (the F of the whole model is F = sum C / sum B)
+## F_k much above F: that country's catch is high for the biomass the survey
+## sees there (catch too high, assigned to this FG, or biomass too low
+## there). "survey sees none" = catch in a country whose GSAs have zero
+## MEDITS density for the FG. Biomass from stock assessments or literature
+## has no survey split; such FGs only show the catch shares.
+if (!exists("REGIONAL_F_MIN")) REGIONAL_F_MIN <- 0.5
+GSA_COUNTRY <- c(`1` = "Spain", `2` = "Spain", `3` = "Morocco", `4` = "Algeria", `5` = "Spain", `6` = "Spain",
+                 `7` = "France", `8` = "France", `9` = "Italy", `10` = "Italy", `11` = "Italy", `12` = "Tunisia")
+validation_plots[["12b_F_by_country"]] <- tryCatch({
+  fp <- file.path(out_dir, "fisheries", "F_by_fg.csv")
+  cp <- file.path(out_dir, "fisheries", "catches_by_country_fleet_sector_year.csv")
+  sp <- file.path(out_dir, "biomass", "survey_fg_annual_index.csv")
+  ap <- file.path(out_dir, "biomass", "model_area_by_gsa.csv")
+  for (f in c(fp, cp, sp, ap)) if (!file.exists(f)) stop(basename(f), " not found")
+  yrs <- if (exists("YEAR_ECOPATH")) YEAR_ECOPATH else 1994:1996
+  fdt <- fread(fp)[is.finite(F) & F >= REGIONAL_F_MIN, .(FG_num, FG_name, F)]
+  if (!nrow(fdt)) stop("no FG with F >= ", REGIONAL_F_MIN)
+  cat_k <- fread(cp, select = c("Country", "FG_num", "Year", "Catch_t"))[Year %in% yrs & FG_num %in% fdt$FG_num,
+             .(C_t = sum(Catch_t, na.rm = TRUE) / length(yrs)), by = .(FG_num, Country)]
+  area <- fread(ap)[, .(GSA = as.integer(GSA), A = area_km2)]
+  area[, Country := GSA_COUNTRY[as.character(GSA)]]
+  dens <- fread(sp)[Year %in% yrs & FG_num %in% fdt$FG_num, .(D = mean(mean_density, na.rm = TRUE)), by = .(FG_num, GSA)]
+  surveyed <- unique(fread(sp, select = "GSA")$GSA)
+  bio <- rbindlist(lapply(fdt$FG_num, function(fg) {
+    g <- copy(area)[, FG_num := fg]
+    g <- merge(g, dens[FG_num == fg, .(GSA, D)], by = "GSA", all.x = TRUE)
+    g[GSA %in% surveyed & is.na(D), D := 0]                                  # surveyed, FG never caught there
+    d_imp <- if (any(g$GSA %in% surveyed)) g[GSA %in% surveyed, sum(D * A) / sum(A)] else NA_real_
+    g[!GSA %in% surveyed, `:=`(D = d_imp, imputed = TRUE)]
+    g[is.na(imputed), imputed := FALSE]
+    g[, .(B_t = sum(D * A), imputed = all(imputed)), by = .(FG_num, Country)]
+  }))
+  has_survey <- dens[, .(n = .N), by = FG_num][n > 0, FG_num]
+  r <- merge(bio, cat_k, by = c("FG_num", "Country"), all = TRUE)
+  r[is.na(C_t), C_t := 0]
+  r[!FG_num %in% has_survey, `:=`(B_t = NA_real_, imputed = NA)]
+  r[, `:=`(catch_share = C_t / sum(C_t), B_share = B_t / sum(B_t, na.rm = TRUE)), by = FG_num]
+  r <- merge(r, fdt, by = "FG_num")
+  ## where the model's B comes from (Ecopath_B Reference): the MEDITS split
+  ## is exact for MEDITS-based B, only indicative for B from stock
+  ## assessments or acoustic surveys
+  bref <- tryCatch(as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, "Ecopath_B"))[, .(FG_num, ref = as.character(Reference))],
+                   error = function(e) data.table(FG_num = integer(), ref = character()))
+  bref[, B_source := fifelse(grepl("^MEDITS", ref), "MEDITS", fifelse(grepl("acoustic|MEDIAS", ref, ignore.case = TRUE), "acoustic",
+                      fifelse(grepl("stock assessment|ICCAT|SSB", ref, ignore.case = TRUE), "stock assessment", "other")))]
+  r <- merge(r, bref[, .(FG_num, B_source)], by = "FG_num", all.x = TRUE)
+  r[, F_country := F * catch_share / B_share]
+  r[, note := fifelse(is.na(B_share), "no survey biomass for this FG (catch share only)",
+              fifelse(C_t > 0 & B_share == 0, "survey sees none here",
+              fifelse(imputed %in% TRUE, "no MEDITS in this country: biomass imputed", "")))]
+  r[!B_source %in% c("MEDITS", NA), note := trimws(paste0(note, fifelse(nzchar(note), "; ", ""), "model B from ", B_source,
+                                                         ": MEDITS split only indicative"))]
+  setorder(r, -F, FG_num, -catch_share)
+  fwrite(r[, .(FG_num, FG_name, B_source, Country, F_model = F, catch_t = C_t, catch_share, B_share, F_country, note)],
+         file.path(csv_out_dir, "F_by_country_REVIEW.csv"))
+  top <- r[is.finite(F_country) & catch_share >= 0.05][order(-F_country)][1:min(.N, 8)]
+  message("[05_validation.R] F by country (F_by_country_REVIEW.csv): highest - ",
+          paste(sprintf("%s in %s %.2g (model F %.2g; %.0f%% of catch, %.0f%% of biomass)", top$FG_name, top$Country, top$F_country, top$F,
+                        100 * top$catch_share, 100 * top$B_share), collapse = "; "))
+  d <- copy(r)
+  d[, fg_txt := sprintf("%d %s (F %.2g%s)", FG_num, FG_name, F, fifelse(B_source %in% c("MEDITS", NA), "", paste0("; B ", B_source)))]
+  d[, fg_lab := factor(fg_txt, levels = rev(unique(fg_txt)))]
+  d[, lab := fifelse(C_t <= 0, "", fifelse(is.na(B_share), sprintf("c %.0f%%", 100 * catch_share),
+             fifelse(B_share == 0, "B = 0", sprintf("%.2g", F_country))))]
+  d[, Ffill := pmin(pmax(F_country, 0.01), 100)]
+  d[C_t <= 0 | !is.finite(F_country), Ffill := NA]
+  d[, Country := factor(Country, levels = c("Spain", "France", "Italy", "Tunisia", "Algeria", "Morocco"))]
+  ggplot(d, aes(x = Country, y = fg_lab, fill = Ffill)) +
+    geom_tile(colour = "white") +
+    geom_text(aes(label = lab, fontface = ifelse(is.finite(F_country) & F_country > 1, "bold", "plain")), size = 2.6) +
+    scale_fill_gradient2(low = "#2166ac", mid = "#f7f7f7", high = "#b2182b", midpoint = 0, trans = "log10", na.value = "grey92",
+                         limits = c(0.01, 100), oob = scales::squish, name = "F in the country") +
+    labs(title = "Where the high fishing mortality comes from: F by country",
+         subtitle = paste0("FGs with model F >= ", REGIONAL_F_MIN, " (", paste(range(yrs), collapse = "-"),
+                           "). F_country = F x (country's share of the catch) / (its share of the MEDITS biomass).\n",
+                           "Red = catch high for the biomass the survey sees there. 'B = 0': catch where the survey finds none.\n",
+                           "'c %': no survey split (catch share only); grey: no catch. Morocco, Algeria, Tunisia have no MEDITS:\n",
+                           "their biomass share is imputed from the surveyed GSAs. Table: validation/F_by_country_REVIEW.csv"),
+         x = NULL, y = NULL) +
+    theme_minimal(base_size = 9) + theme(panel.grid = element_blank(), legend.position = "right")
+}, error = function(e) { message("[05_validation.R plot] F by country skipped - ", conditionMessage(e)); NULL })
+
 ## (b) Time series assessment: every Ecosim_ts series (biomass B_, catch L_,
 ## effort...) described by years with data, first/last year, longest gap,
 ## coefficient of variation CV = sd/mean, and the largest year-to-year jump

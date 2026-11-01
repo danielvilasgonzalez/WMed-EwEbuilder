@@ -51,9 +51,6 @@ execute:
                    # which is exactly the case freeze:auto can't detect (it only checks
                    # whether the .qmd's OWN code changed, not files it reads at render
                    # time) - so this doc always re-executes fully, every render
-editor: 
-  markdown: 
-    wrap: 72
 ---
 
 ```{=html}
@@ -135,6 +132,7 @@ table td code, table th code { white-space: normal; overflow-wrap: anywhere; }
   "05_effort_by_country_fleet.png"                    = "plots/fisheries/05_effort_by_country_fleet.png",
   "fg_pb_qb_scatter.png"                              = "plots/validation/fg_pb_qb_scatter.png",
   "F_by_fg.png"                                       = "plots/validation/F_by_fg.png",
+  "12b_F_by_country.png"                              = "plots/validation/12b_F_by_country.png",
   "PQ_ratio_by_fg.png"                                = "plots/validation/PQ_ratio_by_fg.png",
   "biomass_vs_old_model_by_fg.png"                    = "plots/validation/biomass_vs_old_model_by_fg.png",
   "11_zooplankton_total_field_check.png"              = "plots/validation/11_zooplankton_total_field_check.png",
@@ -398,7 +396,8 @@ tagList(
         actionLink("steps_after1", "02-05 (keep biomass)"), " \u00b7 ", actionLink("steps_only5", "only 05"), " \u00b7 ", actionLink("steps_only6", "only 06")),
       tags$small(class = "text-muted d-block mb-1",
         "06 environment (Copernicus: temperature, salinity, NPP, phytoplankton B and P/B) runs before 05 when both are ticked, so the validation compares it. ",
-        "Its first run downloads several GB (one copernicusmarine login needed); later runs only fetch new years."),
+        "Its first run downloads several GB; later runs only fetch new years. It needs a Copernicus Marine account: ",
+        actionLink("cm_login_link", "enter or change the login"), "."),
       uiOutput("steps_check")))),
 
   ## 4. Run ----------------------------------------------------------------
@@ -406,6 +405,7 @@ tagList(
     fluidRow(
       column(5,
         actionButton("run", "Run pipeline", class = "btn-primary", icon = icon("play")),
+        actionButton("stop", "Stop", class = "btn-outline-danger ms-1", icon = icon("stop")),
         tags$p(),
         uiOutput("run_progress"),
         tags$style(HTML("#run_status { font-size: .9rem; line-height: 1.35; max-height: 460px; overflow-y: auto; white-space: pre-wrap; background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: .7rem .9rem; }")),
@@ -1081,6 +1081,38 @@ observe({   # Run button label; disabled while running or with no shapefile (dis
     updateActionButton(session, "run", label = lab)
 })
 
+## Stop: ends the run's R process and everything it started (e.g. a
+## copernicusmarine download), after a confirmation. Outputs of scripts
+## that already finished stay; the script that was running is incomplete.
+observe({
+  if (utils::packageVersion("shiny") >= "1.11.0")
+    updateActionButton(session, "stop", disabled = !identical(run_state(), "running"))
+})
+observeEvent(input$stop, {
+  if (!identical(run_state(), "running")) { showNotification("No run is going.", duration = 4); return() }
+  showModal(modalDialog(title = "Stop the run?",
+    "The script that is running now stops halfway; scripts that already finished keep their outputs.",
+    footer = tagList(modalButton("Cancel"), actionButton("stop_yes", "Stop the run", class = "btn-danger"))))
+})
+.stopped_by_user <- function() file.exists(.status_file) && isTRUE(grepl("stopped by the user", readLines(.status_file, warn = FALSE)[1]))
+observeEvent(input$stop_yes, {
+  removeModal()
+  pid <- if (file.exists(.pid_file)) suppressWarnings(as.integer(readLines(.pid_file, warn = FALSE)[1])) else NA
+  if (!is.na(pid)) {
+    if (.Platform$OS.type == "windows") {
+      ## /T also ends the processes the run started (Rscript children, copernicusmarine)
+      suppressWarnings(system2("taskkill", c("/PID", pid, "/T", "/F"), stdout = FALSE, stderr = FALSE))
+    } else {
+      suppressWarnings(system2("pkill", c("-TERM", "-P", pid), stdout = FALSE, stderr = FALSE))
+      tools::pskill(pid)
+    }
+  }
+  writeLines("error: stopped by the user", .status_file)
+  run_state("error"); run_finished(Sys.time()); last_finished(Sys.time())
+  run_note("Stopped by the user - outputs of the scripts that had finished are kept.")
+  showNotification("Run stopped.", type = "warning", duration = 6)
+})
+
 observeEvent(input$run, {
   custom <- identical(input$area_mode, "custom")
   if (identical(run_state(), "running")) return()
@@ -1091,11 +1123,19 @@ observeEvent(input$run, {
   .chk <- steps_problems()
   if (length(.chk$missing)) {
     showNotification(paste(c("Can't start:", .chk$missing), collapse = " "), type = "error", duration = 15); return() }
+  ## 06 needs a Copernicus Marine login: ask for it first if this laptop has none
+  if (6 %in% steps_sel() && !.cm_has_login()) { .cm_login_modal(then_run = TRUE); return() }
+  .start_run()
+})
+
+## Starts the run (Run button, or after the Copernicus login window)
+.start_run <- function() {
+  custom <- identical(isolate(input$area_mode), "custom")
   unlink(c(.status_file, .progress_file, .console, .pid_file))
-  writeLines(config_code(), .settings_file)
+  writeLines(isolate(config_code()), .settings_file)
   Sys.setenv(WMED_PROGRESS_FILE = .progress_file)   # inherited by the Rscript process
   ## The settings block, with the final source() wrapped so the result is reported back here
-  body <- config_code()
+  body <- isolate(config_code())
   body <- body[!grepl("^##", body)]
   body <- sub("^source\\(\"01_biomass.R\"\\).*$", paste0(
     "res <- tryCatch({ cat('--- Step 1/5: 01_biomass.R\\n', file = Sys.getenv('WMED_PROGRESS_FILE'), append = TRUE); ",
@@ -1123,9 +1163,56 @@ observeEvent(input$run, {
   .out_file <- if (.Platform$OS.type == "windows") file.path(.run_dir, "console_raw.txt") else .console
   system2(file.path(R.home("bin"), "Rscript"), shQuote(.fwd(.run_script)), wait = FALSE, stdout = .out_file, stderr = .out_file)
   run_state("running"); run_started(Sys.time()); run_finished(NULL); run_note(""); step_seen(list())
-  run_steps(steps_sel())
-  showNotification(if (custom) paste0("Pipeline started for '", input$area_name, "' - outputs in out_dir/", input$area_name, ".")
+  run_steps(isolate(steps_sel()))
+  showNotification(if (custom) paste0("Pipeline started for '", isolate(input$area_name), "' - outputs in out_dir/", isolate(input$area_name), ".")
                    else "Pipeline started - progress is shown below the button.", duration = 8)
+}
+
+## --- Copernicus Marine login (needed by 06 environment) -------------------
+## Each user types their own account once in a window on the page. It is
+## saved in that user's own .Renviron (as COPERNICUSMARINE_SERVICE_USERNAME
+## / _PASSWORD, read by lib_cmems_phytoplankton_biomass.R) and set for this
+## R session, so the run started from here inherits it. It never goes into
+## the settings block, the run's script or the logs.
+.renviron_candidates <- function() {
+  up <- Sys.getenv("USERPROFILE")
+  unique(c(path.expand("~/.Renviron"), if (nzchar(up)) file.path(up, c(".Renviron", "Documents/.Renviron"))))
+}
+.cm_has_login <- function() {
+  if (!nzchar(Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME")))
+    for (f in .renviron_candidates()) if (file.exists(f)) try(readRenviron(f), silent = TRUE)
+  if (nzchar(Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME")) && nzchar(Sys.getenv("COPERNICUSMARINE_SERVICE_PASSWORD"))) return(TRUE)
+  up <- Sys.getenv("USERPROFILE")
+  any(file.exists(unique(c(path.expand("~/.copernicusmarine/.copernicusmarine-credentials"),
+                           if (nzchar(up)) file.path(up, ".copernicusmarine", ".copernicusmarine-credentials")))))
+}
+cm_then_run <- reactiveVal(FALSE)
+.cm_login_modal <- function(then_run = FALSE) {
+  cm_then_run(then_run)
+  showModal(modalDialog(title = "Copernicus Marine login",
+    tags$p("06 environment downloads data from the Copernicus Marine Service, which needs your own free account (",
+           tags$a("register here", href = "https://data.marine.copernicus.eu/register", target = "_blank"), ")."),
+    textInput("cm_user", "Username", value = Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME")),
+    passwordInput("cm_pass", "Password"),
+    tags$small(class = "text-muted", "Saved only on this computer, in your own .Renviron file; never in the code, the settings or the logs."),
+    footer = tagList(modalButton("Cancel"), actionButton("cm_save", if (then_run) "Save and run" else "Save", class = "btn-primary"))))
+}
+observeEvent(input$cm_login_link, .cm_login_modal(then_run = FALSE))
+observeEvent(input$cm_save, {
+  u <- trimws(input$cm_user); p <- input$cm_pass
+  if (!nzchar(u) || !nzchar(p)) { showNotification("Type the username and the password.", type = "error"); return() }
+  Sys.setenv(COPERNICUSMARINE_SERVICE_USERNAME = u, COPERNICUSMARINE_SERVICE_PASSWORD = p)
+  f <- path.expand("~/.Renviron")
+  ok <- tryCatch({
+    old <- if (file.exists(f)) readLines(f, warn = FALSE) else character(0)
+    old <- old[!grepl("^COPERNICUSMARINE_SERVICE_(USERNAME|PASSWORD)=", old)]
+    writeLines(c(old, paste0("COPERNICUSMARINE_SERVICE_USERNAME=", u), paste0("COPERNICUSMARINE_SERVICE_PASSWORD=", p)), f)
+    Sys.chmod(f, mode = "0600"); TRUE
+  }, error = function(e) FALSE)
+  removeModal()
+  showNotification(if (ok) "Copernicus login saved." else "Login set for this session only (could not write .Renviron).",
+                   type = if (ok) "message" else "warning", duration = 6)
+  if (isTRUE(cm_then_run())) { cm_then_run(FALSE); .start_run() }
 })
 
 ## Poll the status file while a run is going
@@ -1173,14 +1260,14 @@ output$run_progress <- renderUI({
   cur_min <- if (!is.na(current)) as.numeric(difftime(Sys.time(), seen[[as.character(current)]], units = "mins")) else 0
   left_min <- sum(sm[setdiff(steps, c(finished, current))]) +
               (if (!is.na(current)) max(sm[current] - cur_min, 0.05 * sm[current]) else 0)
-  pct <- if (st == "done") 100 else round(100 * (done_min + cur_min) / (done_min + cur_min + left_min))
+  pct <- if (st == "done") 100 else if (st == "error") round(100 * done_min / max(done_min + left_min, 1e-9)) else round(100 * (done_min + cur_min) / (done_min + cur_min + left_min))
   elapsed <- as.numeric(difftime(if (is.null(run_finished())) Sys.time() else run_finished(), run_started(), units = "mins"))
   label <- switch(st,
     running = paste0(if (!is.na(current)) paste0("Running ", .step_names[current]) else "Starting",
                      " - ", length(intersect(finished, steps)), " of ", length(steps), " script(s) done - ",
                      sprintf("%.1f", elapsed), " min elapsed, about ", sprintf("%.0f", left_min), " min left"),
     done = sprintf("Finished %s, in %.1f min", format(run_finished(), "%d %b %H:%M"), elapsed),
-    error = "Stopped with an error - see below")
+    error = if (.stopped_by_user()) "Stopped with the Stop button" else "Stopped with an error - see below")
   colour <- switch(st, running = "bg-info", done = "bg-success", error = "bg-danger")
   ## one chip per script: done / running / waiting
   chips <- lapply(steps, function(k) {
@@ -1192,7 +1279,7 @@ output$run_progress <- renderUI({
   tagList(
     tags$div(style = "font-size: 1.15rem; font-weight: 600; margin-bottom: .35rem;",
              switch(st, running = if (!is.na(current)) paste0("Step ", current, "/6: ", .step_names[current]) else "Starting...",
-                    done = "Finished", error = "Stopped with an error")),
+                    done = "Finished", error = if (.stopped_by_user()) "Stopped" else "Stopped with an error")),
     tags$div(class = "progress mb-2", style = "height: 34px; border-radius: 17px; font-size: 1.05rem;",
              tags$div(class = paste("progress-bar progress-bar-striped", colour, if (st == "running") "progress-bar-animated"),
                       role = "progressbar", style = paste0("width: ", pct, "%; font-weight: 600;"), paste0(pct, "%"))),
@@ -1326,6 +1413,7 @@ output$dl_info <- renderUI({
                 "Effort by fleet"     = "fisheries/05_effort_by_country_fleet.png",
                 "P/B vs Q/B"          = "validation/fg_pb_qb_scatter.png",
                 "F by FG"             = "validation/F_by_fg.png",
+                "F by country"        = "validation/12b_F_by_country.png",
                 "P/Q by FG"           = "validation/PQ_ratio_by_fg.png",
                 "Diet matrix"         = "diets/diet_matrix_heatmap.png",
                 "PREBAL"              = "validation/15_prebal.png",
@@ -1483,10 +1571,8 @@ figure whose script has not run yet shows a short note instead.)
 
 The pipeline covers several conceptually distinct problems in sequence:
 
-1.  **Which Functional Group does each species belong to?**
-    (@sec-fg-matching)
-2.  **What study area am I actually working with?**
-    (@sec-area-definition)
+1.  **Which Functional Group does each species belong to?** (@sec-fg-matching)
+2.  **What study area am I actually working with?** (@sec-area-definition)
 3.  **Given catch and effort, what's the correctly-standardized density
     for each haul?** (@sec-density, including catchability correction
     and outlier removal)
@@ -1568,8 +1654,8 @@ The species → functional group assignment comes from `FG_WMed_2026.csv`
 Mediterranean model. One row per species, with its `FG_number` and
 `FG_name` (plus `Genus`, `Family`, `Order`, `Class`, `Phylum`, `source`
 and `status`). Scripts 01-04 all read it. Another file with the same
-columns can be chosen or uploaded in the *Functional groups* card
-(@sec-configure), which sets `FG_SPECIES_FILE` for the run.
+columns can be chosen or uploaded in the *Functional groups* card (@sec-configure),
+which sets `FG_SPECIES_FILE` for the run.
 :::
 
 ::: callout-note
@@ -3085,6 +3171,22 @@ wm_figure("fig-pb-qb-scatter", r"---(Chosen PB vs. QB by Functional Group.)---",
 wm_figure("fig-f-by-fg", r"---(Fishing mortality F by Functional Group, 1994-1996.)---", "F_by_fg.png", r"---(05_validation.R)---")
 ```
 
+Where a high F comes from: for each FG with $F \ge 0.5$, the F of each
+country is $F_k = F \times c_k / b_k$, where $c_k$ is the country's share
+of the catch (Ecopath years) and $b_k$ its share of the biomass, from the
+MEDITS density of the FG in each of its GSAs times the GSA area (GSAs 3,
+4 and 12 have no MEDITS: their share is imputed from the surveyed GSAs).
+$F_k$ well above $F$ means the catch there is high for the biomass the
+survey sees there: catch too high or assigned to this FG, or biomass too
+low there. Table: `validation/F_by_country_REVIEW.csv`.
+
+```{r}
+#| label: show-fig-f-by-country
+#| eval: true
+#| echo: false
+wm_figure("fig-f-by-country", r"---(F by country for the FGs with F >= 0.5: red cells show where the catch is high for the biomass the survey sees.)---", "12b_F_by_country.png", r"---(05_validation.R)---")
+```
+
 ------------------------------------------------------------------------
 
 ## Diet Matrix (`04_diets.R`) {#sec-diets}
@@ -3485,7 +3587,24 @@ with $NPP$ the annual sum (g C m⁻² yr⁻¹) and $s$ the share of each
 group: Large = micro-, Small = nano- + picophytoplankton chlorophyll from
 satellite ocean colour, 1998–2000 (ASSUMPTION: chlorophyll share = carbon
 share; both groups get the same P/B). All values are area-weighted means
-over the model GSAs.
+over the run's model area.
+
+**Years and area follow the run's settings.** The maps and series cover
+the *Years* card (`TS_YEARS`, plus the Ecopath years); B uses the middle
+Ecopath year and P/B the Ecopath years up to it (1994:1996 gives B 1995
+and NPP 1994–1995). The area is the one picked in the *Model area* card:
+the GSAs in `MODEL_GSAS`, or the custom region (box or uploaded
+polygon), with outputs in `out_dir/<AREA_NAME>/environment/`. The
+downloads always cover the whole Western Mediterranean box and are
+cached once (`out_dir/environment/cache/`), so changing the area or the
+years does not download again.
+
+**Uncertainty band.** For every month the table gives the area-weighted
+mean and the 10th and 90th percentiles of the values across the grid
+cells inside the area (`p10`, `p90`); the annual rows do the same on the
+annual map. In the figure, the band is this spatial spread: how much the
+area differs inside itself, not an error of the model. Years filled from
+PISCES are shaded.
 
 Outputs in `out_dir/environment/`: one GeoTIFF per variable on the
 native 1/24° grid (one layer per month), monthly ASCII maps on the
@@ -3499,7 +3618,7 @@ levels of every file, gap-fill ratios, satellite size classes).
 #| label: show-fig-environment
 #| eval: true
 #| echo: false
-wm_figure("fig-environment", r"---(Environmental drivers over the model area: monthly values and annual means; shaded years are PISCES scaled to MedBFM.)---", "environment_timeseries.png", r"---(06_environment.R)---")
+wm_figure("fig-environment", r"---(Environment of the model area over the run's years: monthly (grey) and annual (red) area-weighted means, with the 10th-90th percentile across grid cells as the band; shaded years are PISCES scaled to MedBFM; dashed line = Ecopath year.)---", "environment_timeseries.png", r"---(06_environment.R)---")
 ```
 
 ## Known limitations {#sec-open-issues .unnumbered}

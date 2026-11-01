@@ -229,6 +229,16 @@ ensure_copernicusmarine_cli <- function(auto_install = TRUE) {
 ensure_copernicusmarine_credentials <- function(renviron_path = "~/.Renviron", force_prompt = FALSE) {
   cm_user <- Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME", unset = NA)
   cm_pass <- Sys.getenv("COPERNICUSMARINE_SERVICE_PASSWORD", unset = NA)
+  ## A run started from the page (Rscript) may not have read the .Renviron
+  ## where the login was saved (on Windows R looks in Documents, and HOME
+  ## can be broken): read the usual places explicitly.
+  if (!force_prompt && (is.na(cm_user) || !nzchar(cm_user))) {
+    up <- Sys.getenv("USERPROFILE")
+    for (f in unique(c(path.expand(renviron_path), if (nzchar(up)) file.path(up, c(".Renviron", "Documents/.Renviron")))))
+      if (file.exists(f)) try(readRenviron(f), silent = TRUE)
+    cm_user <- Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME", unset = NA)
+    cm_pass <- Sys.getenv("COPERNICUSMARINE_SERVICE_PASSWORD", unset = NA)
+  }
   if (force_prompt) {
     message("[CMEMS diag] Copernicus Marine rejected the stored login - asking for your own username and password.")
     cm_user <- NA; cm_pass <- NA
@@ -302,6 +312,7 @@ ensure_copernicusmarine_credentials <- function(renviron_path = "~/.Renviron", f
                  paste0("COPERNICUSMARINE_SERVICE_USERNAME=", cm_user),
                  paste0("COPERNICUSMARINE_SERVICE_PASSWORD=", cm_pass))
   writeLines(new_lines, renviron_full_path)
+  Sys.chmod(renviron_full_path, mode = "0600")
   message("[CMEMS diag] Credentials check: ok (entered just now, saved to ", renviron_full_path,
           " - you won't be asked again on future runs).")
 
@@ -469,4 +480,15 @@ fetch_cmems_phytoplankton_biomass <- function(out_dir, force_refresh = FALSE,
   })
 
   invisible(result)
+}
+
+
+## Enter (or change) the Copernicus Marine login once, from the R console:
+##   source("lib_cmems_phytoplankton_biomass.R"); wmed_copernicus_login()
+## It asks for the username and password (RStudio pop-ups, password
+## hidden) and saves them in your own ~/.Renviron, where runs started from
+## the page find them. Nothing is written to the code or the logs.
+wmed_copernicus_login <- function() {
+  if (!interactive()) stop("Run wmed_copernicus_login() from the R console (it asks for the password).")
+  invisible(!is.null(ensure_copernicusmarine_credentials(force_prompt = TRUE)))
 }

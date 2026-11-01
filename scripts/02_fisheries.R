@@ -7697,17 +7697,24 @@ classify_source <- function(x) {
 validation_plots <- list()  # collect each figure by name, for the PDF/PNG export below
 
 ## 1. Catches per FG over time - landings vs. catch-incl-discards,
-## small multiples so every FG (including the zero-catch ones from the
-## completed grid above) is visible in one figure.
+## small multiples. Only FGs with catch (or landings) above zero in at
+## least one year of the series are drawn; the FGs with no catch at all
+## are listed in the log (they are still in the tables with 0).
 validation_plots[["01_catches_per_FG"]] <- tryCatch({
-  d <- melt(catches_discards_fg[, .(Year, FG_num, FG_name, Landings_t, Catch_t)],
+  has_catch <- catches_discards_fg[, .(any_catch = any(pmax(Catch_t, Landings_t, na.rm = TRUE) > 0, na.rm = TRUE)), by = .(FG_num, FG_name)]
+  no_catch <- has_catch[any_catch == FALSE]
+  if (nrow(no_catch)) message("[Validation plot 1] ", nrow(no_catch), " FG(s) with no catch in any year left out of 01_catches_per_FG: ",
+                              paste(paste0(no_catch$FG_num, " ", no_catch$FG_name), collapse = ", "))
+  d <- melt(catches_discards_fg[FG_num %in% has_catch[any_catch == TRUE, FG_num], .(Year, FG_num, FG_name, Landings_t, Catch_t)],
             id.vars = c("Year", "FG_num", "FG_name"), variable.name = "Measure", value.name = "t")  # reshape landings/catch into long format for plotting
+  if (!nrow(d)) stop("no FG with catch")
   ggplot(d, aes(x = Year, y = t, color = Measure)) +
     geom_line(linewidth = 0.4) +
     facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y") +
     scale_color_manual(values = c(Landings_t = "#4C6FE7", Catch_t = "#D9534F"),
                        labels = c(Landings_t = "Landings", Catch_t = "Catch (incl. discards)")) +
-    labs(title = "Catches per functional group over time", subtitle = "GFCM landings vs. landings+discards, full West Med series",
+    labs(title = "Catches per functional group over time", subtitle = paste0("GFCM landings vs. landings+discards, full West Med series; ", uniqueN(d$FG_num),
+                                                                        " FGs with catch (", nrow(no_catch), " without any catch not shown)"),
          x = NULL, y = "t/year", color = NULL) +
     theme_minimal(base_size = 7) + theme(legend.position = "bottom")
 }, error = function(e) { message("[Validation plot 1] skipped - ", conditionMessage(e)); NULL })
@@ -7825,17 +7832,16 @@ validation_plots[["05_effort_by_country_fleet"]] <- tryCatch({
     base_val <- Effort[which(!is.na(Effort) & Effort != 0)[1]]  # first non-NA, non-zero value for this Country x Fleet series
     if (is.na(base_val) || length(base_val) == 0) NA_real_ else Effort / base_val
   }, by = .(Country, Fleet)]
-  ## Readable version: log scale (an index is a ratio: x2 and /2 sit at
-  ## the same distance from 1), one colour per gear shared by all panels,
+  ## Readable version: linear scale (index, first year = 1), one colour per gear shared by all panels,
   ## each line labelled at its last year (no long legend to decode), and
   ## the two dates where the effort source changes marked.
-  d <- d[is.finite(Effort_idx) & Effort_idx > 0]
+  d <- d[is.finite(Effort_idx)]
+  d <- d[, if (any(Effort_idx > 0)) .SD, by = .(Country, Fleet)]   # fleets with zero effort in every year are not drawn
   d[, Fleet := gsub("_", " ", Fleet)]
   lab <- d[, .SD[which.max(Year)], by = .(Country, Fleet)]
   lab[, Fleet_lab := ifelse(nchar(Fleet) > 22, paste0(substr(Fleet, 1, 21), "\u2026"), Fleet)]
   fleets <- sort(unique(d$Fleet))
   pal <- setNames(grDevices::hcl.colors(length(fleets), "Dark 3"), fleets)
-  brk <- c(0.01, 0.03, 0.1, 0.25, 0.5, 1, 2, 4, 10)
   yr_max <- max(d$Year)
   ggplot(d, aes(x = Year, y = Effort_idx, colour = Fleet)) +
     geom_vline(xintercept = 2014, linetype = "longdash", colour = "grey55", linewidth = 0.3) +
@@ -7848,17 +7854,17 @@ validation_plots[["05_effort_by_country_fleet"]] <- tryCatch({
                                 nudge_x = 1, segment.size = 0.2, segment.colour = "grey70", min.segment.length = 0,
                                 xlim = c(yr_max + 0.5, NA), show.legend = FALSE)
      else geom_text(data = lab, aes(label = Fleet_lab), size = 3.7, hjust = -0.1, check_overlap = TRUE, show.legend = FALSE)) +
-    scale_y_log10(breaks = brk, labels = function(x) format(x, drop0trailing = TRUE)) +
+    scale_y_continuous(limits = c(0, NA), labels = function(x) format(x, drop0trailing = TRUE)) +
     scale_x_continuous(breaks = function(l) { b <- pretty(c(min(d$Year), yr_max), n = 3); b[b <= yr_max] }, expand = expansion(mult = c(0.02, 0.5))) +
     scale_colour_manual(values = pal, guide = "none") +
     coord_cartesian(clip = "off") +
     facet_wrap(~ Country, scales = "free_y", ncol = 3) +
     labs(title = "Fishing effort by country and fleet (index, first year = 1)",
-         subtitle = paste0("Log scale: 2 = double, 0.5 = half the first-year effort. Technology creep included.\n",
+         subtitle = paste0("Linear scale: 2 = double, 0.5 = half the first-year effort. Technology creep included.\n",
                            "Long-dashed line = 2014 (EU-3: hindcast before, STECF FDI days from 2014). ",
                            "\nDotted line = 2017 (Morocco/Algeria/Tunisia FishMIP effort held flat after, creep still applied). ",
                            "Fleets with zero effort are not drawn."),
-         x = NULL, y = "Effort index (log scale)") +
+         x = NULL, y = "Effort index (first year = 1)") +
     theme_minimal(base_size = 9) +
     theme(plot.background = element_rect(fill = "white", colour = NA),
           panel.grid.minor = element_blank(), panel.grid.major.x = element_line(colour = "grey92"),
@@ -8023,4 +8029,4 @@ tryCatch({
 
 sink()
 close(.run_log_con)
-options(error = NULL)   # do not leave the log handler in the R session
+options(error = NULL)   # do not leave the log handler in the R session
