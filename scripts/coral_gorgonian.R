@@ -32,11 +32,13 @@
 
 # Load/rebuild GSA layer if not already in memory
 
-gsa_shp <- paste0(
-  "/Users/andreaobradors/Documents/daniel/",
-  "WMed_EwE/output/shapefiles/GFCM_GSA_shp/",
-  "GFCM_GSA/gfcm_gsa.shp"
-)
+## Folders on this computer (wmed_paths.R: config.local.R, config.R, or the
+## standard pCloud Drive place); the GSA shapefile is in the repo (gsa_export/)
+.wm_here <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+if (!file.exists(file.path(.wm_here, "wmed_paths.R"))) .wm_here <- getwd()
+source(file.path(.wm_here, "wmed_paths.R"))
+.wm_paths <- wmed_find_paths(dirname(.wm_here))
+gsa_shp <- file.path(.wm_paths$git_dir, "gsa_export", "GFCM_GSA_shp", "GFCM_GSA", "gfcm_gsa.shp")
 
 gsa <- st_read(
   gsa_shp,

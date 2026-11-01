@@ -152,10 +152,14 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
     stop("[05_validation.R] out_dir was pre-set by the calling script but doesn't exist on this machine: \"",
          out_dir, "\". Fix it in the driver script (e.g. run_pipeline_demo.R) before sourcing this file.")
   }
-} else if (tolower(Sys.info()[["user"]]) == "daniel" && .Platform$OS.type == "unix") {
-  out_dir <- "/Users/daniel/Work/iMARES/WMed EwE Model/output/"
-  pcloud_dir   <- "/Users/daniel/pCloud Drive/EwE Western Med 2026/"
-  git_dir <-"/Users/daniel/Documents/GitHub/WMed_EwE/"
+} else if (isTRUE(local({   # run on its own: folders from wmed_paths.R (config.local.R, config.R, or the standard pCloud place)
+  .d <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+  if (!file.exists(file.path(.d, "wmed_paths.R"))) .d <- getwd()
+  file.exists(file.path(.d, "wmed_paths.R")) && {
+    source(file.path(.d, "wmed_paths.R"), local = TRUE)
+    isTRUE(wmed_set_paths(dirname(.d))$ok)
+  }
+}))) {
 } else {
   if (!requireNamespace("rstudioapi", quietly = TRUE) || !rstudioapi::isAvailable()) {
     stop("This script requires RStudio. Please select the output directory manually.")
@@ -1207,7 +1211,7 @@ for (.k in c("Biomass", "Catch")) {
     dl <- melt(d, id.vars = c("panel", "Year"), measure.vars = c("I_new", "I_old"), variable.name = "series", value.name = "I")
     dl[, series := fifelse(series == "I_new", "New pipeline", "Old model (1995)")]
     ggplot(dl, aes(Year, I, colour = series)) + geom_line() + geom_point(size = 0.6) +
-      facet_wrap(~ panel, scales = "free_y") +
+      facet_wrap(~ panel, scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
       scale_colour_manual(values = c("New pipeline" = "firebrick", "Old model (1995)" = "grey30")) +
       labs(title = paste0("Ecosim ", tolower(.k), " time series: new vs old model"),
            subtitle = "Each series divided by its mean over the common years; panels sorted by correlation r (lowest first)",
@@ -1754,7 +1758,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
       scale_color_manual(values = c(`TRUE` = "firebrick", `FALSE` = "grey50"),
                          labels = c(`TRUE` = "Chosen for FG average", `FALSE` = "Other method"), name = NULL) +
       scale_size_manual(values = c(`TRUE` = 4, `FALSE` = 2.5), guide = "none") +
-      facet_wrap(~ FG_label, scales = "free_y") +
+      facet_wrap(~ FG_label, scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
       theme_bw(base_size = 11) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
       labs(title = "P/B method comparison - fish, by functional group",
@@ -1777,7 +1781,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
       scale_color_manual(values = c(`TRUE` = "firebrick", `FALSE` = "grey50"),
                          labels = c(`TRUE` = "Chosen for FG average", `FALSE` = "Other method"), name = NULL) +
       scale_size_manual(values = c(`TRUE` = 4, `FALSE` = 2.5), guide = "none") +
-      facet_wrap(~ FG_label, scales = "free_y") +
+      facet_wrap(~ FG_label, scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
       theme_bw(base_size = 11) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
       labs(title = "Q/B method comparison - fish, by functional group",
@@ -1949,6 +1953,8 @@ if (length(validation_plots) == 0) {
   n_fg_biomass_plot <- tryCatch(
     comparison_dt[metric == "Biomass" & !is.na(ratio) & is.finite(ratio) & ratio > 0, uniqueN(FG_name)],
     error = function(e) 0)
+  .own_png <- c("01_old_vs_new_comparison", "01b_biomass_vs_old_model_by_fg", "01c_biomass_vs_old_model_as_published")
+  unlink(file.path(plot_dir, paste0(.own_png, ".png")))   # remove the copies older runs wrote
   for (nm in names(validation_plots)) {
     ## embedded_png_pages' names are basename(png_path) - already-existing
     ## PNGs produced by an earlier pipeline script, keyed WITH their ".png"
@@ -1957,6 +1963,9 @@ if (length(validation_plots) == 0) {
     ## file named "<name>.png.png" for no reason - the real PNG already
     ## exists at its own original path, so just skip it.
     if (nm %in% names(embedded_png_pages)) next
+    ## these three already have their own PNG (saved above under a
+    ## descriptive name); a second copy here was the same figure twice
+    if (nm %in% .own_png) next
     ht <- if (nm %in% c("01b_biomass_vs_old_model_by_fg", "01c_biomass_vs_old_model_as_published", "16_pedigree")) 14 else if (nm == "15_prebal") 5 else 7
     p_save <- validation_plots[[nm]]; readable <- TRUE
     if (identical(nm, "13_ecosim_ts_assessment")) {
@@ -1990,4 +1999,4 @@ if (exists(".orig_message", envir = .GlobalEnv, inherits = FALSE)) {
 }
 sink()
 close(.run_log_con)
-options(error = NULL)   # do not leave the log handler in the R session
+options(error = NULL)   # do not leave the log handler in the R session

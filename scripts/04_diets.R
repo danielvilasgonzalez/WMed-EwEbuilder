@@ -163,10 +163,14 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
     stop("[04_diets.R] out_dir was pre-set by the calling script but doesn't exist on this machine: \"",
          out_dir, "\". Fix it in the driver script (e.g. run_pipeline_demo.R) before sourcing this file.")
   }
-} else if (tolower(Sys.info()[["user"]]) == "daniel" && .Platform$OS.type == "unix") {
-  out_dir <- "/Users/daniel/Work/iMARES/WMed EwE Model/output/"
-  pcloud_dir   <- "/Users/daniel/pCloud Drive/EwE Western Med 2026/"
-  git_dir <-"/Users/daniel/Documents/GitHub/WMed_EwE/"
+} else if (isTRUE(local({   # run on its own: folders from wmed_paths.R (config.local.R, config.R, or the standard pCloud place)
+  .d <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+  if (!file.exists(file.path(.d, "wmed_paths.R"))) .d <- getwd()
+  file.exists(file.path(.d, "wmed_paths.R")) && {
+    source(file.path(.d, "wmed_paths.R"), local = TRUE)
+    isTRUE(wmed_set_paths(dirname(.d))$ok)
+  }
+}))) {
 } else {
   if (!requireNamespace("rstudioapi", quietly = TRUE) || !rstudioapi::isAvailable()) {
     stop("This script requires RStudio. Please select the output directory manually.")

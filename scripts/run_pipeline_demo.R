@@ -82,6 +82,11 @@ if (any(!file.exists(.scripts))) stop("[run_pipeline_demo.R] Missing in git_dir:
 ## starts; on a ready laptop this takes about a second).
 source(file.path(git_dir, "scripts", "install_packages.R"))
 
+## Run record and history (lib_run_record.R): the previous results are
+## copied to out_dir/previous_runs/ before this run overwrites them.
+source(file.path(git_dir, "scripts", "lib_run_record.R"))
+tryCatch(wmed_archive_previous_run(out_dir), error = function(e) message("[run record] previous run not archived: ", conditionMessage(e)))
+
 ## ---- 2. Run settings -----------------------------------------------
 if (RUN_MODE == "westmed_default") {
   ## Western Med model. Model area and years are set here (all scripts
@@ -187,6 +192,7 @@ if (.custom_run) {
 ## objects and settings of earlier ones). A failing step stops the run
 ## and names the step and its log. 05 is optional and never stops the run.
 .t0 <- Sys.time()
+.step_minutes <- list()
 ## Progress file (set WMED_PROGRESS_FILE, as the Run button of
 ## WMed-EwEbuilder.qmd does): one line when a step starts and
 ## one when it ends, written with base::cat so the scripts' own logging
@@ -211,6 +217,7 @@ if (.custom_run) {
            })
   while (sink.number() > 0) sink()
   message(sprintf("--- Step %d/6 done in %.1f min ---", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
+  .step_minutes[[sprintf("%02d", i)]] <<- round(as.numeric(difftime(Sys.time(), t, units = "mins")), 1)
   .progress(sprintf("--- Step %d/6 done in %.1f min", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
 }
 
@@ -231,6 +238,17 @@ if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
 } else {
   if (5 %in% RUN_STEPS) message("--- Step 5/6: skipped (RUN_VALIDATION = FALSE) ---")
 }
+
+## Run record: settings, minutes per step, git commit, R and package
+## versions, input files (out_dir/run_record_<time>.json + the info sheet)
+.rec_names <- c("RUN_STEPS", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
+                "AREA_MODE", "AREA_NAME", "CUSTOM_AREA_TYPE", "CUSTOM_BBOX", "STRATA", "DROP_OUTLIERS", "NORMALIZE_TS",
+                "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE", "HIGH_F_B_FIX")
+.rec_settings <- Filter(Negate(is.null), lapply(stats::setNames(.rec_names, .rec_names), function(n)
+  if (exists(n, envir = .GlobalEnv, inherits = FALSE)) get(n, envir = .GlobalEnv) else NULL))
+if (exists("FG_SPECIES_FILE", envir = .GlobalEnv)) .rec_settings$FG_SPECIES_FILE <- basename(FG_SPECIES_FILE)
+tryCatch(wmed_write_run_record(out_dir, git_dir, pcloud_dir, .t0, .rec_settings, .step_minutes),
+         error = function(e) message("[run record] not written: ", conditionMessage(e)))
 
 message(sprintf("\n=== Pipeline finished in %.1f min. Workbook: %s ===",
                 as.numeric(difftime(Sys.time(), .t0, units = "mins")),

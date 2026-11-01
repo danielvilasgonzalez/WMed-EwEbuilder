@@ -166,12 +166,15 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
             "--minimum-latitude", bbox[["lat_min"]], "--maximum-latitude", bbox[["lat_max"]],
             if (!is.null(depth)) c("--minimum-depth", depth[1], "--maximum-depth", depth[2]),
             "--coordinates-selection-method", "inside",
-            "--output-directory", dirname(f), "--output-filename", basename(f))
+            "--output-directory", shQuote(dirname(f)), "--output-filename", shQuote(basename(f)))   # quoted: paths can contain spaces
   out <- suppressWarnings(system2("copernicusmarine", args, stdout = TRUE, stderr = TRUE, timeout = ENV_TIMEOUT_SEC))
   if (!file.exists(f) && any(grepl("Invalid username or password", out, ignore.case = TRUE))) {
     ensure_copernicusmarine_credentials(force_prompt = TRUE)
     out <- suppressWarnings(system2("copernicusmarine", args, stdout = TRUE, stderr = TRUE, timeout = ENV_TIMEOUT_SEC))
   }
+  ## A command-line error (not a missing year) is the same for every request: stop at once
+  if (!file.exists(f) && any(grepl("^Usage: copernicusmarine|Got unexpected extra arguments|No such option", out)))
+    stop("[06_environment] copernicusmarine rejected the command: ", paste(utils::tail(out[nzchar(trimws(out))], 2), collapse = " | "))
   if (!file.exists(f) && any(grepl("requires a Copernicus Marine username and password|Copernicus Marine username:|Invalid username or password", out)))
     stop("[06_environment] Copernicus Marine refused the login (missing or wrong). Enter it again on the page (06 environment ->",
          " 'enter or change the login'), or in the R console:\n",
@@ -482,6 +485,20 @@ if (nrow(env_ts)) {
   env_annual[variable != "npp", unit := ENV_UNITS_OUT[variable]]
   env_annual[, relative_to_base := value / value[year == ENV_BASE_YEAR][1], by = variable]
   fwrite(env_annual, file.path(env_dir, "environment_timeseries_annual.csv"))
+  ## Ecosim forcing functions: one file per variable, value relative to the
+  ## base year (Ecopath year) = 1, monthly (time step 1 = January of the
+  ## first year) and annual, ready to paste into EwE's forcing function
+  ## table (Ecosim > Input > Time series / Forcing functions).
+  for (nm in unique(env_ts$variable)) {
+    m <- env_ts[variable == nm & year %in% sort(unique(c(ENV_BASE_YEAR, ENV_YEARS)))][order(year, month)]
+    m[, time_step := (year - min(year)) * 12 + month]
+    fwrite(m[, .(time_step, year, month, forcing = round(relative_to_base, 4), value, source)],
+           file.path(env_dir, paste0("ecosim_forcing_", nm, "_monthly.csv")))
+    a <- env_annual[variable == nm & year %in% sort(unique(c(ENV_BASE_YEAR, ENV_YEARS)))][order(year)]
+    fwrite(a[, .(year, forcing = round(relative_to_base, 4), value, n_months, source)],
+           file.path(env_dir, paste0("ecosim_forcing_", nm, "_annual.csv")))
+  }
+  .env_msg("[06_environment] Ecosim forcing functions (relative to ", ENV_BASE_YEAR, "): ecosim_forcing_<variable>_monthly.csv / _annual.csv")
   .env_msg("[06_environment] Time series: environment_timeseries_monthly.csv and _annual.csv (value = area-weighted mean,",
            " p10/p90 = 10th/90th percentile across the grid cells of the area; relative_to_base = value / ",
            ENV_BASE_YEAR, " mean, the Ecosim forcing shape).")
@@ -561,11 +578,15 @@ if (!is.null(pft_share)) {
 ## =================================================================
 ## STEP 5 - Ecopath phytoplankton B and P/B
 ## =================================================================
-if (nrow(env_ts) && all(c("npp", "phyto_c") %in% env_ts$variable)) {
+tryCatch(if (nrow(env_ts) && all(c("npp", "phyto_c") %in% env_ts$variable)) {
   b_c  <- env_ts[variable == "phyto_c" & year == ENV_ECOPATH_B_YEAR, mean(value)]
   b_src <- env_ts[variable == "phyto_c" & year == ENV_ECOPATH_B_YEAR, paste(unique(source), collapse = " + ")]
   npp_y <- env_annual[variable == "npp" & year %in% ENV_ECOPATH_PB_YEARS & n_months == 12]
   npp_c <- mean(npp_y$value)
+  if (!is.finite(b_c) || !nrow(npp_y) || !is.finite(npp_c))
+    stop("[06_environment] no phytoplankton carbon for ", ENV_ECOPATH_B_YEAR, " or no full year of NPP in ",
+         paste(range(ENV_ECOPATH_PB_YEARS), collapse = "-"), " (before 1999 these come from the PISCES gap fill,",
+         " which needs at least 3 overlap years; see the [gap fill] lines above) - no Ecopath phytoplankton values.")
   pb <- npp_c / b_c
   b_ww <- b_c * PHYTO_C_TO_WW
   shares <- c(LargePhytoplankton = share_large, SmallPhytoplankton = 1 - share_large)
@@ -588,5 +609,5 @@ if (nrow(env_ts) && all(c("npp", "phyto_c") %in% env_ts$variable)) {
            " t/km2 -> ecopath_phytoplankton_B_PB.csv")
 } else {
   .env_msg("[06_environment] NPP or phytoplankton carbon missing - no Ecopath phytoplankton values.")
-}
+}, error = function(e) .env_msg(conditionMessage(e)))
 .env_tick("done")

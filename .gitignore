@@ -79,3 +79,6 @@ scripts/WMed-EwEbuilder_files/
 
 # dated backup copies of scripts (kept out of GitHub; the git history is the backup)
 *_backup_*
+
+# each computer's own folders (wmed_paths.R reads config.local.R, then config.R)
+config.R

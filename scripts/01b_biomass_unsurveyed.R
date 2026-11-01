@@ -2092,7 +2092,7 @@ PLANKTON_ALLOCATION <- list(
             "--minimum-longitude", bbox[["lon_min"]], "--maximum-longitude", bbox[["lon_max"]],
             "--minimum-latitude", bbox[["lat_min"]], "--maximum-latitude", bbox[["lat_max"]],
             if (!is.null(depth_max)) c("--minimum-depth", "0", "--maximum-depth", as.character(depth_max)),
-            "--output-filename", basename(nc_path), "--output-directory", dirname(nc_path))  # login comes from COPERNICUSMARINE_SERVICE_* env vars, never the command line
+            "--output-filename", shQuote(basename(nc_path)), "--output-directory", shQuote(dirname(nc_path)))  # login comes from COPERNICUSMARINE_SERVICE_* env vars, never the command line
   message("[CMEMS plankton] Downloading ", dataset_id, " / ", variable, " (", t0, " to ", t1, ")...")
   out <- suppressWarnings(system2("copernicusmarine", args, stdout = TRUE, stderr = TRUE, timeout = timeout_sec))
   ## Rejected login -> ask THIS user for their own account once, retry once.
@@ -2827,6 +2827,29 @@ if (isTRUE(ESTIMATE_MACROZOO_IN_ECOPATH) && !is.null(plankton_model_rows) && nro
   message("[Plankton biomass] MacroZooplankton (FG 71): no plankton-model value used (epipelagic models only);",
           " its Ecopath_B comes from the field-reference minimum (MACROZOO_SOURCE = '",
           if (exists("MACROZOO_SOURCE")) MACROZOO_SOURCE else "field_minimum", "').")
+}
+## PHYTO_SOURCE = "copernicus": Large/Small phytoplankton from 06_environment.R
+## (Copernicus MedBFM, before 1999 PISCES scaled to MedBFM; size split from
+## satellite size classes) instead of ISIMIP. One row per year of the
+## annual series (environment_timeseries_annual.csv, phyto_c x C:WW x share),
+## so Ecopath uses the YEAR_ECOPATH mean and Ecosim every year. Needs 06 to
+## have run first (tick 06 on the page); otherwise ISIMIP stays.
+if (!exists("PHYTO_SOURCE", envir = .GlobalEnv, inherits = FALSE)) PHYTO_SOURCE <- "isimip"
+if (identical(PHYTO_SOURCE, "copernicus")) {
+  .ef <- file.path(out_dir, "environment", "ecopath_phytoplankton_B_PB.csv")
+  .ea <- file.path(out_dir, "environment", "environment_timeseries_annual.csv")
+  if (file.exists(.ef) && file.exists(.ea)) {
+    .e <- fread(.ef); .a <- fread(.ea)[variable == "phyto_c"]
+    .c2w <- if (exists("PHYTO_C_TO_WW")) PHYTO_C_TO_WW else 9
+    .cop <- rbindlist(lapply(seq_len(nrow(.e)), function(i) .a[, .(Year = as.integer(year), Group = .e$TargetGroup[i],
+              Biomass_t = value * .c2w * .e$share[i] * study_area_km2,
+              Source_citation = paste0("COPERNICUS (06_environment.R, PHYTO_SOURCE = 'copernicus'): ", .e$Source_citation[i]))]))
+    plankton_model_rows <- rbindlist(list(if (!is.null(plankton_model_rows)) plankton_model_rows[!tolower(Group) %in% c("largephytoplankton", "smallphytoplankton")],
+                                          .cop), use.names = TRUE, fill = TRUE)
+    message("[Plankton biomass] PHYTO_SOURCE = 'copernicus': Large/Small phytoplankton from 06_environment.R (",
+            nrow(.cop), " rows, ", paste(range(.a$year), collapse = "-"), ").")
+  } else message("[Plankton biomass] PHYTO_SOURCE = 'copernicus' but 06_environment.R outputs are not there yet (",
+                 basename(.ef), ") - ISIMIP kept. Run 06 first.")
 }
 if (!is.null(plankton_model_rows) && nrow(plankton_model_rows) > 0) {
   plankton_model_rows <- plankton_model_rows[tolower(Group) %in% plankton_missing]

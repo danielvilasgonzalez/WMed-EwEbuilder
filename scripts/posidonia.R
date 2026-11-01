@@ -104,7 +104,14 @@ library(readr)
 # Reference:
 # https://emodnet.ec.europa.eu/en/seabed-habitats
 
-gdb <- "/Users/andreaobradors/Downloads/EUSeaMap_2025/EUSeaMap_2025.gdb"
+## Folders on this computer (wmed_paths.R: config.local.R, config.R, or the
+## standard pCloud Drive place); the GSA shapefile is in the repo (gsa_export/)
+.wm_here <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+if (!file.exists(file.path(.wm_here, "wmed_paths.R"))) .wm_here <- getwd()
+source(file.path(.wm_here, "wmed_paths.R"))
+.wm_paths <- wmed_find_paths(dirname(.wm_here))
+## EUSeaMap 2025 geodatabase: set EUSEAMAP_GDB, or keep it in the shared data folder
+gdb <- if (exists("EUSEAMAP_GDB")) EUSEAMAP_GDB else file.path(.wm_paths$pcloud_dir, "data", "EUSeaMap_2025", "EUSeaMap_2025.gdb")
 
 
 # GFCM GSA boundaries
@@ -129,7 +136,7 @@ gdb <- "/Users/andreaobradors/Downloads/EUSeaMap_2025/EUSeaMap_2025.gdb"
 # European Commission DCF GFCM-GSAs
 # https://dcf.ec.europa.eu/data-calls/definitions-and-terminology/g/gfcm-gsas_en
 
-gsa_shp <- "/Users/andreaobradors/Documents/daniel/WMed_EwE/output/shapefiles/GFCM_GSA_shp/GFCM_GSA/gfcm_gsa.shp"
+gsa_shp <- file.path(.wm_paths$git_dir, "gsa_export", "GFCM_GSA_shp", "GFCM_GSA", "gfcm_gsa.shp")
 
 
 # ------------------------------------------------------------

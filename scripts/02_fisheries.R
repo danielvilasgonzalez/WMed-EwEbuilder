@@ -198,7 +198,14 @@ resolve_config_dir <- function(var_name, hardcoded_value, prompt_title, prompt_m
     }
     message("[02_fisheries.R] ", var_name, " was already set but to something invalid - re-resolving.")
   }
-  if (tolower(Sys.info()[["user"]]) == "daniel" && .Platform$OS.type == "unix") return(hardcoded_value)  # Daniel's machine: skip prompting, use hardcoded path
+  ## Folders found by wmed_paths.R (config.local.R, config.R, or the standard pCloud place)
+  wp <- tryCatch({
+    d <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+    if (!file.exists(file.path(d, "wmed_paths.R"))) d <- getwd()
+    source(file.path(d, "wmed_paths.R"), local = TRUE); wmed_find_paths(dirname(d))
+  }, error = function(e) NULL)
+  if (!is.null(wp) && isTRUE(wp$ok) && !is.na(wp[[var_name]])) return(wp[[var_name]])
+  if (!is.na(hardcoded_value) && dir.exists(hardcoded_value)) return(hardcoded_value)
   if (!requireNamespace("rstudioapi", quietly = TRUE) || !rstudioapi::isAvailable()) {
     stop("This script requires RStudio, or ", var_name, " set manually before running this script - ", prompt_message)
   }
@@ -208,7 +215,7 @@ resolve_config_dir <- function(var_name, hardcoded_value, prompt_title, prompt_m
   val
 }
 
-out_dir <- resolve_config_dir("out_dir", "/Users/daniel/Work/iMARES/WMed EwE Model/output/",
+out_dir <- resolve_config_dir("out_dir", NA_character_,
                               "Select Output Directory", "Please select the directory where output files and intermediate results are saved.")  # resolve the output directory
 
 ## --- Run log (plain text, for sharing/debugging) ------------------------
@@ -243,9 +250,9 @@ assign("message", function(..., domain = NULL, appendLF = TRUE) {
 }, envir = .GlobalEnv)
 message("[Log] This run's console output is also being written to: ", .run_log_path)
 
-pcloud_dir <- resolve_config_dir("pcloud_dir", "/Users/daniel/pCloud Drive/EwE Western Med 2026/",
+pcloud_dir <- resolve_config_dir("pcloud_dir", NA_character_,
                                  "Select pCloud EwE West Med Directory", "Please select the pCloud Drive/EwE Western Med 2026 folder.")  # resolve the pCloud data directory
-git_dir <- resolve_config_dir("git_dir", "/Users/daniel/Documents/GitHub/WMed_EwE/",
+git_dir <- resolve_config_dir("git_dir", NA_character_,
                               "Select Github WMed_EwE Directory", "Please select the directory where you cloned the WMed_EwE repository.")  # resolve the local git repo directory
 
 ECOPATH_WORKBOOK_PATH <- file.path(out_dir, "ecopath_ecosim_inputs.xlsx")  # path to the EwE Ecopath/Ecosim workbook to write into - stays at the shared top-level out_dir since every block reads/writes it
@@ -7125,6 +7132,50 @@ if (!file.exists(SPECIES_DENSITY_PATH)) {
           " years - includes both never-fished FGs like primary producers/benthic habitat and any fishable",
           " FG that genuinely had zero recorded catch) or Biomass_density_avg is 0/NA (FG not observed in",
           " the survey).")
+
+  ## --- FGs with F above F_MAX: optional fix of Ecopath_B ---------------
+  ## A high F usually means the survey cannot see the group (coastal,
+  ## rocky-bottom or pelagic species; see 05's F by country). HIGH_F_B_FIX:
+  ##   "none" (default)    - report only (high_F_REVIEW.csv)
+  ##   "min_from_catch"    - B = C / F_MAX for those FGs (the smallest B
+  ##                         that keeps F at F_MAX; C = mean catch density)
+  ##   "ecopath_estimate"  - B left blank and EE_input = HIGH_F_EE (0.95),
+  ##                         so Ecopath estimates B from the catch and the
+  ##                         predation
+  ## Ecopath_B (Biomass, Reference) is updated in the workbook; F_by_fg.csv
+  ## then shows the F with the new B. The choice is kept in the run record.
+  if (!exists("HIGH_F_B_FIX", envir = .GlobalEnv, inherits = FALSE)) HIGH_F_B_FIX <- "none"
+  if (!exists("F_MAX", envir = .GlobalEnv, inherits = FALSE)) F_MAX <- 1
+  if (!exists("HIGH_F_EE", envir = .GlobalEnv, inherits = FALSE)) HIGH_F_EE <- 0.95
+  hi <- f_by_fg[is.finite(F) & F > F_MAX]
+  if (nrow(hi)) {
+    hi_out <- hi[, .(FG_num, FG_name, B_before = Biomass_density_avg, Catch_density_avg, F_before = F,
+                     action = HIGH_F_B_FIX,
+                     B_after = switch(HIGH_F_B_FIX, min_from_catch = Catch_density_avg / F_MAX, ecopath_estimate = NA_real_, Biomass_density_avg))]
+    fwrite(hi_out, file.path(csv_out_dir, "high_F_REVIEW.csv"))
+    message("[F] ", nrow(hi), " FG(s) with F > ", F_MAX, ": ", paste(sprintf("%s (%.2g)", hi$FG_name, hi$F), collapse = ", "),
+            " - HIGH_F_B_FIX = \"", HIGH_F_B_FIX, "\" (high_F_REVIEW.csv).")
+    if (HIGH_F_B_FIX %in% c("min_from_catch", "ecopath_estimate") && file.exists(ECOPATH_WORKBOOK_PATH)) tryCatch({
+      eb <- as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, "Ecopath_B", check.names = FALSE, sep.names = " "))
+      k <- eb$FG_num %in% hi$FG_num
+      note <- if (HIGH_F_B_FIX == "min_from_catch") sprintf("B set to catch / F_MAX (F_MAX = %s; survey B gave F > %s) - HIGH_F_B_FIX", F_MAX, F_MAX) else
+        sprintf("B left to Ecopath (EE = %s; survey B gave F > %s) - HIGH_F_B_FIX", HIGH_F_EE, F_MAX)
+      if (HIGH_F_B_FIX == "min_from_catch") {
+        eb[k, Biomass := hi_out$B_after[match(FG_num, hi_out$FG_num)]]
+      } else {
+        eb[k, Biomass := NA_real_]
+        if (!"EE_input" %in% names(eb)) eb[, EE_input := NA_real_]
+        eb[, EE_input := as.numeric(EE_input)]               # an all-blank column is read as logical
+        eb[k, EE_input := HIGH_F_EE]
+      }
+      if ("Reference" %in% names(eb)) eb[k, Reference := fifelse(is.na(Reference) | !nzchar(Reference), note, paste0(note, " | before: ", Reference))]
+      upsert_workbook_sheets(list(Ecopath_B = eb), ECOPATH_WORKBOOK_PATH)
+      f_by_fg[FG_num %in% hi$FG_num, `:=`(Biomass_density_avg = hi_out$B_after[match(FG_num, hi_out$FG_num)],
+                                          B_source = paste0("HIGH_F_B_FIX = ", HIGH_F_B_FIX))]
+      f_by_fg[FG_num %in% hi$FG_num, F := if (HIGH_F_B_FIX == "min_from_catch") Catch_density_avg / Biomass_density_avg else NA_real_]
+      message("[F] Ecopath_B updated for ", sum(k), " FG(s) (", HIGH_F_B_FIX, ").")
+    }, error = function(e) message("[F] HIGH_F_B_FIX not applied: ", conditionMessage(e)))
+  }
   fwrite(f_by_fg, file.path(csv_out_dir, "F_by_fg.csv"))
   
   ## Species-resolved view of the same F. GFCM catch (catches_discards_fg)
@@ -7710,7 +7761,7 @@ validation_plots[["01_catches_per_FG"]] <- tryCatch({
   if (!nrow(d)) stop("no FG with catch")
   ggplot(d, aes(x = Year, y = t, color = Measure)) +
     geom_line(linewidth = 0.4) +
-    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y") +
+    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
     scale_color_manual(values = c(Landings_t = "#4C6FE7", Catch_t = "#D9534F"),
                        labels = c(Landings_t = "Landings", Catch_t = "Catch (incl. discards)")) +
     labs(title = "Catches per functional group over time", subtitle = paste0("GFCM landings vs. landings+discards, full West Med series; ", uniqueN(d$FG_num),
@@ -7940,7 +7991,7 @@ validation_plots[["07_catch_by_fg_and_fleet"]] <- tryCatch({
                        .(Catch_t = sum(Catch_t, na.rm = TRUE)), by = .(FG_num, FG_name, FleetType, Year)]
   ggplot(d, aes(x = Year, y = Catch_t, fill = FleetType)) +
     geom_area(position = "stack") +
-    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y") +
+    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
     labs(title = "Catch by functional group AND fleet over time", subtitle = paste0("Top ", length(top_fg_ids), " FG(s) by total catch, all countries summed"),
          x = NULL, y = "t/year", fill = "Fleet") +
     theme_minimal(base_size = 7) + theme(legend.position = "bottom")
@@ -7952,7 +8003,7 @@ validation_plots[["08_discards_by_fg_and_fleet"]] <- tryCatch({
   if (nrow(d) == 0) stop("no non-NA Discard_t among the top FGs")
   ggplot(d, aes(x = Year, y = Discard_t, fill = FleetType)) +
     geom_area(position = "stack") +
-    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y") +
+    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
     labs(title = "Discards by functional group AND fleet over time", subtitle = paste0("Top ", length(top_fg_ids), " FG(s) by total catch, all countries summed"),
          x = NULL, y = "t/year", fill = "Fleet") +
     theme_minimal(base_size = 7) + theme(legend.position = "bottom")
@@ -8029,4 +8080,4 @@ tryCatch({
 
 sink()
 close(.run_log_con)
-options(error = NULL)   # do not leave the log handler in the R session
+options(error = NULL)   # do not leave the log handler in the R session

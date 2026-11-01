@@ -35,6 +35,30 @@
 ## rewrites once if any NUL is found. csv_has_nul() lets readers treat
 ## a corrupted cache as missing (so it is recomputed, not half-read).
 ## =================================================================
+## --- Shared figure style -------------------------------------------------
+## wm_theme(): the default look of every figure (white background, light
+## grid, bold facet titles); set as the ggplot2 default when this library is
+## sourced, so plots without their own theme share it. Plots that add their
+## own theme_minimal()/theme_bw() keep it. Set options(wmed.theme = FALSE)
+## before sourcing to keep ggplot2's default.
+## wm_fg_colours(n): n distinct colours (Okabe-Ito, colour-blind safe, then
+## the Dark2/Set2 qualitative palettes) for groups or fleets.
+wm_theme <- function(base_size = 10) {
+  ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", colour = NA),
+                   panel.grid.minor = ggplot2::element_blank(),
+                   strip.text = ggplot2::element_text(face = "bold", size = ggplot2::rel(0.9)),
+                   plot.title = ggplot2::element_text(face = "bold"),
+                   legend.position = "bottom")
+}
+wm_fg_colours <- function(n) {
+  base <- c("#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#F0E442", "#000000",
+            "#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666",
+            "#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F", "#E5C494", "#B3B3B3")
+  if (n <= length(base)) base[seq_len(n)] else grDevices::hcl.colors(n, "Dark 3")
+}
+if (isTRUE(getOption("wmed.theme", TRUE)) && requireNamespace("ggplot2", quietly = TRUE)) ggplot2::theme_set(wm_theme())
+
 csv_has_nul <- function(path) {
   if (!file.exists(path)) return(FALSE)
   sz <- file.info(path)$size
@@ -3345,7 +3369,7 @@ plot_fg_timeseries_by_area <- function(fg_index, title = "FG density by area", y
                             area_col = "AreaID", top_n_areas = top_n_areas, top_n_groups = top_n_fg)
   ggplot(plot_data, aes(x = Year, y = mean_density, color = as.factor(AreaID))) +
     geom_line(linewidth = 0.6, alpha = 0.7) +
-    facet_wrap(vars(FG_name), scales = "free_y") +
+    facet_wrap(vars(FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
     labs(title = title, x = "Year", y = y_lab, color = "Area") +
     theme_minimal(base_size = 11) +
     theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 1)) +
@@ -3493,7 +3517,7 @@ plot_strata_profile <- function(fg_index_stratified, strata_def, top_n_fg = 40) 
   ggplot(profile[FG_name %in% top_fg], aes(x = stratum_label, y = mean_density_per_sample, fill = Stratum)) +
     geom_col() +
     scale_fill_gradient(low = "lightblue", high = "navy", guide = "none") +
-    facet_wrap(vars(FG_name), scales = "free_y") +
+    facet_wrap(vars(FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
     labs(title = "Depth-strata density profile by FG", x = "Depth stratum", y = "Mean density per sample") +
     theme_minimal(base_size = 10) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -3793,7 +3817,33 @@ read_native_sheet_csv <- function(name, out_dir) {
 ## yet) is simply not there yet - finalize_workbook_sheet_order() skips
 ## it with a message rather than erroring, same as before.
 ## =================================================================
+## FGs and Fleets: lookup sheets right after "info" - FG_num + FG_name
+## (from Ecopath_B) and Fleet_num + Fleet_name (the fleet columns of
+## Ecopath_L / Ecopath_Di, numbered in that order). Rewritten every time
+## the workbook is trimmed, so they always match the other sheets.
+write_fg_fleet_lookup_sheets <- function(out_path) {
+  if (!file.exists(out_path) || !requireNamespace("openxlsx", quietly = TRUE)) return(invisible(NULL))
+  sh <- openxlsx::getSheetNames(out_path); out <- list()
+  if ("Ecopath_B" %in% sh) {
+    b <- openxlsx::read.xlsx(out_path, "Ecopath_B", check.names = FALSE, sep.names = " ")
+    if (all(c("FG_num", "FG_name") %in% names(b)))
+      out$FGs <- unique(data.table::data.table(FG_num = suppressWarnings(as.integer(b$FG_num)),
+                                               FG_name = as.character(b$FG_name)))[!is.na(FG_num)][order(FG_num)]
+  }
+  fl <- character(0)
+  for (s in intersect(c("Ecopath_L", "Ecopath_Di"), sh)) {
+    cn <- tryCatch(names(openxlsx::read.xlsx(out_path, s, rows = 1:2, check.names = FALSE, sep.names = " ")),
+                   error = function(e) character(0))
+    fl <- c(fl, setdiff(cn, c("FG_num", "FG_name", "Reference")))
+  }
+  fl <- unique(fl[!is.na(fl) & nzchar(fl) & !grepl("^total|total$", fl, ignore.case = TRUE)])
+  if (length(fl)) out$Fleets <- data.table::data.table(Fleet_num = seq_along(fl), Fleet_name = fl)
+  if (length(out)) upsert_workbook_sheets(out, out_path)
+  invisible(out)
+}
+
 trim_workbook_to_final_sheets <- function(out_path) {
+  tryCatch(write_fg_fleet_lookup_sheets(out_path), error = function(e) message("FGs/Fleets sheets not written: ", conditionMessage(e)))
   finalize_workbook_sheet_order(
     out_path = out_path,
     ## FG_References: see build_fg_references_sheet() below. Ecobase: see
@@ -3801,7 +3851,7 @@ trim_workbook_to_final_sheets <- function(out_path) {
     ## Biomass/PB/QB/reference-year from other published Western Med
     ## Ecopath models, for direct comparison against this model's own
     ## Ecopath_B/Ecopath_PBQB values). 11 final sheets total.
-    target_order = c("info", "FG_spp", "Ecopath_B", "Ecopath_L", "Ecopath_Di", "Ecopath_PBQB",
+    target_order = c("info", "FGs", "Fleets", "FG_spp", "Ecopath_B", "Ecopath_L", "Ecopath_Di", "Ecopath_PBQB",
                      "Ecopath_traits", "Ecopath_diet", "Ecosim_ts", "FG_References", "Ecobase"),
     drop_extras = TRUE
   )
@@ -5500,7 +5550,7 @@ append_reference_columns_to_final_sheets <- function(out_path) {
             "' yet - run build_fg_references_sheet() first. Skipping.")
     return(invisible(NULL))
   }
-  refs <- as.data.table(openxlsx::read.xlsx(out_path, sheet = "FG_References"))
+  refs <- as.data.table(openxlsx::read.xlsx(out_path, sheet = "FG_References", check.names = FALSE, sep.names = " "))
   if (!"FG_num" %in% names(refs)) {
     message("append_reference_columns_to_final_sheets(): 'FG_References' sheet has no FG_num column - skipping.")
     return(invisible(NULL))
@@ -5520,7 +5570,9 @@ append_reference_columns_to_final_sheets <- function(out_path) {
   updated <- list()
   for (sheet_name in names(sheet_ref_map)) {
     if (!sheet_name %in% existing_sheets) next
-    dt <- as.data.table(openxlsx::read.xlsx(out_path, sheet = sheet_name))
+    ## check.names/sep.names: keep the column names as written ("Spain - Bottom trawls"); the
+    ## defaults turned every space into a dot, and the sheet was saved back that way
+    dt <- as.data.table(openxlsx::read.xlsx(out_path, sheet = sheet_name, check.names = FALSE, sep.names = " "))
     if (!"FG_num" %in% names(dt)) {
       message("append_reference_columns_to_final_sheets(): '", sheet_name, "' has no FG_num column - skipping.")
       next
@@ -5539,7 +5591,7 @@ append_reference_columns_to_final_sheets <- function(out_path) {
   ## header) - combined here into one "<data> | method: <method>"
   ## string since this sheet gets only one trailing column.
   if ("Ecopath_PBQB" %in% existing_sheets) {
-    dt <- as.data.table(openxlsx::read.xlsx(out_path, sheet = "Ecopath_PBQB"))
+    dt <- as.data.table(openxlsx::read.xlsx(out_path, sheet = "Ecopath_PBQB", check.names = FALSE, sep.names = " "))
     if ("FG_num" %in% names(dt)) {
       dt[, FG_num := as.integer(FG_num)]
       if ("Reference" %in% names(dt)) dt[, Reference := NULL]
@@ -5619,7 +5671,26 @@ add_pbqb_to_ecopath_workbook <- function(fg_weighted, out_path, species_pb_qb = 
             " to guarantee every model FG gets a row here, even ones with no data yet.")
   }
   setorder(pbqb_sheet, FG_num)
-  
+
+  ## PHYTO_SOURCE = "copernicus": phytoplankton P/B = NPP / B from
+  ## 06_environment.R (out_dir/environment/ecopath_phytoplankton_B_PB.csv)
+  ## instead of the EcoBase value.
+  if (identical(get0("PHYTO_SOURCE", envir = .GlobalEnv, ifnotfound = "isimip"), "copernicus")) {
+    ef <- file.path(get0("out_dir", envir = .GlobalEnv, ifnotfound = ""), "environment", "ecopath_phytoplankton_B_PB.csv")
+    if (file.exists(ef)) {
+      e <- data.table::fread(ef)
+      for (i in seq_len(nrow(e))) {
+        key <- if (grepl("^Large", e$TargetGroup[i])) "large phyto" else "small phyto"
+        k <- grepl(key, pbqb_sheet$FG_name, ignore.case = TRUE)
+        if (any(k)) {
+          pbqb_sheet[k, PB_FG := e$PB[i]]
+          if ("PB_source" %in% names(pbqb_sheet)) pbqb_sheet[k, PB_source := "Copernicus (06_environment.R): NPP / B"]
+        }
+      }
+      message("add_pbqb_to_ecopath_workbook(): PHYTO_SOURCE = 'copernicus' - phytoplankton P/B = ", signif(e$PB[1], 3), " /yr from 06.")
+    } else message("add_pbqb_to_ecopath_workbook(): PHYTO_SOURCE = 'copernicus' but ", ef, " not found - EcoBase P/B kept.")
+  }
+
   ## The excel ecopath_ecosim file must have exactly
   ## the intended sheets; other sheets are saved as csv files, not
   ## kept in the final output excel file. PB_QB (FG-level) IS one

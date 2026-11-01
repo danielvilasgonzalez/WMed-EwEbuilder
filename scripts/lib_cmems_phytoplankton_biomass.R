@@ -391,7 +391,7 @@ fetch_cmems_phytoplankton_biomass <- function(out_dir, force_refresh = FALSE,
               "--minimum-longitude", bbox["lon_min"], "--maximum-longitude", bbox["lon_max"],
               "--minimum-latitude", bbox["lat_min"], "--maximum-latitude", bbox["lat_max"],
               "--minimum-depth", "0", "--maximum-depth", as.character(integration_depth_m),
-              "--output-filename", basename(nc_path), "--output-directory", dirname(nc_path),
+              "--output-filename", shQuote(basename(nc_path)), "--output-directory", shQuote(dirname(nc_path)),
               cred_args)  # '--force-download' removed: the option no longer exists in copernicusmarine toolbox v2
     printable_args <- if (!is.na(cm_pass)) gsub(cm_pass, "***", args, fixed = TRUE) else args
     message("[CMEMS diag] Download attempt: copernicusmarine ",

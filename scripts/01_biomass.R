@@ -194,9 +194,7 @@ if (AREA_MODE == "custom") {
   ## original developer machine, hardcoded otherwise - EDIT this to your actual study area
   ## name (e.g. "cap_de_creus_mpa") rather than leaving the placeholder.
   if (!exists("AREA_NAME", envir = .GlobalEnv, inherits = FALSE)) {
-    if (tolower(Sys.info()[["user"]]) == "daniel") {
-      AREA_NAME <- "custom_region"
-    } else if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    if (interactive() && requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
       AREA_NAME <- rstudioapi::showPrompt(
         title = "Custom study area name",
         message = "Short label for this custom study area (used in output folder/file names):",
@@ -238,18 +236,20 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
     stop("[01_biomass.R] out_dir was pre-set by the calling script but doesn't exist on this machine: \"",
          out_dir, "\". Fix it in the driver script (e.g. run_pipeline_demo.R) before sourcing this file.")
   }
-} else if (tolower(Sys.info()[["user"]]) == "daniel" && .Platform$OS.type == "unix") {
-  ## AREA_MODE == "custom" nests the default out_dir under AREA_NAME, so
-  ## different custom-region runs never collide or overwrite each
-  ## other's outputs - AREA_MODE == "westmed" keeps the plain path
-  ## exactly as before.
-  out_dir <- if (AREA_MODE == "custom") {
-    file.path("/Users/daniel/Work/iMARES/WMed EwE Model/output", AREA_NAME)
-  } else {
-    "/Users/daniel/Work/iMARES/WMed EwE Model/output/"
+} else if (isTRUE(local({   # run on its own: folders from wmed_paths.R (config.local.R, config.R, or the standard pCloud place)
+  .d <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+  if (!file.exists(file.path(.d, "wmed_paths.R"))) .d <- getwd()
+  file.exists(file.path(.d, "wmed_paths.R")) && {
+    source(file.path(.d, "wmed_paths.R"), local = TRUE)
+    isTRUE(wmed_set_paths(dirname(.d))$ok)
   }
-  pcloud_dir   <- "/Users/daniel/pCloud Drive/EwE Western Med 2026/"
-  git_dir <-"/Users/daniel/Documents/GitHub/WMed_EwE/"
+}))) {
+  ## AREA_MODE == "custom" nests out_dir under AREA_NAME, so different
+  ## custom-region runs never overwrite each other's outputs
+  if (AREA_MODE == "custom") {
+    out_dir <- file.path(out_dir, AREA_NAME)
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  }
 } else {
   ## Falls back to an interactive directory picker in RStudio, rather
   ## than just stopping with "set it manually" - so this script works
@@ -1383,7 +1383,7 @@ if (!is.null(flagged_outliers) && nrow(flagged_outliers) > 0) {
     .pl <- melt(.eff[FG_name %in% .top], id.vars = c("FG_name", "Year"), measure.vars = c("before", "after"),
                 variable.name = "series", value.name = "density")
     p_out_eff <- ggplot(.pl, aes(Year, density, colour = series, linetype = series)) + geom_line() +
-      facet_wrap(~ FG_name, scales = "free_y") +
+      facet_wrap(~ FG_name, scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
       scale_colour_manual(values = c(before = "grey55", after = "#1b7f9e"),
                           labels = c(before = "all hauls", after = "outliers removed")) +
       scale_linetype_manual(values = c(before = "dashed", after = "solid"), labels = c(before = "all hauls", after = "outliers removed")) +
@@ -1802,6 +1802,19 @@ if (!is.null(fg_index_cv)) {
          file.path(csv_out_dir, "survey_index_cv_by_fg_year.csv"))
   message("[Uncertainty] MEDITS index CV by FG and year (stratified variance): median ",
           round(stats::median(fg_index_cv$cv_index, na.rm = TRUE), 2), " -> survey_index_cv_by_fg_year.csv")
+  ## Weight of each FG's survey series when Ecosim is fitted (the "weight"
+  ## of a time series in EwE): w = 1 / CV^2, CV = mean index CV over
+  ## TS_YEARS, rescaled so the median series has w = 1 and kept within
+  ## 0.1-10. A precise series (small CV) counts more in the fit.
+  .cvw <- fg_index_cv[Year %in% TS_YEARS & is.finite(cv_index) & cv_index > 0,
+                      .(mean_CV = mean(cv_index), n_years = .N), by = FG_num]
+  if (nrow(.cvw)) {
+    .cvw[, weight := 1 / mean_CV^2][, weight := pmin(pmax(weight / stats::median(weight), 0.1), 10)]
+    .cvw <- merge(.cvw, unique(fg_index_regional[, .(FG_num, FG_name)]), by = "FG_num", all.x = TRUE)[order(FG_num)]
+    fwrite(.cvw[, .(FG_num, FG_name, mean_CV = round(mean_CV, 3), n_years, ecosim_weight = round(weight, 2))],
+           file.path(csv_out_dir, "ecosim_ts_weights_from_survey_cv.csv"))
+    message("[Uncertainty] Ecosim series weights (1/CV^2, median = 1): ecosim_ts_weights_from_survey_cv.csv")
+  }
 }
 p_regional <- plot_fg_timeseries_regional(fg_index_regional,
                                           title = paste0("MEDITS trawl survey by FG, ", regional_title_area, " (area-weighted)"), y_lab = "Area-weighted density (t/km^2)",

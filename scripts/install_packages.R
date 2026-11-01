@@ -108,6 +108,21 @@ wmed_check_packages <- function(quiet = FALSE) {
       try({ dir.create(dirname(fl_mark), recursive = TRUE, showWarnings = FALSE); writeLines(format(Sys.time()), fl_mark) }, silent = TRUE)
     }
   }
+  ## Package versions known to work (scripts/package_versions.csv, saved with
+  ## wmed_save_package_versions() in lib_run_record.R): warn when this
+  ## computer has an older version - results can differ between versions.
+  lock <- file.path(dirname(tryCatch(normalizePath(sys.frame(1)$ofile), error = function(e) "x")), "package_versions.csv")
+  if (!file.exists(lock) && exists("git_dir")) lock <- file.path(git_dir, "scripts", "package_versions.csv")
+  if (file.exists(lock)) {
+    v <- tryCatch(utils::read.csv(lock, stringsAsFactors = FALSE), error = function(e) NULL)
+    if (!is.null(v)) {
+      have_v <- vapply(v$package, function(p) if (nzchar(system.file(package = p))) as.character(utils::packageVersion(p)) else NA_character_, "")
+      older <- v$package[!is.na(have_v) & mapply(function(a, b) utils::compareVersion(a, b) < 0, have_v, v$version)]
+      if (length(older)) say("older than the tested versions (", basename(lock), "): ",
+                             paste(sprintf("%s %s < %s", older, have_v[older], v$version[match(older, v$package)]), collapse = ", "),
+                             " - update them with install.packages() if results differ.")
+    }
+  }
   say("all required packages are installed.")
   invisible(TRUE)
 }
