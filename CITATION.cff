@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use WMed-EwEbuilder, please cite it as below, together with the data sources listed in data_catalogue.csv."
+title: "WMed-EwEbuilder: building Ecopath with Ecosim inputs for the Western Mediterranean"
+type: software
+authors:
+  - family-names: Vilas
+    given-names: Daniel
+    affiliation: "iMARES, Institut de Ciències del Mar (ICM-CSIC)"
+repository-code: "https://github.com/danielvilasgonzalez/WMed_EwE"
+keywords:
+  - Ecopath with Ecosim
+  - ecosystem model
+  - Western Mediterranean
+  - MEDITS
+  - fisheries
+  - R
