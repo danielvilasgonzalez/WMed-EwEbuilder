@@ -2997,7 +2997,7 @@ if (!dir.exists(stecf_catches_dir)) {
                                                 by = .(Country, FG_num, FleetType, Year = year)]  # sum landed/discarded tonnes by country x FG x fleet x year
       stecf_discard_ratio_by_fleet[, discard_ratio := Discarded_t / (Landed_t + Discarded_t)]  # compute the fleet-level discard ratio
       stecf_discard_ratio_by_fleet <- stecf_discard_ratio_by_fleet[is.finite(discard_ratio),
-                                                                   .(Country, FG_num, FleetType, Year, discard_ratio)]  # drop non-finite ratios
+                                                                   .(Country, FG_num, FleetType, Year, discard_ratio, Landed_t, Discarded_t)]  # drop non-finite ratios; tonnes kept for the pooled per-fleet rate
       message("[STECF FDI] stecf_discard_ratio_by_fleet: ", nrow(stecf_discard_ratio_by_fleet),
               " Country x FG x FleetType x Year row(s) - used to give each fleet its own discard rate",
               " instead of distributing the country-level total by catch share.")
@@ -6247,26 +6247,55 @@ fleet_split[, `:=`(
   Landings_t_by_fleet = Landings_t * prop_fleet  # this fleet's share of country-level landings
 )]
 
-## Prefer a real per-fleet discard rate wherever STECF FDI actually
-## gives one (stecf_discard_ratio_by_fleet, built above): a trawl
-## fleet and a longline fleet do not discard at the same rate, so this
-## replaces the uniform assumption above for exactly the Country x FG x
-## FleetType x Year cells FDI covers - everywhere else (SAU-covered
-## fleets, pre-2014, Morocco/Algeria/Tunisia) still falls back to the
-## country-level ratio distributed by catch share, flagged as such.
+## Discards split by fleet, the same way in every year:
+##   D_f = D_country x (L_f x r_f) / sum_g (L_g x r_g)
+## D_country: the country's discards of the FG in that year (FDI from
+##   2014, FishMIP ratio before; unchanged, so the FG and country totals
+##   stay those of Catches_Discards_FG_ts);
+## L_f: fleet f's landings of the FG in that year (fleet split above);
+## r_f = k_f / K: fleet f's discards per tonne landed in STECF FDI (k_f),
+##   relative to the whole country's in FDI (K), both pooled over all FDI
+##   years (sum D / sum L) so a single noisy year does not drive them.
+##   Fleets not in FDI get r = 1 (the country's rate).
+## Used only where FDI records discards of the FG for that country
+## (K >= DISCARD_FLEET_MIN_K, and >= DISCARD_FLEET_MIN_T t in FDI);
+## otherwise the uniform split (every fleet the country's rate).
+## Before (until 2026-11-02): the uniform split before 2014, and from
+## 2014 each fleet's single-year FDI rate applied to its landings. That
+## moved discards from one fleet to another in 2014 (e.g. sardine
+## discards from purse seiners to trawlers) and changed the country
+## totals. Assumption: a fleet's discard rate relative to the other
+## fleets of its country is constant over time (FDI 2014+ also applied
+## to earlier years). Fleets can still have discards > landings where
+## FDI says so (e.g. Italian trawlers and horse mackerel: 6915 t
+## discarded vs 425 t landed in 2018; small-spotted catshark).
+if (!exists("DISCARD_FLEET_MIN_T", envir = .GlobalEnv, inherits = FALSE)) DISCARD_FLEET_MIN_T <- 5
+if (!exists("DISCARD_FLEET_MIN_K", envir = .GlobalEnv, inherits = FALSE)) DISCARD_FLEET_MIN_K <- 0.01
 fleet_split[, discard_split_source := "country-level discard ratio distributed by catch share (uniform across fleets - not a per-fleet rate)"]  # default assumption, may be overwritten below
-if (nrow(stecf_discard_ratio_by_fleet) > 0) {
-  fleet_split <- merge(fleet_split, stecf_discard_ratio_by_fleet[, .(Country, FG_num, FleetType, Year, discard_ratio_fleet = discard_ratio)],
-                       by = c("Country", "FG_num", "FleetType", "Year"), all.x = TRUE)  # attach FDI's own per-fleet discard rate, where available
-  n_fleet_discard <- sum(!is.na(fleet_split$discard_ratio_fleet))  # cells where the per-fleet rate applies
-  fleet_split[!is.na(discard_ratio_fleet), `:=`(
-    Catch_t_by_fleet   = Landings_t_by_fleet / (1 - discard_ratio_fleet),  # recompute this fleet's gross catch using its own discard rate
-    Discard_t_by_fleet = Landings_t_by_fleet / (1 - discard_ratio_fleet) - Landings_t_by_fleet,
-    discard_split_source = "STECF FDI's own per-fleet discard rate (Country x FG x FleetType x Year)"
-  )]  # overwrite the uniform assumption wherever a real per-fleet rate exists
-  fleet_split[, discard_ratio_fleet := NULL]  # drop the now-unneeded helper column
-  message("\n[Discards by fleet] ", n_fleet_discard, " Country x FG x FleetType x Year cell(s) now use",
-          " STECF FDI's own per-fleet discard rate instead of the country-level ratio distributed by catch share.")
+if (nrow(stecf_discard_ratio_by_fleet) > 0 && all(c("Landed_t", "Discarded_t") %in% names(stecf_discard_ratio_by_fleet))) {
+  fdi_k <- stecf_discard_ratio_by_fleet[, .(L_fdi = sum(Landed_t, na.rm = TRUE), D_fdi = sum(Discarded_t, na.rm = TRUE)),
+                                        by = .(Country, FG_num, FleetType)]
+  fdi_k[, `:=`(K_cty = sum(D_fdi) / pmax(sum(L_fdi), 1e-9), T_cty = sum(L_fdi + D_fdi)), by = .(Country, FG_num)]
+  fdi_k <- fdi_k[K_cty >= DISCARD_FLEET_MIN_K & T_cty >= DISCARD_FLEET_MIN_T & L_fdi + D_fdi > 0]
+  fdi_k[, r_fdi := (D_fdi / pmax(L_fdi, 1e-9)) / K_cty]
+  fdi_k[L_fdi <= 0, r_fdi := NA_real_]                      # discards only, no landings in FDI: no rate, gets the country's
+  fleet_split <- merge(fleet_split, fdi_k[, .(Country, FG_num, FleetType, r_fdi)], by = c("Country", "FG_num", "FleetType"), all.x = TRUE)
+  fleet_split[, in_fdi := Country %in% fdi_k$Country & paste(Country, FG_num) %in% fdi_k[, paste(Country, FG_num)]]
+  .grp <- c("Country", "FG_num", "Year")
+  fleet_split[, w := fifelse(is.na(Landings_t_by_fleet), 0, Landings_t_by_fleet * fifelse(is.na(r_fdi), 1, r_fdi))]
+  fleet_split[, `:=`(D_cty = sum(Discard_t_by_fleet, na.rm = TRUE), w_sum = sum(w)), by = .grp]
+  fleet_split[, use_k := in_fdi & D_cty > 0 & w_sum > 0]
+  fleet_split[use_k == TRUE, `:=`(
+    Discard_t_by_fleet = D_cty * w / w_sum,
+    discard_split_source = fifelse(!is.na(r_fdi), "STECF FDI per-fleet discard rate (pooled over FDI years) splitting the country discards",
+                                   "country discard rate (fleet not in STECF FDI), within a split by FDI per-fleet rates"))]
+  fleet_split[use_k == TRUE, Catch_t_by_fleet := Landings_t_by_fleet + Discard_t_by_fleet]
+  n_fleet_discard <- fleet_split[use_k == TRUE, uniqueN(paste(Country, FG_num, Year))]
+  fleet_split[, c("r_fdi", "in_fdi", "D_cty", "w", "w_sum", "use_k") := NULL]
+  fwrite(fdi_k[order(Country, FG_num, -r_fdi)], file.path(csv_out_dir, "discard_rate_by_fleet_fdi_pooled.csv"))
+  message("\n[Discards by fleet] ", n_fleet_discard, " Country x FG x Year cell(s): country discards split among fleets by",
+          " STECF FDI's per-fleet discard rates relative to the country's, pooled over the FDI years (all years, so no",
+          " jump in 2014; country totals unchanged). Rates: discard_rate_by_fleet_fdi_pooled.csv.")
 }
 
 ## --- Recreational: GFCM/FDI have no recreational catch at all. Where
@@ -7644,7 +7673,13 @@ if (nrow(star_catch_by_fg) > 0) sheets_to_write$STAR_RAM_Catch_CrossCheck <- cat
 ## sheets - kept as a plain FG x Year table (not the Ecopath/Ecosim-
 ## specific meta-row format) since it's meant to be read back
 ## programmatically, not opened as an Ecopath forcing function itself.
-sheets_to_write$Catches_Discards_FG_ts <- catches_discards_fg[, .(Year, FG_num, FG_name, Landings_t, Catch_t, Discard_t, catch_source)]  # catch_source kept here too (not just in the DATASET_VERSION-suffixed CSV) so build_fg_references_sheet() can read it back under this fixed filename
+## Discard_t_km2: discards per km2 of the model area (same units and the
+## same custom-region weighting .kc() as the catches in Catches_Ecosim),
+## read by Ecosim_ts's Discards block. Until 2026-11-02 that block took
+## Discard_t (tonnes), so in Ecosim_ts the discards were ~10^5 times the
+## catches (t/km2).
+sheets_to_write$Catches_Discards_FG_ts <- catches_discards_fg[, .(Year, FG_num, FG_name, Landings_t, Catch_t, Discard_t,
+                                                                  Discard_t_km2 = Discard_t * .kc(FG_num) / Total_Area_km2, catch_source)]  # catch_source kept here too (not just in the DATASET_VERSION-suffixed CSV) so build_fg_references_sheet() can read it back under this fixed filename
 
 ## The excel ecopath_ecosim file must have exactly
 ## the intended sheets, trimmed script by script; other sheets should
