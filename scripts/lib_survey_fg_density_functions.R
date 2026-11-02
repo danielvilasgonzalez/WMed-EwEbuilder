@@ -4122,11 +4122,16 @@ finalize_ecopath_ecosim_summary_sheets <- function(out_path, year_ecopath,
     add_block(ecosim_b, "B")
     add_block(ecosim_l, "L")
     
+    if (!is.null(cd_ts) && !"Discard_t_km2" %in% names(cd_ts)) {
+      message("finalize_ecopath_ecosim_summary_sheets(): Catches_Discards_FG_ts.csv has no Discard_t_km2 column",
+              " (written by an older 02_fisheries.R) - the Ecosim_ts Discards block is left out; rerun 02.")
+      cd_ts <- NULL
+    }
     if (!is.null(cd_ts)) {
       for (fg_num in unique(cd_ts$FG_num)) {
         fg_name <- cd_ts[FG_num == fg_num, FG_name][1]
         ts_vals <- vapply(years, function(y) {
-          v <- cd_ts[FG_num == fg_num & Year == y, Discard_t]
+          v <- cd_ts[FG_num == fg_num & Year == y, Discard_t_km2]   # t/km2, as the catches (not Discard_t, tonnes)
           if (length(v) == 0) NA_real_ else v[1]
         }, numeric(1))
         ts_vals[!is.na(ts_vals) & ts_vals == 0] <- NA_real_   # no recorded discards -> blank, not an observed 0
