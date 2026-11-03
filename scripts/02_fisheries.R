@@ -4322,6 +4322,31 @@ if (nrow(discard_by_fg) > 0) {
 } else {
   catches_discards_fg[, `:=`(Catch_t = Landings_t, Discard_t = NA_real_, discard_ratio = NA_real_)]  # no discard data at all - Catch_t equals Landings_t
 }
+## FG discards from the country discards. Until 2026-11-02 the FG series
+## (Catches_Discards_FG_ts -> Ecosim_ts, plots 01/08) took only FishMIP's
+## Med-wide FG ratio, which matches 24 of the 80 FGs, while the country
+## and fleet tables (Ecopath_Di) use FishMIP, then SAU, then STECF FDI
+## (2014+) and the nearest-year fallback. So FGs like sardine, hake or
+## small-spotted catshark had discards per fleet but none in the FG
+## series. Now, per FG x Year:
+##   r = sum_c D_c / sum_c L_c   over the countries with a discard estimate
+##   Discard_t = Landings_t x r,  Catch_t = Landings_t + Discard_t
+## (assumption: countries without an estimate - mainly Morocco, Algeria,
+## Tunisia - discard at the same rate as those with one). FishMIP's FG
+## ratio is kept only where no country has an estimate.
+.cty_r <- catch_with_discards[!is.na(Discard_t) & Landings_t > 0,
+                              .(D_c = sum(Discard_t, na.rm = TRUE), L_c = sum(Landings_t, na.rm = TRUE),
+                                src = paste(sort(unique(sub(" \\(.*$", "", discard_source))), collapse = " + ")), by = .(FG_num, Year)]
+.cty_r <- .cty_r[L_c > 0, .(FG_num, Year, r_cty = D_c / L_c, src)]
+catches_discards_fg <- merge(catches_discards_fg, .cty_r, by = c("FG_num", "Year"), all.x = TRUE)
+.n_new <- catches_discards_fg[!is.na(r_cty) & is.na(Discard_t) & Landings_t > 0, uniqueN(FG_num)]
+catches_discards_fg[!is.na(r_cty), `:=`(Discard_t = Landings_t * r_cty, Catch_t = Landings_t * (1 + r_cty),
+                                        discard_ratio = r_cty / (1 + r_cty),
+                                        discard_ratio_source = paste0("sum of the country discard estimates (", src, ")"))]
+catches_discards_fg[, c("r_cty", "src") := NULL]
+message("\n[Discards] FG series now from the country discard estimates (FishMIP/SAU/STECF FDI, as in Ecopath_Di): ",
+        catches_discards_fg[Discard_t > 0, uniqueN(FG_num)], " FG(s) with discards (", .n_new,
+        " that had none from FishMIP's FG ratio alone).")
 setcolorder(catches_discards_fg, c("Year", "FG_num", "FG_name", "Landings_t", "Catch_t", "Discard_t"))  # standardize column order
 message("\n[Catches] fg_catch_timeseries: ", nrow(fg_catch_timeseries), " FG x Year row(s), full West Med series.")
 
@@ -7963,17 +7988,40 @@ validation_plots[["05_effort_by_country_fleet"]] <- tryCatch({
 ## glance at what's real (STECF FDI) vs. inferred (SAU, calibrated or
 ## not) vs. last-resort (flat fallback), per country and year.
 validation_plots[["06_data_source_coverage"]] <- tryCatch({
-  d <- unique(fleet_prop_final[, .(Country, Year, fleet_split_source)])  # one row per country x year x source
-  d[, Tier := classify_source(fleet_split_source)]  # classify each row's data tier for coloring
-  d <- unique(d[, .(Country, Year, Tier)])  # collapse to one row per country x year x tier
-  ggplot(d, aes(x = Year, y = Country, fill = Tier)) +
-    geom_tile(color = "white", linewidth = 0.2) +
-    scale_fill_manual(values = c("STECF FDI" = "#2E7D32", "SAU (calibrated hindcast)" = "#F9A825",
-                                 "SAU (uncalibrated)" = "#EF6C00", "Flat fallback (all-years average)" = "#B71C1C",
-                                 "SAU" = "#F9A825", "not available" = "grey85", "other" = "grey60")) +
-    labs(title = "Fleet-split data source, by country and year", subtitle = "What actually supplied each cell's fleet proportions",
-         x = NULL, y = NULL, fill = NULL) +
-    theme_minimal(base_size = 8) + theme(legend.position = "bottom", panel.grid = element_blank())
+  ## Share of each country's catch (t) by the source of its fleet split, per
+  ## year. Weighted by catch: until 2026-11-03 this was one tile per country
+  ## x year with every source drawn on top of each other, so the last one
+  ## drawn showed (e.g. Spain looked all 'other' while 90 % of its pre-2014
+  ## catch is split with SAU, as for Italy and France).
+  d <- fleet_split_out[is.finite(Catch_t) & Catch_t > 0, .(Catch_t = sum(Catch_t)), by = .(Country, Year, fleet_split_source)]
+  d[, Source := fcase(
+    grepl("^STECF FDI \\(real gear", fleet_split_source), "STECF FDI, that year",
+    grepl("^STECF FDI", fleet_split_source), "STECF FDI, multi-year average",
+    grepl("bias-corrected", fleet_split_source), "SAU, calibrated to FDI",
+    grepl("^SAU \\(own year", fleet_split_source), "SAU, that year",
+    grepl("^SAU \\(country x FG x gear", fleet_split_source), "SAU, all years pooled",
+    grepl("SAU country-level|SAU country-level fleet mix", fleet_split_source), "SAU, country's fleet mix (FG not in SAU)",
+    grepl("GFCM Fleet Register|vessel", fleet_split_source, ignore.case = TRUE), "GFCM fleet register (vessels)",
+    grepl("^ICCAT", fleet_split_source), "ICCAT (tuna, swordfish)",
+    grepl("equal share", fleet_split_source), "Equal shares (no data)",
+    default = "Other fallback")]
+  d <- d[, .(Catch_t = sum(Catch_t)), by = .(Country, Year, Source)]
+  d[, share := Catch_t / sum(Catch_t), by = .(Country, Year)]
+  cols <- c("STECF FDI, that year" = "#1B5E20", "STECF FDI, multi-year average" = "#66BB6A",
+            "SAU, calibrated to FDI" = "#F9A825", "SAU, that year" = "#FFD54F", "SAU, all years pooled" = "#FFE9A6",
+            "SAU, country's fleet mix (FG not in SAU)" = "#EF6C00", "GFCM fleet register (vessels)" = "#6A1B9A",
+            "ICCAT (tuna, swordfish)" = "#1565C0", "Equal shares (no data)" = "#B71C1C", "Other fallback" = "grey60")
+  d[, Source := factor(Source, levels = names(cols))]
+  ggplot(d, aes(x = Year, y = share, fill = Source)) +
+    geom_col(width = 1, colour = NA) +
+    facet_wrap(~ Country, ncol = 2) +
+    scale_fill_manual(values = cols, drop = TRUE) +
+    scale_y_continuous(labels = scales::percent, expand = c(0, 0)) +
+    labs(title = "Fleet-split data source, by country and year",
+         subtitle = "Share of each country's catch whose split among fleets comes from each source. EU countries: STECF FDI from 2014, SAU before (calibrated to FDI). Morocco, Algeria, Tunisia: SAU",
+         x = NULL, y = "Share of catch", fill = NULL) +
+    theme_minimal(base_size = 8) + theme(legend.position = "bottom", panel.grid.minor = element_blank()) +
+    guides(fill = guide_legend(nrow = 3))
 }, error = function(e) { message("[Validation plot 6] skipped - ", conditionMessage(e)); NULL })
 
 ## =================================================================

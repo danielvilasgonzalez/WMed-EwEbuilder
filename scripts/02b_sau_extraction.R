@@ -130,13 +130,49 @@ if (length(sau_dir_files) == 0 && !file.exists(SAU_RAW_CSV)) {
           " species/gear/sector/year) into '", SAU_DIR, "', one CSV per country/EEZ is fine - all *.csv",
           " files found there are read and stacked together.")
 } else {
-  sau_raw <- if (length(sau_dir_files) > 0) {
-    message("\n[SAU] Reading ", length(sau_dir_files), " CSV file(s) from '", SAU_DIR, "': ",
-            paste(basename(sau_dir_files), collapse = ", "))
-    rbindlist(lapply(sau_dir_files, fread), use.names = TRUE, fill = TRUE)  # read and stack all CSVs found in SAU_DIR
-  } else {
-    message("\n[SAU] '", SAU_DIR, "' has no CSVs - falling back to the legacy combined file '", SAU_RAW_CSV, "'.")
-    fread(SAU_RAW_CSV)  # read the legacy single combined file instead
+  ## Sources, combined per country: the legacy combined file, then any
+  ## CSV in SAU_DIR (e.g. one country re-downloaded from seaaroundus.org).
+  ## A country found in SAU_DIR replaces that country's rows from the
+  ## combined file, so one country can be refreshed without the others.
+  ## Website downloads have no 'country' column: it is taken from
+  ## area_name (the EEZ), with islands mapped to their country.
+  .sau_country_from_area <- function(a) {
+    a <- as.character(a); out <- rep(NA_character_, length(a))
+    for (cty in unique(sau_west_med_eezs_dt$country)) out[is.na(out) & grepl(cty, a, ignore.case = TRUE)] <- cty
+    isl <- c(Corsica = "France", Sardinia = "Italy", Sicily = "Italy", Balearic = "Spain")
+    for (k in names(isl)) out[is.na(out) & grepl(k, a, ignore.case = TRUE)] <- isl[[k]]
+    out
+  }
+  .sau_read_one <- function(f) {
+    x <- tryCatch(fread(f), error = function(e) { message("[SAU] could not read ", basename(f), ": ", conditionMessage(e)); NULL })
+    if (is.null(x) || !nrow(x)) return(NULL)
+    if (!"country" %in% names(x) && "area_name" %in% names(x)) x[, country := .sau_country_from_area(area_name)]
+    x
+  }
+  sau_parts <- list()
+  if (file.exists(SAU_RAW_CSV)) sau_parts$combined <- .sau_read_one(SAU_RAW_CSV)
+  if (length(sau_dir_files) > 0) {
+    dir_dt <- rbindlist(lapply(sau_dir_files, .sau_read_one), use.names = TRUE, fill = TRUE)
+    .tn <- intersect(c("tonnes", "catch_sum", "value"), names(dir_dt))[1]
+    dir_ctys <- if (nrow(dir_dt) && "country" %in% names(dir_dt) && !is.na(.tn))
+      dir_dt[!is.na(country) & is.finite(as.numeric(get(.tn))), unique(country)] else character(0)
+    message("\n[SAU] Read ", length(sau_dir_files), " CSV file(s) from '", SAU_DIR, "' (", paste(basename(sau_dir_files), collapse = ", "),
+            "): ", if (length(dir_ctys)) paste0("used for ", paste(dir_ctys, collapse = ", "),
+            if (!is.null(sau_parts$combined)) " (replacing those countries in the combined file)" else "") else "no usable rows (no country/area_name or tonnes)")
+    if (!is.null(sau_parts$combined) && length(dir_ctys)) sau_parts$combined <- sau_parts$combined[!country %in% dir_ctys]
+    sau_parts$dir <- dir_dt[country %in% dir_ctys]
+  } else message("\n[SAU] Reading the combined file '", SAU_RAW_CSV, "' (no CSV in '", SAU_DIR, "').")
+  sau_raw <- rbindlist(sau_parts, use.names = TRUE, fill = TRUE)
+  ## Countries with no usable rows (e.g. Tunisia's rows in the 2026 combined
+  ## file are all blank): the fleet split falls back to equal shares for them.
+  .tn <- intersect(c("tonnes", "catch_sum", "value"), names(sau_raw))[1]
+  if (!is.na(.tn) && "country" %in% names(sau_raw)) {
+    .ok <- sau_raw[is.finite(suppressWarnings(as.numeric(get(.tn)))), unique(country)]
+    .miss <- setdiff(TARGET_COUNTRIES, .ok)
+    if (length(.miss)) message("[SAU] WARNING: no usable SAU catch rows for ", paste(.miss, collapse = ", "),
+                               " - their fleet split falls back to equal shares across their fleet types.",
+                               " Download that country's EEZ catch from seaaroundus.org (EEZ page -> Download data, CSV)",
+                               " into '", SAU_DIR, "'; it replaces that country's rows in the combined file.")
   }
   sau_candidates <- list(gear = c("gear_type", "gear"), sci_name = c("scientific_name"),
                          tonnes = c("tonnes", "catch_sum", "value"), report = c("reporting_status"),

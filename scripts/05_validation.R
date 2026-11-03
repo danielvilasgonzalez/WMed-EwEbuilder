@@ -837,11 +837,21 @@ validation_plots[["02_pbqb_plausibility"]] <- tryCatch({
   p <- fread(file.path(out_dir, "pbqb-traits", "plausibility_flag_REVIEW.csv"))
   d <- p[!is.na(PB_FG) & !is.na(QB_FG) & PB_FG > 0 & QB_FG > 0]
   if (nrow(d) == 0) stop("no FG has both a positive PB_FG and QB_FG to plot")
+  .num <- intersect(c("FG_num", "FG"), names(d))[1]                 # the FG number column is 'FG' in this file
+  d[, lab := if ("FG_name" %in% names(d)) paste(if (!is.na(.num)) get(.num) else "", FG_name) else if (!is.na(.num)) as.character(get(.num)) else ""]
+  d[, lab := trimws(lab)]
+  .lab_layer <- if (requireNamespace("ggrepel", quietly = TRUE))
+    ggrepel::geom_text_repel(aes(label = lab), size = 2.1, max.overlaps = Inf, min.segment.length = 0, segment.size = 0.2,
+                             segment.colour = "grey60", show.legend = FALSE, seed = 1)
+  else geom_text(aes(label = lab), size = 2.1, vjust = -0.7, show.legend = FALSE)
   ggplot(d, aes(x = PB_FG, y = QB_FG, color = plausibility_flag)) +
     geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey50") +           # QB = PB (P/Q = 1, the impossible boundary)
-    geom_abline(slope = 1/0.05, intercept = 0, linetype = "dotted", colour = "grey70") +      # P/Q = 0.05 (bottom of typical band)
-    geom_abline(slope = 1/0.3, intercept = 0, linetype = "dotted", colour = "grey70") +       # P/Q = 0.3 (top of typical band)
-    geom_point(size = 2, alpha = 0.8) +
+    ## On log axes geom_abline works in log10 units: QB = PB / k is
+    ## log10(QB) = log10(PB) + log10(1/k), i.e. slope 1, intercept log10(1/k).
+    ## (Until 2026-11-03 these were slope 1/k, intercept 0: wrong lines.)
+    geom_abline(slope = 1, intercept = log10(1/0.05), linetype = "dotted", colour = "grey60") +   # P/Q = 0.05 (bottom of typical band)
+    geom_abline(slope = 1, intercept = log10(1/0.3), linetype = "dotted", colour = "grey60") +    # P/Q = 0.3 (top of typical band)
+    geom_point(size = 2, alpha = 0.8) + .lab_layer +
     scale_x_log10() + scale_y_log10() +
     scale_color_manual(values = c("Plausible" = "grey30", "Outside typical 0.05-0.3 P/Q range - review" = "darkorange",
                                   "IMPOSSIBLE (PB_FG <= 0)" = "firebrick", "IMPOSSIBLE (QB_FG <= 0)" = "firebrick",
@@ -1432,6 +1442,24 @@ prebal <- tryCatch({
   tl_dt <- data.table(FG_num = as.integer(names(TL)), TL = as.numeric(TL))
   bb <- read_sheet_safe("Ecopath_B", c("FG_num", "FG_name", "Biomass"))
   pq <- read_sheet_safe("Ecopath_PBQB", c("FG_num", "PB_FG", "QB_FG"))
+  ## A group with an empty diet column gets TL = 1. That is right for
+  ## primary producers (Q/B = 0, or a plant/phytoplankton name), detritus
+  ## and discards, but not for a consumer whose diet is still missing
+  ## (corals and gorgonians, meso- and microzooplankton, suprabenthos
+  ## until their literature diets are filled): those would sit at TL 1
+  ## and pull the PREBAL fit, so they are left out, with a message.
+  .no_diet <- pred_num[colSums(DC) <= 0]
+  if (length(.no_diet)) {
+    .qb0 <- if (!is.null(pq)) pq[is.finite(as.numeric(QB_FG)) & as.numeric(QB_FG) == 0, FG_num] else integer(0)
+    .prod <- bb[grepl("phytoplankton|posidonia|cymodocea|seagrass|macroalgae|algae|detritus|discard", FG_name, ignore.case = TRUE), FG_num]
+    .cons <- setdiff(.no_diet, c(.qb0, .prod))
+    if (length(.cons)) {
+      tl_dt[FG_num %in% .cons, TL := NA_real_]
+      message("[05_validation.R] PREBAL: ", length(.cons), " consumer FG(s) with an empty diet left out (their TL would be 1): ",
+              paste(bb[FG_num %in% .cons, paste(FG_num, FG_name)], collapse = ", "))
+    }
+  }
+  tl_dt <- tl_dt[!is.na(TL)]
   d <- merge(tl_dt, bb[, .(FG_num, FG_name, B = as.numeric(Biomass))], by = "FG_num")
   if (!is.null(pq)) d <- merge(d, pq[, .(FG_num, PB = as.numeric(PB_FG), QB = as.numeric(QB_FG))], by = "FG_num", all.x = TRUE)
   d <- d[!grepl("detritus|discard", FG_name, ignore.case = TRUE)]

@@ -1021,21 +1021,29 @@ output$fg_explore_plot <- renderPlot({
       b$lo <- pmax(0, b$value * (1 - 1.96 * b$cv_index)); b$hi <- b$value * (1 + 1.96 * b$cv_index)
     }
   }
-  panel <- function(dd, title, ylab, band = FALSE) {
-    if (!nrow(dd)) return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0, y = 0, label = paste("No", tolower(title))) + ggplot2::theme_void())
-    p <- ggplot2::ggplot(dd, ggplot2::aes(Year, value))
-    if (band && "lo" %in% names(dd) && any(!is.na(dd$lo)))
-      p <- p + ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), fill = "#1b7f9e", alpha = 0.2, na.rm = TRUE)
-    p + ggplot2::geom_line(colour = "#0b4f6c") + ggplot2::geom_point(colour = "#0b4f6c", size = 1.4) +
-      ggplot2::labs(title = title, x = NULL, y = ylab) + ggplot2::theme_minimal(base_size = 13)
-  }
+  ## One colour per series, one legend for both panels (patchwork collects it)
+  cols <- c("Biomass (relative)" = "#0072B2", "Catches" = "#D55E00", "Discards" = "#009E73")
+  sc <- ggplot2::scale_colour_manual(values = cols, limits = names(cols), drop = FALSE, name = NULL)
+  th <- ggplot2::theme_minimal(base_size = 13) + ggplot2::theme(legend.position = "bottom")
+  empty <- function(title) ggplot2::ggplot() + ggplot2::annotate("text", x = 0, y = 0, label = paste("No", tolower(title))) +
+    ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 13)
+  p1 <- if (nrow(b)) {
+    b$series <- "Biomass (relative)"
+    p <- ggplot2::ggplot(b, ggplot2::aes(Year, value, colour = series))
+    if ("lo" %in% names(b) && any(!is.na(b$lo)))
+      p <- p + ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), fill = cols[["Biomass (relative)"]], colour = NA, alpha = 0.2, na.rm = TRUE)
+    p + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) + sc + th +
+      ggplot2::labs(title = "Biomass (relative to the first year)", x = NULL, y = "B / B first year")
+  } else empty("Biomass series")
   ct <- d[d$type %in% c("Catches", "Discards"), ]
-  p1 <- panel(b, "Biomass (relative to the first year)", "B / B first year", band = TRUE)
-  p2 <- if (nrow(ct)) ggplot2::ggplot(ct, ggplot2::aes(Year, value, colour = type)) + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) +
-          ggplot2::scale_colour_manual(values = c(Catches = "#b45309", Discards = "#64748b"), name = NULL) +
-          ggplot2::labs(title = "Catches and discards", x = NULL, y = "t/km²") + ggplot2::theme_minimal(base_size = 13) +
-          ggplot2::theme(legend.position = "top") else panel(ct, "Catches", "")
-  if (requireNamespace("patchwork", quietly = TRUE)) patchwork::wrap_plots(p1, p2, ncol = 2) else p1
+  p2 <- if (nrow(ct)) {
+    ct$series <- ct$type
+    ggplot2::ggplot(ct, ggplot2::aes(Year, value, colour = series)) + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) +
+      sc + th + ggplot2::labs(title = "Catches and discards", x = NULL, y = "t/km\u00b2")
+  } else empty("Catches")
+  if (requireNamespace("patchwork", quietly = TRUE))
+    patchwork::wrap_plots(p1, p2, ncol = 2, guides = "collect") & ggplot2::theme(legend.position = "bottom")
+  else p1
 }, res = 96)
 
 ## --- Load a settings file (presets) -------------------------------------
