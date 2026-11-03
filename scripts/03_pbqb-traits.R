@@ -1108,7 +1108,7 @@ if (!used_fisheries_R_f && FG_YIELD_SOURCE == "fg_catch_csv") {
 ## already source()'d near the top of this script (see the
 ## ECOPATH_WORKBOOK_PATH block above) for add_pbqb_to_ecopath_workbook().
 
-FISHBASE_TAXONOMY_CACHE_PATH <- file.path(out_dir, "fishbase_taxonomy_cache.rds")
+FISHBASE_TAXONOMY_CACHE_PATH <- file.path(get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = out_dir), "fishbase_taxonomy_cache.rds")   # shared by every run folder
 
 taxonomy <- fetch_taxonomy_fishbase(sp_list, cache_path = FISHBASE_TAXONOMY_CACHE_PATH)
 setnames(taxonomy, "ScientificName", "Species")

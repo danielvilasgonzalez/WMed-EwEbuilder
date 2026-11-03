@@ -115,8 +115,9 @@ env_dir   <- file.path(out_dir, "environment")
 ## Downloads are for the whole Western Med box and cached once per laptop:
 ## a custom region (out_dir/<AREA_NAME>) uses the same cache as the GSA run.
 .is_custom_env <- exists("AREA_MODE", envir = .GlobalEnv) && identical(AREA_MODE, "custom")
-.base_out_env <- if (.is_custom_env && exists("AREA_NAME", envir = .GlobalEnv) && basename(sub("/+$", "", out_dir)) == AREA_NAME)
-  dirname(sub("/+$", "", out_dir)) else out_dir
+.base_out_env <- if (exists("OUT_BASE_DIR", envir = .GlobalEnv)) OUT_BASE_DIR else
+  if (.is_custom_env && exists("AREA_NAME", envir = .GlobalEnv) && basename(sub("/+$", "", out_dir)) == AREA_NAME)
+  dirname(sub("/+$", "", out_dir)) else out_dir   # OUT_BASE_DIR: the main output folder, shared by every run folder
 cache_dir <- file.path(.base_out_env, "environment", "cache")
 nc_dir    <- file.path(env_dir, "netcdf")
 asc_dir   <- file.path(env_dir, "ecospace_asc")

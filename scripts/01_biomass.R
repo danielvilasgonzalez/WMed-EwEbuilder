@@ -246,7 +246,7 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
 }))) {
   ## AREA_MODE == "custom" nests out_dir under AREA_NAME, so different
   ## custom-region runs never overwrite each other's outputs
-  if (AREA_MODE == "custom") {
+  if (AREA_MODE == "custom" && !exists("RUN_DIR", envir = .GlobalEnv, inherits = FALSE)) {   # run_pipeline_demo.R already set the run folder
     out_dir <- file.path(out_dir, AREA_NAME)
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   }
@@ -311,7 +311,7 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
 ## A custom region writes to its own subfolder out_dir/AREA_NAME, so it
 ## never overwrites the Western Med outputs (also when out_dir was found
 ## by wmed_paths.R or set by a driver script).
-if (AREA_MODE == "custom" && basename(sub("/+$", "", out_dir)) != AREA_NAME) {
+if (AREA_MODE == "custom" && basename(sub("/+$", "", out_dir)) != AREA_NAME && !exists("RUN_DIR", envir = .GlobalEnv, inherits = FALSE)) {
   out_dir <- file.path(sub("/+$", "", out_dir), AREA_NAME)
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   message("[01_biomass.R] Custom region '", AREA_NAME, "': outputs in ", out_dir)
@@ -605,7 +605,7 @@ if (!exists("SPECIES_PRESENCE_CHECK", envir = .GlobalEnv, inherits = FALSE)) SPE
 ## independent authority - taxonomy_source = "worms" is still supported
 ## below (lib_worms_taxonomy_lookup.R is still sourced above) for a
 ## species FishBase/SeaLifeBase genuinely lacks.
-FISHBASE_TAXONOMY_CACHE_PATH <- file.path(out_dir, "fishbase_taxonomy_cache.rds")
+FISHBASE_TAXONOMY_CACHE_PATH <- file.path(get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = out_dir), "fishbase_taxonomy_cache.rds")   # shared by every run folder
 
 ## taxonomy_source = "both": FishBase/SeaLifeBase is fish/aquatic-
 ## organism-focused and doesn't carry every algae/sponge/bryozoan/
@@ -616,7 +616,7 @@ FISHBASE_TAXONOMY_CACHE_PATH <- file.path(out_dir, "fishbase_taxonomy_cache.rds"
 ## itself a valid WoRMS phylum-rank record), so it's a SECOND-PASS
 ## fallback for whatever FishBase/SeaLifeBase left with no rank filled
 ## in; FishBase/SeaLifeBase stays the first authority wherever it resolves a name.
-WORMS_TAXONOMY_CACHE_PATH <- file.path(out_dir, "worms_taxonomy_cache.rds")
+WORMS_TAXONOMY_CACHE_PATH <- file.path(get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = out_dir), "worms_taxonomy_cache.rds")   # shared by every run folder
 
 ## Shared copy of both taxonomy caches in pCloud (data/taxonomy_cache), so
 ## a laptop with a new output folder does not download all of FishBase,
@@ -720,8 +720,10 @@ download_gfcm_gsa_shapefile <- function() {
   gsa_zip_url  <- "https://gfcmsitestorage.blob.core.windows.net/website/5.Data/ArcGIS/GFCM_GSA.zip"
   ## A custom region (out_dir = <output>/<AREA_NAME>) reuses the GSA
   ## shapefile already in the main output folder instead of downloading it again.
-  .shp_base <- out_dir
-  if (identical(get0("AREA_MODE", ifnotfound = "westmed"), "custom") &&
+  ## OUT_BASE_DIR (run_pipeline_demo.R): the main output folder, shared by
+  ## every run folder (out_dir/runs/<name>); else the old custom layout.
+  .shp_base <- get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = out_dir)
+  if (!exists("OUT_BASE_DIR", envir = .GlobalEnv) && identical(get0("AREA_MODE", ifnotfound = "westmed"), "custom") &&
       length(list.files(file.path(dirname(sub("/+$", "", out_dir)), "shapefiles", "GFCM_GSA_shp"), "\\.shp$", recursive = TRUE)))
     .shp_base <- dirname(sub("/+$", "", out_dir))
   gsa_shp_dir  <- file.path(.shp_base, "shapefiles", "GFCM_GSA_shp")
@@ -4290,7 +4292,7 @@ if (!exists("HABITAT_MAP_SHP")) HABITAT_MAP_SHP <- file.path(pcloud_dir, "data/C
   out[is.na(area_region_km2), area_region_km2 := 0][, share := area_region_km2 / area_westmed_km2][]
 }
 if (AREA_MODE == "custom" && CUSTOM_AREA_TYPE %in% c("bbox", "shapefile")) tryCatch({
-  .main_dir <- dirname(sub("/+$", "", out_dir))
+  .main_dir <- get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = dirname(sub("/+$", "", out_dir)))   # the Western Med run (default inputs)
   .wb_reg  <- file.path(out_dir, "ecopath_ecosim_inputs.xlsx")
   .wb_main <- file.path(.main_dir, "ecopath_ecosim_inputs.xlsx")
   if (!file.exists(.wb_main)) stop("no Western Med workbook at ", .wb_main, " - run the Western Med pipeline first")

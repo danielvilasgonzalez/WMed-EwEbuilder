@@ -530,8 +530,10 @@ download_gfcm_gsa_shapefile <- function() {
   gsa_zip_url  <- "https://gfcmsitestorage.blob.core.windows.net/website/5.Data/ArcGIS/GFCM_GSA.zip"
   ## A custom region (out_dir = <output>/<AREA_NAME>) reuses the GSA
   ## shapefile already in the main output folder instead of downloading it again.
-  .shp_base <- out_dir
-  if (identical(get0("AREA_MODE", ifnotfound = "westmed"), "custom") &&
+  ## OUT_BASE_DIR (run_pipeline_demo.R): the main output folder, shared by
+  ## every run folder (out_dir/runs/<name>); else the old custom layout.
+  .shp_base <- get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = out_dir)
+  if (!exists("OUT_BASE_DIR", envir = .GlobalEnv) && identical(get0("AREA_MODE", ifnotfound = "westmed"), "custom") &&
       length(list.files(file.path(dirname(sub("/+$", "", out_dir)), "shapefiles", "GFCM_GSA_shp"), "\\.shp$", recursive = TRUE)))
     .shp_base <- dirname(sub("/+$", "", out_dir))
   gsa_shp_dir  <- file.path(.shp_base, "shapefiles", "GFCM_GSA_shp")

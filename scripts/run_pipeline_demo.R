@@ -84,8 +84,7 @@ source(file.path(git_dir, "scripts", "install_packages.R"))
 
 ## Run record and history (lib_run_record.R): the previous results are
 ## copied to out_dir/previous_runs/ before this run overwrites them.
-source(file.path(git_dir, "scripts", "lib_run_record.R"))
-tryCatch(wmed_archive_previous_run(out_dir), error = function(e) message("[run record] previous run not archived: ", conditionMessage(e)))
+source(file.path(git_dir, "scripts", "lib_run_record.R"))   # the previous run is archived below, once this run's folder is known
 
 ## ---- 2. Run settings -----------------------------------------------
 if (RUN_MODE == "westmed_default") {
@@ -169,14 +168,31 @@ if (RUN_MODE == "westmed_default") {
 if (.custom_run) {
   if (!exists("AREA_NAME", envir = .GlobalEnv, inherits = FALSE)) AREA_NAME <- "custom_region"
   AREA_NAME <- gsub("[^A-Za-z0-9_-]", "_", AREA_NAME)
-  if (basename(sub("/+$", "", out_dir)) != AREA_NAME) out_dir <- file.path(sub("/+$", "", out_dir), AREA_NAME)
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   if (exists("MODEL_GSAS", envir = .GlobalEnv, inherits = FALSE)) rm(MODEL_GSAS, envir = .GlobalEnv)   # 01 uses the region's own polygons
   FILTER_AREAS <- NULL
-  message("\n=== Custom region '", AREA_NAME, "': steps ", paste(RUN_STEPS, collapse = ", "), "; outputs in ", out_dir, " ===\n")
 } else {
   FILTER_AREAS <- MODEL_GSAS   # the survey/catch filters of 01 and 02 follow the model GSAs
 }
+
+## ---- Output folder of this run (wmed_paths.R: wmed_run_name) ------------
+## Default inputs -> out_dir itself; any other area, years or FG table ->
+## out_dir/runs/<area>__EP<years>_TS<years>[__FG-<table>], so runs with
+## different inputs never overwrite each other. OUT_BASE_DIR keeps the
+## main folder: downloads and caches stay there, shared by every run.
+## The scripts see the run folder as out_dir.
+OUT_BASE_DIR <- sub("/+$", "", out_dir)   # the main output folder, from wmed_set_paths() above
+RUN_NAME <- wmed_run_name(area_mode = if (.custom_run) "custom" else "westmed",
+                          gsas = if (.custom_run) integer(0) else MODEL_GSAS, basis = get0("MODEL_AREA_BASIS", ifnotfound = "whole_gsa"),
+                          area_name = get0("AREA_NAME", ifnotfound = NULL), year_ecopath = YEAR_ECOPATH, ts_years = TS_YEARS,
+                          fg_file = get0("FG_SPECIES_FILE", ifnotfound = NULL))
+RUN_DIR <- wmed_run_dir(OUT_BASE_DIR, RUN_NAME)
+out_dir <- RUN_DIR
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+if (nzchar(RUN_NAME)) writeLines(c(paste("Run:", RUN_NAME), paste("Last run:", format(Sys.time(), "%Y-%m-%d %H:%M"))),
+                                 file.path(out_dir, "RUN_INFO.txt"))
+message("\n=== ", if (nzchar(RUN_NAME)) paste0("Inputs differ from the defaults: own folder runs/", RUN_NAME) else "Default inputs: main output folder",
+        ". Run folder: ", out_dir, " ===\n")
+tryCatch(wmed_archive_previous_run(out_dir), error = function(e) message("[run record] previous run not archived: ", conditionMessage(e)))
 ## Custom region, before 02: the catch GSAs from 01's overlap table
 .set_custom_catch_gsas <- function() {
   ov <- file.path(out_dir, "biomass", "custom_gsa_overlap.csv")

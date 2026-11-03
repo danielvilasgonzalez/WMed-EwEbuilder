@@ -250,7 +250,7 @@ source(file.path(normalizePath(".."), "scripts", "app_server.R"), local = TRUE)
 |------------------------|------------------------|------------------------|
 | GSAs (map, checkboxes) | `MODEL_GSAS` (→ `FILTER_AREAS`) | GSAs of the model area (default 1-12). Survey data only from these GSAs; GSAs 3, 4 and 12 (no MEDITS) take the survey density per km² of the others (assumption). Catch kept for every coastal state of these GSAs. |
 | Area basis | `MODEL_AREA_BASIS` | `whole_gsa`: A_model is the whole sea area of the GSAs, coast to bottom. `medits_10_800`: only the 10-800 m MEDITS strata. |
-| Custom region | `AREA_MODE = "custom"`, `AREA_NAME`, `CUSTOM_AREA_TYPE`, `CUSTOM_SHAPEFILE_PATH` or `CUSTOM_BBOX` | A region from an uploaded shapefile (.zip, or .shp + .shx + .dbf + .prj), GeoJSON, GeoPackage or KML, or a lon/lat box, instead of GSAs. Runs all steps (01–05) for that region; outputs in `out_dir/<AREA_NAME>/` (@sec-area-definition, Approach B). Catch: the GSA(s) holding ≥ 5 % of the region (`custom_gsa_overlap.csv`), per km² of their sea area. |
+| Custom region | `AREA_MODE = "custom"`, `AREA_NAME`, `CUSTOM_AREA_TYPE`, `CUSTOM_SHAPEFILE_PATH` or `CUSTOM_BBOX` | A region from an uploaded shapefile (.zip, or .shp + .shx + .dbf + .prj), GeoJSON, GeoPackage or KML, or a lon/lat box, instead of GSAs. Runs all steps (01–05) for that region; outputs in `out_dir/runs/<AREA_NAME>__EP<years>_TS<years>/` (@sec-area-definition, Approach B). Catch: the GSA(s) holding ≥ 5 % of the region (`custom_gsa_overlap.csv`), per km² of their sea area. |
 | Ecopath baseline | `YEAR_ECOPATH` | Years averaged into Ecopath_B, F and P/B (01, 02, 03). |
 | Ecosim biomass series | `TS_YEARS` | Years of the Ecosim biomass series (01). |
 | (no input) | `START_YEAR`, `END_YEAR` | Catch, landings, discards and effort series (02) follow the other years: from the first Ecopath or Ecosim year to the last Ecosim year (set in `run_pipeline_demo.R`). |
@@ -260,6 +260,7 @@ source(file.path(normalizePath(".."), "scripts", "app_server.R"), local = TRUE)
 | Fill missing Ecopath_B | `ECOPATH_B_FILL_MODE`, `ECOPATH_B_FILL_YEARS` (default on, 1995-2000) | An FG with no biomass in the Ecopath years gets its mean over these years (else the nearest year with data); off = nearest single year only. Expanding FGs always get 0.00001 t/km². |
 | FGs with F > 1 | `HIGH_F_B_FIX` (default `"none"`) | `"none"`: only reported (`high_F_REVIEW.csv`). `"min_from_catch"`: Ecopath_B raised to catch / F_MAX (the smallest B that keeps F = 1). `"ecopath_estimate"`: B left blank and EE = 0.95, so Ecopath estimates B. Meant for groups the trawl survey hardly sees; the change is recorded in Ecopath_B's Reference column. |
 | Phytoplankton B and P/B | `PHYTO_SOURCE` (default `"isimip"`) | `"isimip"`: ISIMIP COBALT2 1995 biomass and EcoBase P/B. `"copernicus"`: B and P/B from 06 environment (@sec-environment; run 06 first). |
+| (no input) Output folder | `RUN_NAME`, `RUN_DIR` (set in `run_pipeline_demo.R`) | Each set of inputs has its own folder, so runs never overwrite each other's results. Default inputs (GSAs 1-12, whole GSA, Ecopath 1994-1996, Ecosim 1995-2023, `FG_WMed_2026.csv`): the main output folder. Any other area, years or FG table: `out_dir/runs/<area>__EP<years>_TS<years>[__FG-<table>]`, e.g. `runs/GSA6-7__EP1994-1996_TS1995-2023`. The same inputs again replace that folder's results (the previous ones are kept in its `previous_runs/`). Other options (strata, outliers, F > 1, phytoplankton source...) do not change the folder. Downloads and caches stay in the main folder, shared by every run. Results card: *Show the results of* picks the run to show. |
 | Scripts to run | `RUN_STEPS` | Tick any of 01–06 (`1:5` the main pipeline; `6` = environmental drivers, @sec-environment, run before 05; `2:5` reuses the biomass on disk; `5` redraws the validation only; e.g. `c(1, 5)`). A script left unticked is not rerun: the ticked ones read its outputs from the previous run. The page stops a run when a ticked script needs a file that is not there yet, and warns when later outputs on disk will no longer match, or when the settings differ from those of the last run. |
 
 The model-area figure in the summary is a preview from the simplified
@@ -312,7 +313,7 @@ The biomass step has two layers:
       boundary (a shapefile or other polygon file uploaded on the page,
       a lon/lat box, or a custom GSA grouping; `CUSTOM_AREA_TYPE`) -
       useful when the same survey supports a different EwE model with
-      its own footprint. MEDITS-only. Outputs in `out_dir/<AREA_NAME>/`
+      its own footprint. MEDITS-only. Outputs in `out_dir/runs/<AREA_NAME>__EP<years>_TS<years>/`
       (default `custom_region`), so the two modes never overwrite each
       other.
 
@@ -683,7 +684,7 @@ given, never assuming GSA-specific structure.
 ### Running the whole pipeline for a custom region
 
 A custom region runs all five steps, with every output in
-`out_dir/<AREA_NAME>/`, because the region's own biomass changes
+`out_dir/runs/<AREA_NAME>__EP<years>_TS<years>/`, because the region's own biomass changes
 everything after it: the species shares inside each FG (used to weight
 P/B, Q/B and diets), F = C/B, and the diet split by prey biomass.
 
@@ -2350,7 +2351,7 @@ the *Years* card (`TS_YEARS`, plus the Ecopath years); B uses the middle
 Ecopath year and P/B the Ecopath years up to it (1994:1996 gives B 1995
 and NPP 1994–1995). The area is the one picked in the *Model area* card:
 the GSAs in `MODEL_GSAS`, or the custom region (box or uploaded
-polygon), with outputs in `out_dir/<AREA_NAME>/environment/`. The
+polygon), with outputs in `out_dir/runs/<AREA_NAME>__EP<years>_TS<years>/environment/`. The
 downloads always cover the whole Western Mediterranean box and are
 cached once (`out_dir/environment/cache/`), so changing the area or the
 years does not download again.

@@ -15,11 +15,18 @@
 .git_dir <- normalizePath("..")   # this .qmd sits in <git_dir>/scripts
 source(file.path(.git_dir, "scripts", "wmed_paths.R"), local = TRUE)
 .paths <- wmed_find_paths(.git_dir)  # config.local.R > config.R > standard pCloud Drive place
-.out_dir <- .paths$out_dir
+.base_out <- unname(.paths$out_dir)   # main output folder: default-input results, caches, the page's run files
+## Results shown on the page: the folder of one run (wmed_paths.R:
+## wmed_run_name). Default inputs -> .base_out; any other area, years or FG
+## table -> .base_out/runs/<name>. Picked in the Results card, and set to
+## the run's folder when a run from this page finishes. .out_dir, .plot_dir,
+## .wb_path and .diet_path follow it (active bindings).
+.results_dir <- reactiveVal(.base_out)
+makeActiveBinding(".out_dir", function() shiny::isolate(.results_dir()), environment())
 ## Run files live in out_dir/.qmd_run (not in R's temporary folder), so a page
 ## reopened later still knows the last run started from here, and a run
 ## that is still going.
-.run_dir <- if (!is.na(.out_dir) && dir.exists(.out_dir)) file.path(.out_dir, ".qmd_run") else file.path(tempdir(), "wmed_qmd_run")
+.run_dir <- if (!is.na(.base_out) && dir.exists(.base_out)) file.path(.base_out, ".qmd_run") else file.path(tempdir(), "wmed_qmd_run")
 dir.create(.run_dir, showWarnings = FALSE, recursive = TRUE)
 .status_file <- file.path(.run_dir, "status.txt")       # "done" or "error: ..." when the run ends; its time = end
 .console <- file.path(.run_dir, "console.txt")          # everything the run prints
@@ -55,6 +62,22 @@ model_cells <- reactive({
 updateSelectInput(session, "fg_file", choices = setNames(.fg_choices, basename(.fg_choices)),
                   selected = if (.fg_default %in% .fg_choices) .fg_default else .fg_choices[1])
 fg_path <- reactiveVal(.fg_default)
+run_target <- reactiveVal(NULL)   # output folder of the run started from this page
+## Output folder of a run with the inputs set on the page now (same rule as run_pipeline_demo.R)
+.inputs_run_dir <- function() {
+  custom <- identical(input$area_mode, "custom")
+  yr <- function(v) if (length(v) == 2) seq(v[1], v[2]) else v
+  wmed_run_dir(.base_out, wmed_run_name(
+    area_mode = if (custom) "custom" else "westmed", gsas = if (custom) integer(0) else as.integer(input$gsas),
+    basis = if (is.null(input$basis)) "whole_gsa" else input$basis, area_name = input$area_name,
+    year_ecopath = yr(input$ecopath_years), ts_years = yr(input$ts_years),
+    fg_file = { f <- fg_path(); if (is.null(f) || is.na(f)) NULL else f }))
+}
+.run_label <- function(d) {
+  if (is.null(d) || is.na(d)) return("-")
+  if (identical(normalizePath(d, mustWork = FALSE), normalizePath(.base_out, mustWork = FALSE))) "the main output folder (default inputs)"
+  else paste0("runs/", basename(d))
+}
 observeEvent(input$fg_file, if (nzchar(input$fg_file)) fg_path(input$fg_file))
 catch_path <- reactiveVal(NA_character_)
 observeEvent(input$catch_upload, {   # an uploaded catchability table is kept next to the run files
@@ -103,7 +126,7 @@ output$fg_summary <- renderUI({
   ## Species with biomass in the last run / species in the FG file (01 writes
   ## fg_species_coverage.csv); refreshed when a run finishes.
   run_state()
-  .cov_f <- file.path(.out_dir, if (identical(input$area_mode, "custom")) gsub("[^A-Za-z0-9_-]", "_", input$area_name) else "", "biomass", "fg_species_coverage.csv")
+  .cov_f <- file.path(.inputs_run_dir(), "biomass", "fg_species_coverage.csv")
   cov <- if (file.exists(.cov_f)) tryCatch(data.table::fread(.cov_f), error = function(e) NULL) else NULL
   has_cov <- !is.null(cov) && all(c("FG_num", "coverage", "coverage_survey") %in% names(cov))
   if (has_cov) fg <- merge(fg, cov[, .(FG_number = as.numeric(FG_num), coverage, coverage_survey, species_without_biomass)], by = "FG_number", all.x = TRUE)
@@ -159,7 +182,7 @@ observeEvent(input$custom_example, {
 observeEvent(input$custom_shp, {
   up <- input$custom_shp
   name <- gsub("[^A-Za-z0-9_-]", "_", if (nzchar(input$area_name)) input$area_name else "custom_region")
-  dest <- file.path(.out_dir, "shapefiles", "custom", name)   # kept with the outputs, one folder per region
+  dest <- file.path(.base_out, "shapefiles", "custom", name)   # kept in the main output folder, one folder per region
   ## Files from earlier uploads for this region are kept, so the parts of a
   ## shapefile can also be uploaded one after the other.
   dir.create(dest, recursive = TRUE, showWarnings = FALSE)
@@ -295,8 +318,8 @@ observeEvent(input$steps_only5,  updateCheckboxGroupInput(session, "steps_chk", 
 }
 steps_problems <- reactive({
   s <- steps_sel()
-  if (is.na(.out_dir)) return(list(missing = character(0), stale = character(0), changed = character(0)))
-  od <- file.path(.out_dir, if (identical(input$area_mode, "custom")) gsub("[^A-Za-z0-9_-]", "_", input$area_name) else "")
+  if (is.na(.base_out)) return(list(missing = character(0), stale = character(0), changed = character(0)))
+  od <- .inputs_run_dir()   # this run's folder: the outputs of earlier runs with the same inputs
   missing <- character(0)
   for (k in s) for (nd in .step_needs[[as.character(k)]]) {
     p <- nd[[1]]; f <- nd[[2]]
@@ -554,9 +577,9 @@ observeEvent(input$run, {
   .out_file <- if (.Platform$OS.type == "windows") file.path(.run_dir, "console_raw.txt") else .console
   system2(file.path(R.home("bin"), "Rscript"), shQuote(.fwd(.run_script)), wait = FALSE, stdout = .out_file, stderr = .out_file)
   run_state("running"); run_started(Sys.time()); run_finished(NULL); run_note(""); step_seen(list())
+  run_target(isolate(.inputs_run_dir()))
   run_steps(isolate(steps_sel()))
-  showNotification(if (custom) paste0("Pipeline started for '", isolate(input$area_name), "' - outputs in out_dir/", isolate(input$area_name), ".")
-                   else "Pipeline started - progress is shown below the button.", duration = 8)
+  showNotification(paste0("Pipeline started - outputs in ", .run_label(isolate(run_target())), ". Progress is shown below the button."), duration = 8)
 }
 
 ## --- Copernicus Marine login (needed by 06 environment) -------------------
@@ -613,7 +636,9 @@ observe({
   if (file.exists(.status_file)) {
     res <- readLines(.status_file, warn = FALSE)[1]
     run_state(if (identical(res, "done")) "done" else "error")
-    run_finished(file.mtime(.status_file)); last_finished(Sys.time())
+    run_finished(file.mtime(.status_file))
+    if (!is.null(run_target()) && dir.exists(run_target())) .results_dir(run_target())   # show this run's results
+    last_finished(Sys.time())
     if (identical(res, "done")) .record_step_times()
     showNotification(if (identical(res, "done")) "Pipeline finished - plots updated." else res,
                      type = if (identical(res, "done")) "message" else "error", duration = NULL)
@@ -695,8 +720,9 @@ output$run_status <- renderText({
 ## --- Files under out_dir for the figures in the text ------------------------
 .ctype <- c(png = "image/png", csv = "text/csv", pdf = "application/pdf", txt = "text/plain",
             xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-.file_url <- session$registerDataObj("wmfile", .out_dir, function(data, req) {
+.file_url <- session$registerDataObj("wmfile", .base_out, function(data, req) {
   q <- shiny::parseQueryString(req$QUERY_STRING)
+  data <- .out_dir                                  # the results folder shown now
   root <- normalizePath(data, mustWork = FALSE)
   f <- normalizePath(file.path(data, if (is.null(q$f)) "" else q$f), mustWork = FALSE)
   ext <- tolower(tools::file_ext(f))
@@ -751,15 +777,16 @@ observeEvent(input$save_folders, {
 })
 
 ## --- Downloads: the output files of the last run ----------------------------
-.wb_path   <- if (!is.na(.out_dir)) file.path(.out_dir, "ecopath_ecosim_inputs.xlsx") else NA_character_
-.diet_path <- if (!is.na(.out_dir)) file.path(.out_dir, "diet", "diet_matrix_main_vs_reference.xlsx") else NA_character_
+makeActiveBinding(".wb_path", function() if (!is.na(.out_dir)) file.path(.out_dir, "ecopath_ecosim_inputs.xlsx") else NA_character_, environment())
+makeActiveBinding(".diet_path", function() if (!is.na(.out_dir)) file.path(.out_dir, "diet", "diet_matrix_main_vs_reference.xlsx") else NA_character_, environment())
 .out_tables <- function(pattern) {   # csv/xlsx under out_dir (not the plots or the page's run files)
   if (is.na(.out_dir)) return(character(0))
   f <- list.files(.out_dir, "\\.(csv|xlsx)$", recursive = TRUE)
-  f <- f[!grepl("^(plots|plots_old|\\.qmd_run|isimip3a_cache|shapefiles|GFCM_GSA_shp)", f)]
+  f <- f[!grepl("^(plots|plots_old|\\.qmd_run|isimip3a_cache|shapefiles|GFCM_GSA_shp|runs|previous_runs)", f)]
   f[grepl(pattern, f)]
 }
 .send_file <- function(path) function(file) {
+  if (is.function(path)) path <- path()   # the file of the results folder shown when the button is clicked
   if (!file.exists(path)) stop("Not found: ", path, " - run the pipeline first.")
   file.copy(path, file)
 }
@@ -770,8 +797,8 @@ observeEvent(input$save_folders, {
   if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, f) else utils::zip(file, f, flags = "-q")
 }
 .stamp <- function() format(Sys.time(), "%Y%m%d")
-output$dl_workbook <- downloadHandler(function() paste0("ecopath_ecosim_inputs_", .stamp(), ".xlsx"), .send_file(.wb_path))
-output$dl_diet     <- downloadHandler(function() paste0("diet_matrix_main_vs_reference_", .stamp(), ".xlsx"), .send_file(.diet_path))
+output$dl_workbook <- downloadHandler(function() paste0("ecopath_ecosim_inputs_", .stamp(), ".xlsx"), .send_file(function() .wb_path))
+output$dl_diet     <- downloadHandler(function() paste0("diet_matrix_main_vs_reference_", .stamp(), ".xlsx"), .send_file(function() .diet_path))
 output$dl_review   <- downloadHandler(function() paste0("WMed_EwE_REVIEW_tables_", .stamp(), ".zip"), .send_zip("REVIEW"))
 output$dl_all      <- downloadHandler(function() paste0("WMed_EwE_all_tables_", .stamp(), ".zip"), .send_zip("."))
 output$dl_info <- renderUI({
@@ -793,9 +820,9 @@ output$dl_info <- renderUI({
                   "Start pCloud Drive, or set the folder above (card 0).")
   out[[3]] <- row("FG table", !is.na(pc) && file.exists(file.path(pc, "data", "FG_WMed_2026.csv")),
                   if (is.na(pc)) "-" else file.path(pc, "data", "FG_WMed_2026.csv"), "Check that pCloud has finished syncing the data folder.")
-  wr <- !is.na(.out_dir) && dir.exists(.out_dir) && {
-    tf <- file.path(.out_dir, ".write_test"); ok <- tryCatch(file.create(tf), error = function(e) FALSE); unlink(tf); isTRUE(ok) }
-  out[[4]] <- row("Output folder writable", wr, if (is.na(.out_dir)) "not set" else .out_dir, "Choose another output folder above.")
+  wr <- !is.na(.base_out) && dir.exists(.base_out) && {
+    tf <- file.path(.base_out, ".write_test"); ok <- tryCatch(file.create(tf), error = function(e) FALSE); unlink(tf); isTRUE(ok) }
+  out[[4]] <- row("Output folder writable", wr, if (is.na(.base_out)) "not set" else .base_out, "Choose another output folder above.")
   need <- c("data.table", "ggplot2", "openxlsx", "readxl", "sf", "terra", "raster", "rfishbase", "duckdbfs", "worrms",
             "httr", "jsonlite", "ncdf4", "pdftools", "TropFishR", "ragg", "patchwork", "shiny", "rmarkdown")
   miss <- need[!vapply(need, requireNamespace, logical(1), quietly = TRUE)]
@@ -878,11 +905,12 @@ output$run_summary <- renderUI({
 ## --- Results: key plots and every plot in out_dir/plots ----------------------
 ## The PNGs are served straight from out_dir/plots (no copy); "?v=<time>"
 ## makes the browser fetch a plot again after a run rewrites it.
-.plot_dir <- if (!is.na(.out_dir)) file.path(.out_dir, "plots") else NA_character_
+makeActiveBinding(".plot_dir", function() if (!is.na(.out_dir)) file.path(.out_dir, "plots") else NA_character_, environment())
 ## Served through the session (registerDataObj), which works inside Quarto;
 ## only files under out_dir/plots can be read this way.
-.plot_url <- session$registerDataObj("wmplot", .plot_dir, function(data, req) {
+.plot_url <- session$registerDataObj("wmplot", .base_out, function(data, req) {
   q <- shiny::parseQueryString(req$QUERY_STRING)
+  data <- .plot_dir                                 # plots of the results folder shown now
   root <- normalizePath(data, mustWork = FALSE)
   f <- normalizePath(file.path(data, if (is.null(q$f)) "" else q$f), mustWork = FALSE)
   if (is.null(q$f) || !startsWith(f, root) || !file.exists(f) || dir.exists(f))
@@ -1102,4 +1130,35 @@ observeEvent(input$settings_upload, {
                                if (length(skipped)) paste0("<br>Not set on the page (set them in the R console): ", paste(skipped, collapse = ", ")),
                                if (!is.null(s$CUSTOM_SHAPEFILE_PATH)) "<br>Upload the region file again (a shapefile path cannot be loaded).")),
                    type = "message", duration = 12)
+})
+
+## --- Which run's results to show -------------------------------------------
+## Every output folder with a workbook: the main one (default inputs) and
+## each out_dir/runs/<name>. Newest first.
+.run_folders <- function() {
+  if (is.na(.base_out)) return(character(0))
+  d <- unname(c(.base_out, list.dirs(file.path(.base_out, "runs"), recursive = FALSE)))
+  d <- d[file.exists(file.path(d, "ecopath_ecosim_inputs.xlsx")) | dir.exists(file.path(d, "plots"))]
+  if (!length(d)) return(character(0))
+  mt <- vapply(d, function(x) { f <- file.path(x, "ecopath_ecosim_inputs.xlsx"); as.numeric(if (file.exists(f)) file.mtime(f) else file.mtime(x)) }, 0, USE.NAMES = FALSE)
+  o <- order(-mt); d <- d[o]; mt <- mt[o]
+  stats::setNames(d, paste0(vapply(d, .run_label, ""), " - ", format(as.POSIXct(mt, origin = "1970-01-01"), "%d %b %H:%M")))
+}
+observe({
+  last_finished()
+  ch <- .run_folders()
+  sel <- isolate(.results_dir())
+  if (length(ch) && !sel %in% ch) sel <- ch[[1]]
+  updateSelectInput(session, "results_run", choices = ch, selected = sel)
+  if (length(ch) && !identical(sel, isolate(.results_dir()))) .results_dir(sel)
+})
+observeEvent(input$results_run, {
+  if (!nzchar(input$results_run) || identical(input$results_run, .results_dir())) return()
+  .results_dir(input$results_run); last_finished(Sys.time())
+}, ignoreInit = TRUE)
+output$results_run_note <- renderUI({
+  last_finished(); want <- .inputs_run_dir(); shown <- .results_dir()
+  if (identical(normalizePath(want, mustWork = FALSE), normalizePath(shown, mustWork = FALSE))) return(NULL)
+  tags$div(class = "wm-help", "The inputs set above would write to ", tags$code(.run_label(want)),
+           if (!want %in% .run_folders()) " (no results there yet)" else "", "; shown here: ", tags$code(.run_label(shown)), ".")
 })

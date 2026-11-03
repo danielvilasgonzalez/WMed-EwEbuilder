@@ -257,6 +257,10 @@ tagList(
   ## Results ---------------------------------------------------------------
   tags$div(id = "wm-results-card"),
   .card("6", "Results", "\U0001F4CA",
+    tags$div(class = "mb-2",
+      selectInput("results_run", "Show the results of", choices = NULL, width = "100%"),
+      tags$div(class = "wm-help", "Each set of inputs (area, years, FG table) has its own output folder: the default inputs (GSAs 1-12, Ecopath 1994-1996, Ecosim 1995-2023, FG_WMed_2026.csv) in the main output folder, any other in runs/<area>__EP<years>_TS<years>. Runs with different inputs never overwrite each other; the same inputs again replace their own results."),
+      uiOutput("results_run_note")),
     tags$div(class = "wm-downloads mb-3",
       tags$strong("Download the outputs: "),
       downloadButton("dl_workbook", "Ecopath/Ecosim inputs (.xlsx)", class = "btn-sm btn-primary"),

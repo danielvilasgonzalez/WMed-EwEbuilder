@@ -2295,7 +2295,7 @@ compute_fg_densities_by_stratum <- function(dt, strata = TRUE) {
 }
 bathy_mosaic <- function(resolution = 1, dir) {
   nm <- paste0("EMODnet_WMed_", format(resolution), "arcmin.tif")
-  od <- get0("out_dir", envir = .GlobalEnv, ifnotfound = NA)
+  od <- get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = get0("out_dir", envir = .GlobalEnv, ifnotfound = NA))   # main output folder: one copy for every run folder
   shared <- file.path(dir, nm)                                              # pCloud copy, for the other laptops
   local <- if (!is.na(od)) file.path(od, "bathymetry", nm) else shared       # working copy on this laptop
   tl <- .bathy_tiles(dir)

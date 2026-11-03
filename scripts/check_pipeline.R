@@ -81,7 +81,7 @@ if (isTRUE(get0("QUICK_RUN", envir = .GlobalEnv, ifnotfound = FALSE))) {
   t0 <- Sys.time()
   st <- system2(file.path(R.home("bin"), "Rscript"), shQuote(rs), stdout = TRUE, stderr = TRUE)
   message(sprintf("  finished in %.1f min", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
-  od <- sub("^.*outputs in (.*) ===.*$", "\\1", grep("outputs in .* ===", st, value = TRUE)[1])
+  od <- sub("^.*Run folder: (.*) ===.*$", "\\1", grep("Run folder: .* ===", st, value = TRUE)[1])
   logs <- if (!is.na(od) && dir.exists(od)) list.files(od, "_log\\.txt$", full.names = TRUE) else character(0)
   .say(length(logs) >= 4, sprintf("logs written (%d)", length(logs)))
   for (f in logs) {

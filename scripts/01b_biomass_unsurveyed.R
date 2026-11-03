@@ -2472,7 +2472,7 @@ fetch_cmems_detritus_biomass <- function(out_dir, force_refresh = FALSE,
 ##   csv_out_dir/isimip3a_cobalt2_plankton_detritus_1995.csv.
 ## =================================================================
 if (!exists("MACROZOO_FRACTION_OF_ZMESO")) MACROZOO_FRACTION_OF_ZMESO <- NA_real_
-if (!exists("ISIMIP_CACHE_DIR")) ISIMIP_CACHE_DIR <- file.path(if (exists("out_dir")) out_dir else csv_out_dir, "isimip3a_cache")
+if (!exists("ISIMIP_CACHE_DIR")) ISIMIP_CACHE_DIR <- file.path(get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = if (exists("out_dir")) out_dir else csv_out_dir), "isimip3a_cache")   # shared by every run folder
 ISIMIP_BASE_URL <- "https://files.isimip.org/ISIMIP3a/InputData/climate/ocean/obsclim/global"
 
 .isimip_get_file <- function(var) {
