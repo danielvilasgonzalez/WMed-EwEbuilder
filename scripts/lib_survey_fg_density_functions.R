@@ -35,6 +35,30 @@
 ## rewrites once if any NUL is found. csv_has_nul() lets readers treat
 ## a corrupted cache as missing (so it is recomputed, not half-read).
 ## =================================================================
+## --- Shared figure style -------------------------------------------------
+## wm_theme(): the default look of every figure (white background, light
+## grid, bold facet titles); set as the ggplot2 default when this library is
+## sourced, so plots without their own theme share it. Plots that add their
+## own theme_minimal()/theme_bw() keep it. Set options(wmed.theme = FALSE)
+## before sourcing to keep ggplot2's default.
+## wm_fg_colours(n): n distinct colours (Okabe-Ito, colour-blind safe, then
+## the Dark2/Set2 qualitative palettes) for groups or fleets.
+wm_theme <- function(base_size = 10) {
+  ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", colour = NA),
+                   panel.grid.minor = ggplot2::element_blank(),
+                   strip.text = ggplot2::element_text(face = "bold", size = ggplot2::rel(0.9)),
+                   plot.title = ggplot2::element_text(face = "bold"),
+                   legend.position = "bottom")
+}
+wm_fg_colours <- function(n) {
+  base <- c("#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#F0E442", "#000000",
+            "#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666",
+            "#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F", "#E5C494", "#B3B3B3")
+  if (n <= length(base)) base[seq_len(n)] else grDevices::hcl.colors(n, "Dark 3")
+}
+if (isTRUE(getOption("wmed.theme", TRUE)) && requireNamespace("ggplot2", quietly = TRUE)) ggplot2::theme_set(wm_theme())
+
 csv_has_nul <- function(path) {
   if (!file.exists(path)) return(FALSE)
   sz <- file.info(path)$size
@@ -560,6 +584,7 @@ fetch_taxonomy_fishbase_uncached <- function(species_names, max_retries = 3) {
   if (!requireNamespace("rfishbase", quietly = TRUE)) {
     stop("rfishbase not installed - required for taxonomy_source='fishbase' or 'both'.")
   }
+  servers_ok <- 0L   # how many of the two FishBase servers were read (see fetch_taxonomy_fishbase())
   fetch_one_server <- function(server) {
     for (attempt in seq_len(max_retries)) {
       ## load_taxa() has NEVER taken a species-name filter argument (old
@@ -580,7 +605,7 @@ fetch_taxonomy_fishbase_uncached <- function(species_names, max_retries = 3) {
       ## the sink()ed run log (2026-10-08). Captured and discarded here.
       tax <- tryCatch({ .tx <- NULL; invisible(utils::capture.output(.tx <- rfishbase::load_taxa(server = server)))
                         as.data.table(.tx) }, error = function(e) e)
-      if (!inherits(tax, "error")) return(tax)
+      if (!inherits(tax, "error")) { servers_ok <<- servers_ok + 1L; return(tax) }
       if (attempt < max_retries) {
         message("  rfishbase::load_taxa() failed on server '", server, "' (attempt ", attempt, "/", max_retries,
                 "): ", conditionMessage(tax), " - retrying in ", 2^attempt, "s.")
@@ -656,7 +681,7 @@ fetch_taxonomy_fishbase_uncached <- function(species_names, max_retries = 3) {
   }), fill = TRUE)
   not_found <- data.table(ScientificName = species_names, Genus = NA_character_, Family = NA_character_,
                           Order = NA_character_, Class = NA_character_, Phylum = NA_character_)
-  if (is.null(results) || nrow(results) == 0) return(not_found)
+  if (is.null(results) || nrow(results) == 0) return(setattr(not_found, "servers_ok", servers_ok))
   
   ## fishbase and sealifebase are disjoint in practice (a species is one
   ## or the other), but if a name genuinely comes back from both, keep
@@ -672,6 +697,7 @@ fetch_taxonomy_fishbase_uncached <- function(species_names, max_retries = 3) {
   ## SeaLifeBase again on every future run just because it has no row here).
   still_missing <- setdiff(species_names, results$ScientificName)
   if (length(still_missing) > 0) results <- rbindlist(list(results, not_found[ScientificName %in% still_missing]))
+  setattr(results, "servers_ok", servers_ok)
   results
 }
 
@@ -700,8 +726,15 @@ fetch_taxonomy_fishbase <- function(species_names, cache_path = NULL) {
   ## exchange for never permanently trusting a "not found" that was
   ## actually just a broken fetch.
   rank_cols <- c("Genus", "Family", "Order", "Class", "Phylum")
+  ## Since 2026-10-27 a "not found" row is trusted for TAXONOMY_RECHECK_DAYS
+  ## (default 30) when it was written after BOTH FishBase servers were read
+  ## fine (checked_on column): re-querying ~100 truly unknown names cost
+  ## ~2 min every run, because it means downloading FishBase's whole
+  ## taxonomy tables again. Older rows (no checked_on) are re-queried once.
+  recheck_days <- get0("TAXONOMY_RECHECK_DAYS", envir = .GlobalEnv, ifnotfound = 30)
   resolved_cache_names <- if (!is.null(cache) && nrow(cache) > 0) {
-    cache[rowSums(!is.na(cache[, ..rank_cols])) > 0, ScientificName]
+    fresh_nf <- if ("checked_on" %in% names(cache)) !is.na(cache$checked_on) & (Sys.Date() - as.Date(cache$checked_on)) <= recheck_days else FALSE
+    cache[rowSums(!is.na(cache[, ..rank_cols])) > 0 | fresh_nf, ScientificName]
   } else character(0)
   already_cached <- intersect(species_names, resolved_cache_names)
   to_query <- setdiff(species_names, already_cached)
@@ -714,6 +747,10 @@ fetch_taxonomy_fishbase <- function(species_names, cache_path = NULL) {
   }
   
   fresh_result <- if (length(to_query) > 0) fetch_taxonomy_fishbase_uncached(to_query) else NULL
+  ## stamp the rows of this fetch only when both servers were read, so a
+  ## broken download is never trusted as "not found"
+  if (!is.null(fresh_result) && nrow(fresh_result))
+    fresh_result[, checked_on := if (identical(attr(fresh_result, "servers_ok"), 2L)) as.character(Sys.Date()) else NA_character_]
   
   ## Drop any stale row for a name we just re-queried (it's either
   ## replaced by fresh_result or, if that still came back all-NA,
@@ -2224,19 +2261,201 @@ compute_fg_densities_by_stratum <- function(dt, strata = TRUE) {
 ## are NOT equal-area (they shrink toward the poles), which matters
 ## when areas span different latitudes.
 
+## =================================================================
+## Bathymetry: EMODnet (default) or NOAA ETOPO
+## =================================================================
+## BATHY_SOURCE (set in run_pipeline_demo.R; default "emodnet"):
+##   "emodnet" - EMODnet Bathymetry DTM tiles kept in pCloud
+##               (data/Bathymetry/EMODnet_x<lon>_y<lat>.tif: 2 x 2 degree
+##               tiles, elevation in m, negative at sea, 1/8 arc-minute
+##               cells, ~230 m), averaged to the requested resolution.
+##               No download, so a run does not depend on NOAA's server
+##               (on 2026-10-27 a Windows laptop could not reach it and
+##               step 01 stopped), and EMODnet is the finer, Europe-
+##               specific product (built from survey soundings).
+##   "noaa"    - NOAA ETOPO via marmap::getNOAA.bathy() (downloaded), the
+##               source used until 2026-10-27.
+## The other source is the fallback when the first one fails or does not
+## cover the box (EMODnet tiles here: 6 W - 16 E, 35 - 45 N).
+## Changing the source changes the strata areas a little (mostly along the
+## coast), so the strata-area cache records its source and is recomputed
+## when it differs.
+
+## One EMODnet depth raster for the whole Western Med at `resolution`
+## arc-minutes (1 for the strata areas): built ONCE from the 2 x 2 degree
+## tiles (each tile averaged to the grid, all tiles on one common grid)
+## and saved next to them as EMODnet_WMed_<res>arcmin.tif, so every later
+## run - on any laptop with pCloud - only reads one small file and crops
+## it per GSA (seconds). Saved to out_dir/bathymetry instead when the
+## pCloud folder cannot be written. Delete the file to rebuild it.
+.bathy_tiles <- function(dir) {
+  f <- list.files(dir, pattern = "^EMODnet_x[+-]?[0-9]+_y[+-]?[0-9]+\\.tif$", full.names = TRUE)
+  data.table(f = f, x0 = as.numeric(sub("^EMODnet_x([+-]?[0-9]+)_y.*$", "\\1", basename(f))),
+             y0 = as.numeric(sub("^EMODnet_x[+-]?[0-9]+_y([+-]?[0-9]+)\\.tif$", "\\1", basename(f))))
+}
+bathy_mosaic <- function(resolution = 1, dir) {
+  nm <- paste0("EMODnet_WMed_", format(resolution), "arcmin.tif")
+  od <- get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = get0("out_dir", envir = .GlobalEnv, ifnotfound = NA))   # main output folder: one copy for every run folder
+  shared <- file.path(dir, nm)                                              # pCloud copy, for the other laptops
+  local <- if (!is.na(od)) file.path(od, "bathymetry", nm) else shared       # working copy on this laptop
+  tl <- .bathy_tiles(dir)
+  if (!nrow(tl)) return(NULL)
+  covers <- function(m) { e <- raster::extent(m)
+    e@xmin <= min(tl$x0) + 1e-6 && e@xmax >= max(tl$x0) + 2 - 1e-6 && e@ymin <= min(tl$y0) + 1e-6 && e@ymax >= max(tl$y0) + 2 - 1e-6 }
+  ## Read once per R session into memory: re-reading the file from pCloud
+  ## Drive for every GSA failed ("Cannot create a RasterLayer object from
+  ## this file") while pCloud was still uploading it (2026-10-27).
+  key <- paste0("wmed.bathy_mosaic_", format(resolution))
+  m <- getOption(key)
+  if (!is.null(m) && covers(m)) return(m)
+  if (!file.exists(local) && file.exists(shared) && !identical(local, shared)) {
+    dir.create(dirname(local), recursive = TRUE, showWarnings = FALSE)
+    try(file.copy(shared, local), silent = TRUE)
+  }
+  if (file.exists(local)) {
+    m <- tryCatch(raster::readAll(raster::raster(local)), error = function(e) NULL)
+    if (!is.null(m) && covers(m)) { options(stats::setNames(list(m), key)); return(m) }
+    if (!is.null(m)) message("  New EMODnet tiles found - rebuilding ", nm, ".")
+  }
+  message("  Building the EMODnet depth raster at ", resolution, " arc-minute from ", nrow(tl),
+          " tiles (once; saved as ", nm, ")...")
+  cell <- resolution / 60
+  template <- raster::raster(raster::extent(min(tl$x0), max(tl$x0) + 2, min(tl$y0), max(tl$y0) + 2),
+                             resolution = cell, crs = "+proj=longlat +datum=WGS84 +no_defs")
+  pieces <- lapply(seq_len(nrow(tl)), function(k) {
+    r <- raster::raster(tl$f[k])
+    fact <- max(1L, round(cell / raster::res(r)[1]))
+    if (fact > 1) r <- raster::aggregate(r, fact = fact, fun = mean, na.rm = TRUE)
+    ## resampled onto the tile's own part of the common grid, so all pieces line up
+    raster::resample(r, raster::crop(template, raster::extent(tl$x0[k], tl$x0[k] + 2, tl$y0[k], tl$y0[k] + 2)), method = "bilinear")
+  })
+  out <- if (length(pieces) == 1) pieces[[1]] else do.call(raster::merge, pieces)
+  if (!raster::inMemory(out)) out <- raster::readAll(out)
+  for (pl in unique(c(local, shared))) {   # whole metres, compressed: small file in pCloud
+    ok <- tryCatch({ dir.create(dirname(pl), recursive = TRUE, showWarnings = FALSE)
+      raster::writeRaster(out, pl, overwrite = TRUE, datatype = "INT2S", options = c("COMPRESS=DEFLATE", "PREDICTOR=2")); TRUE },
+      error = function(e) FALSE)
+    if (ok) message("  Saved ", pl)
+  }
+  options(stats::setNames(list(out), key))
+  out
+}
+
+## Missing 2 x 2 degree tiles for a box are downloaded from the EMODnet
+## Bathymetry WCS (DTM, mean depth, GeoTIFF at the same 1/8 arc-minute as
+## the tiles in pCloud) into the same folder with the same names, e.g.
+## for GSA 10, which reaches past 16 E where the original tiles stop.
+## Each tile is downloaded once; a failed download just leaves the gap
+## (NOAA is then used for that box, as before).
+.download_emodnet_tiles <- function(bbox, dir) {
+  xs <- seq(floor(bbox[["xmin"]] / 2) * 2, ceiling(bbox[["xmax"]] / 2) * 2 - 2, by = 2)
+  ys <- seq(floor((bbox[["ymin"]] - 1) / 2) * 2 + 1, ceiling(bbox[["ymax"]] / 2) * 2 + 1, by = 2)   # tiles start at odd latitudes (35, 37, ...)
+  ys <- ys[ys < bbox[["ymax"]] & ys + 2 > bbox[["ymin"]]]
+  tl <- .bathy_tiles(dir)
+  got <- 0L
+  for (x in xs) for (y in ys) {
+    if (nrow(tl[x0 == x & y0 == y])) next
+    f <- file.path(dir, sprintf("EMODnet_x%+d_y%+d.tif", x, y))
+    url <- sprintf(paste0("https://ows.emodnet-bathymetry.eu/wcs?service=wcs&version=1.0.0&request=getcoverage",
+                          "&coverage=emodnet:mean&crs=EPSG:4326&BBOX=%d,%d,%d,%d&format=image/tiff",
+                          "&interpolation=nearest&resx=0.00208333&resy=0.00208333"), x, y, x + 2, y + 2)
+    message("  Downloading EMODnet bathymetry tile ", basename(f), " ...")
+    tmp <- tempfile(fileext = ".tif")
+    ok <- tryCatch({ utils::download.file(url, tmp, mode = "wb", quiet = TRUE)
+      r <- raster::raster(tmp); is.finite(raster::cellStats(r, "min")) }, error = function(e) FALSE, warning = function(w) FALSE)
+    if (isTRUE(ok) && file.copy(tmp, f, overwrite = TRUE)) got <- got + 1L else message("  ... failed (left out).")
+    unlink(tmp)
+  }
+  got
+}
+
+## EMODnet depth for a box: cropped from bathy_mosaic(). NULL when no tile
+## covers the box; attribute "coverage" = share of the box with tiles.
+local_bathy_raster <- function(bbox, resolution = 1,
+                               dir = get0("BATHY_LOCAL_DIR", envir = .GlobalEnv,
+                                          ifnotfound = if (exists("pcloud_dir", envir = .GlobalEnv)) file.path(get("pcloud_dir", envir = .GlobalEnv), "data", "Bathymetry") else NA)) {
+  if (is.na(dir) || !dir.exists(dir)) return(NULL)
+  tl <- .bathy_tiles(dir)
+  if (!nrow(tl)) return(NULL)
+  ## any part of the box without a tile -> try to download the tile
+  .cov <- function(tl) { u <- tl$x0 < bbox[["xmax"]] & tl$x0 + 2 > bbox[["xmin"]] & tl$y0 < bbox[["ymax"]] & tl$y0 + 2 > bbox[["ymin"]]
+    sum(pmax(0, pmin(tl$x0[u] + 2, bbox[["xmax"]]) - pmax(tl$x0[u], bbox[["xmin"]])) *
+          pmax(0, pmin(tl$y0[u] + 2, bbox[["ymax"]]) - pmax(tl$y0[u], bbox[["ymin"]]))) /
+      ((bbox[["xmax"]] - bbox[["xmin"]]) * (bbox[["ymax"]] - bbox[["ymin"]])) }
+  if (.cov(tl) < 0.999 && !isTRUE(getOption("wmed.emodnet_download_failed")) &&
+      isTRUE(get0("BATHY_DOWNLOAD_TILES", envir = .GlobalEnv, ifnotfound = TRUE))) {
+    if (.download_emodnet_tiles(bbox, dir) > 0) tl <- .bathy_tiles(dir) else options(wmed.emodnet_download_failed = TRUE)
+  }
+  use <- tl$x0 < bbox[["xmax"]] & tl$x0 + 2 > bbox[["xmin"]] & tl$y0 < bbox[["ymax"]] & tl$y0 + 2 > bbox[["ymin"]]
+  if (!any(use)) return(NULL)
+  m <- bathy_mosaic(resolution, dir)
+  if (is.null(m)) return(NULL)
+  cell <- resolution / 60
+  out <- raster::crop(m, raster::extent(bbox[["xmin"]] - cell, bbox[["xmax"]] + cell, bbox[["ymin"]] - cell, bbox[["ymax"]] + cell))
+  if (all(is.na(raster::values(out)))) return(NULL)
+  covered <- sum(pmax(0, pmin(tl$x0[use] + 2, bbox[["xmax"]]) - pmax(tl$x0[use], bbox[["xmin"]])) *
+                   pmax(0, pmin(tl$y0[use] + 2, bbox[["ymax"]]) - pmax(tl$y0[use], bbox[["ymin"]])))
+  attr(out, "coverage") <- min(1, covered / ((bbox[["xmax"]] - bbox[["xmin"]]) * (bbox[["ymax"]] - bbox[["ymin"]])))
+  out
+}
+
+## RasterLayer -> marmap "bathy" matrix (rows = longitude, columns =
+## latitude, both increasing), the shape getNOAA.bathy() returns.
+.raster_to_bathy <- function(r) {
+  m <- t(raster::as.matrix(r)); m <- m[, ncol(m):1, drop = FALSE]
+  rownames(m) <- raster::xFromCol(r, seq_len(ncol(r)))
+  colnames(m) <- rev(raster::yFromRow(r, seq_len(nrow(r))))
+  class(m) <- "bathy"
+  m
+}
+
+## Drop-in for marmap::getNOAA.bathy(): same first arguments, returns a
+## "bathy" matrix (as = "bathy") or a RasterLayer (as = "raster"), or NULL
+## when neither source works. Attribute "wmed_source" = "emodnet"/"noaa".
+wmed_get_bathy <- function(lon1, lon2, lat1, lat2, resolution = 1, keep = FALSE, as = c("bathy", "raster"),
+                           source = get0("BATHY_SOURCE", envir = .GlobalEnv, ifnotfound = "emodnet")) {
+  as <- match.arg(as)
+  bb <- c(xmin = min(lon1, lon2), xmax = max(lon1, lon2), ymin = min(lat1, lat2), ymax = max(lat1, lat2))
+  get_emodnet <- function(min_cov) {
+    r <- tryCatch(local_bathy_raster(bb, resolution), error = function(e) {
+      message("  EMODnet bathymetry failed: ", conditionMessage(e)); NULL })
+    if (is.null(r) || attr(r, "coverage") < min_cov) return(NULL)
+    if (attr(r, "coverage") < 0.999)
+      message("  WARNING: the EMODnet tiles cover ", round(100 * attr(r, "coverage")), "% of this box - the rest gets no depth.")
+    r
+  }
+  get_noaa <- function() {
+    if (isTRUE(getOption("wmed.noaa_bathy_failed"))) return(NULL)   # one failed download per R session is enough (each can take minutes)
+    if (!requireNamespace("marmap", quietly = TRUE)) return(NULL)
+    tryCatch(marmap::as.raster(marmap::getNOAA.bathy(lon1 = bb[["xmin"]], lon2 = bb[["xmax"]], lat1 = bb[["ymin"]], lat2 = bb[["ymax"]],
+                                                     resolution = resolution, keep = keep)),
+             error = function(e) { message("  NOAA bathymetry download failed: ", conditionMessage(e))
+               options(wmed.noaa_bathy_failed = TRUE); NULL })
+  }
+  ## EMODnet first needs (almost) full coverage; as the fallback after
+  ## NOAA failed, any coverage is better than none
+  steps <- if (identical(source, "noaa"))
+    list(noaa = get_noaa, emodnet = function() get_emodnet(0)) else
+    list(emodnet = function() get_emodnet(0.999), noaa = get_noaa, emodnet = function() get_emodnet(0))
+  for (k in seq_along(steps)) {
+    r <- steps[[k]]()
+    if (is.null(r)) next
+    src <- names(steps)[k]
+    if (!identical(src, source)) message("  Bathymetry: using ", src, " (", source, " not available for this box).")
+    out <- if (as == "raster") r else .raster_to_bathy(r)
+    attr(out, "wmed_source") <- src
+    return(out)
+  }
+  NULL
+}
+
 compute_strata_area_for_polygon <- function(area_poly, strata_def, resolution = 1) {
   if (nrow(area_poly) == 0) return(NULL)
   bbox <- sf::st_bbox(area_poly)
   
-  bathy <- tryCatch(
-    marmap::getNOAA.bathy(lon1 = bbox["xmin"], lon2 = bbox["xmax"],
-                          lat1 = bbox["ymin"], lat2 = bbox["ymax"],
-                          resolution = resolution),
-    error = function(e) { message("  Bathymetry download failed: ", conditionMessage(e)); NULL }
-  )
-  if (is.null(bathy)) return("download_failed")   # told apart from an area with no cells in the strata (NULL below)
-  
-  bathy_r <- marmap::as.raster(bathy)
+  bathy_r <- wmed_get_bathy(bbox["xmin"], bbox["xmax"], bbox["ymin"], bbox["ymax"], resolution = resolution, as = "raster")
+  if (is.null(bathy_r)) return("download_failed")   # told apart from an area with no cells in the strata (NULL below)
+  bathy_src <- attr(bathy_r, "wmed_source")
   bathy_r <- raster::reclassify(bathy_r, cbind(0, Inf, NA), right = FALSE)
   bathy_r <- raster::mask(bathy_r, as(area_poly, "Spatial"))
   area_r <- raster::area(bathy_r)
@@ -2274,7 +2493,9 @@ compute_strata_area_for_polygon <- function(area_poly, strata_def, resolution = 
   strata_areas <- bathy_dt[, .(area_km2 = sum(cell_area_km2, na.rm = TRUE)), by = Stratum]
   strata_areas[, prop := area_km2 / sum(area_km2)]
   setorder(strata_areas, Stratum)
-  strata_areas[, .(Stratum, area_km2, prop)]
+  out <- strata_areas[, .(Stratum, area_km2, prop)]
+  setattr(out, "bathy_source", bathy_src)   # setattr: attr<- would break data.table's := later
+  out
 }
 
 compute_strata_area_by_area <- function(area_ids, area_shp, area_id_col, strata_def,
@@ -2336,23 +2557,34 @@ compute_strata_area_by_area <- function(area_ids, area_shp, area_id_col, strata_
     ## a single-band cache written without a Stratum column (MEDIAS 10-200 m
     ## fallback) is valid when strata_def has one band
     single_band_ok <- !"Stratum" %in% names(cached) && nrow(want) == 1
-    if ((single_band_ok || (identical(as.numeric(have_strata), as.numeric(sort(want$Stratum))) && bounds_ok)) &&
+    ## Bathymetry source: a cache without the column was made with NOAA
+    ## (kept in a small side file, <cache>.bathy_source, so the table itself
+    ## keeps its columns)
+    want_src <- get0("BATHY_SOURCE", envir = .GlobalEnv, ifnotfound = "emodnet")
+    src_file <- paste0(cache_path, ".bathy_source")
+    cached_src <- if (file.exists(src_file)) trimws(readLines(src_file, warn = FALSE)) else "noaa"
+    src_ok <- all(cached_src == want_src)   # a cache partly made with the other source is redone
+    if (!src_ok) message("Cached strata areas in ", cache_path, " were computed from ", paste(cached_src, collapse = "/"),
+                         " bathymetry; BATHY_SOURCE is '", want_src, "' - recomputing.")
+    if (src_ok && (single_band_ok || (identical(as.numeric(have_strata), as.numeric(sort(want$Stratum))) && bounds_ok)) &&
         all(area_ids %in% cached$AreaID)) {
       return(cached)
     }
-    message("Cached strata areas in ", cache_path, " do not match the current strata definition (cache strata: ",
+    if (src_ok) message("Cached strata areas in ", cache_path, " do not match the current strata definition (cache strata: ",
             paste(have_strata, collapse = ","), "; expected: ", paste(sort(want$Stratum), collapse = ","),
             ") or miss an area - recomputing (the old file is kept as ", basename(cache_path), ".stale).")
     file.copy(cache_path, paste0(cache_path, ".stale"), overwrite = TRUE)
   }
   
-  message("Computing strata areas via bathymetry for ", length(area_ids), " area(s)",
-          " (slow - downloads bathymetry once per area)...")
+  message("Computing strata areas via bathymetry (BATHY_SOURCE = '", get0("BATHY_SOURCE", envir = .GlobalEnv, ifnotfound = "emodnet"),
+          "') for ", length(area_ids), " area(s)...")
+  used_src <- character(0)
   results <- lapply(area_ids, function(a) {
     message(" Processing area ", a, "...")
     poly <- area_shp[area_shp[[area_id_col]] == a, ]
     res <- compute_strata_area_for_polygon(poly, strata_def, resolution)
     if (identical(res, "download_failed")) return(res)
+    if (!is.null(res)) used_src <<- c(used_src, attr(res, "bathy_source"))
     if (!is.null(res)) res[, AreaID := a]
     res
   })
@@ -2364,8 +2596,9 @@ compute_strata_area_by_area <- function(area_ids, area_shp, area_id_col, strata_
   ## the model area (311,669 instead of ~650,000 km2) and dropped their
   ## biomass. Now the run stops and nothing is written.
   if (length(failed_ids) > 0)
-    stop("Bathymetry (NOAA ETOPO via marmap) could not be downloaded for area(s) ", paste(failed_ids, collapse = ", "),
-         " - no internet connection? Nothing was saved to ", if (is.null(cache_path)) "the cache" else cache_path,
+    stop("No bathymetry for area(s) ", paste(failed_ids, collapse = ", "),
+         ": no EMODnet tile in pCloud data/Bathymetry covers them and the NOAA download failed (no internet, or an",
+         " old marmap - install.packages('marmap')). Nothing was saved to ", if (is.null(cache_path)) "the cache" else cache_path,
          ". Check the connection and run again.", call. = FALSE)
   
   strata_depth_bounds <- unique(as.data.table(strata_def)[, .(Stratum = stratum_num,
@@ -2383,7 +2616,9 @@ compute_strata_area_by_area <- function(area_ids, area_shp, area_id_col, strata_
     on_disk <- copy(strata_area_by_area)
     if (!identical(area_id_label, "AreaID")) setnames(on_disk, "AreaID", area_id_label)
     safe_fwrite(on_disk, cache_path)
-    message("Saved to ", cache_path, " - delete this file to force recomputation.")
+    writeLines(unique(used_src), paste0(cache_path, ".bathy_source"))
+    message("Saved to ", cache_path, " (bathymetry: ", paste(unique(used_src), collapse = " + "),
+            ") - delete this file to force recomputation.")
   }
   strata_area_by_area
 }
@@ -3134,7 +3369,7 @@ plot_fg_timeseries_by_area <- function(fg_index, title = "FG density by area", y
                             area_col = "AreaID", top_n_areas = top_n_areas, top_n_groups = top_n_fg)
   ggplot(plot_data, aes(x = Year, y = mean_density, color = as.factor(AreaID))) +
     geom_line(linewidth = 0.6, alpha = 0.7) +
-    facet_wrap(vars(FG_name), scales = "free_y") +
+    facet_wrap(vars(FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
     labs(title = title, x = "Year", y = y_lab, color = "Area") +
     theme_minimal(base_size = 11) +
     theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 1)) +
@@ -3145,12 +3380,45 @@ plot_fg_timeseries_by_area <- function(fg_index, title = "FG density by area", y
     guides(color = guide_legend(override.aes = list(linewidth = 3, alpha = 1)))
 }
 
+## Uncertainty of the survey index from haul-to-haul variability: the
+## stratified-mean variance (Cochran 1977, Sampling Techniques, eq. 5.6)
+## per year and FG over the sampled (AreaID x Stratum) cells,
+##   mean_y = sum_c W_c m_c,  Var_y = sum_c W_c^2 s_c^2 / n_c,  W_c = A_c / sum A,
+## with m_c and s_c^2 the mean and variance of the FG density over ALL n_c
+## hauls of cell c (hauls without the FG count as 0: computed from the sums
+## over the hauls with it). CV_y = sqrt(Var_y) / mean_y. Returns
+## data.table(Year, FG_num, cv_index, n_hauls). Covers sampling variability
+## only - not catchability, imputation of unsampled cells, or model error.
+compute_survey_index_cv <- function(dt, n_samples_by_stratum, strata_area_by_area) {
+  rep <- as.data.table(dt)[!is.na(Stratum) & !is.na(FG_num) & !is.na(Density),
+                           .(x = sum(Density, na.rm = TRUE)), by = .(SampleID, AreaID, Stratum, Year, FG_num)]
+  s <- rep[, .(S1 = sum(x), S2 = sum(x^2)), by = .(AreaID, Stratum, Year, FG_num)]
+  ns <- as.data.table(n_samples_by_stratum)[!is.na(n_samples) & n_samples > 0, .(AreaID, Stratum, Year, n_samples)]
+  w <- unique(as.data.table(strata_area_by_area)[!is.na(area_km2) & area_km2 > 0, .(AreaID, Stratum, area_km2)])
+  cells <- merge(ns, w, by = c("AreaID", "Stratum"))
+  cells[, W := area_km2 / sum(area_km2), by = Year]
+  s <- merge(s, cells, by = c("AreaID", "Stratum", "Year"))
+  s[, `:=`(m = S1 / n_samples, v = fifelse(n_samples > 1, pmax(0, (S2 - S1^2 / n_samples) / (n_samples - 1)), NA_real_))]
+  out <- s[, .(mean_y = sum(W * m), var_y = sum(W^2 * v / n_samples, na.rm = TRUE), n_hauls = sum(n_samples)), by = .(Year, FG_num)]
+  out[, cv_index := fifelse(mean_y > 0, sqrt(var_y) / mean_y, NA_real_)]
+  out[, .(Year, FG_num, cv_index, n_hauls)]
+}
+
+## cv_dt (optional, from compute_survey_index_cv()): shaded 95 % interval
+## around each line, lognormal: index x exp(+-1.96 sqrt(log(1 + CV^2))).
 plot_fg_timeseries_regional <- function(fg_index_regional, title = "FG density, region-wide",
                                         y_lab = "Area-weighted density", top_n_fg = 40,
-                                        normalize = FALSE) {
+                                        normalize = FALSE, cv_dt = NULL) {
   fg_totals <- fg_index_regional[, .(tot = sum(mean_density, na.rm = TRUE)), by = FG_name]
   top_fg <- fg_totals[order(-tot)][seq_len(min(top_n_fg, .N)), FG_name]
-  plot_data <- as_tibble(fg_index_regional[FG_name %in% top_fg])
+  pd <- copy(as.data.table(fg_index_regional)[FG_name %in% top_fg])
+  has_ci <- !is.null(cv_dt) && nrow(cv_dt) > 0 && "FG_num" %in% names(pd)
+  if (has_ci) {
+    pd <- merge(pd, as.data.table(cv_dt)[, .(Year, FG_num, cv_index)], by = c("Year", "FG_num"), all.x = TRUE)
+    pd[, sdlog := sqrt(log(1 + cv_index^2))]
+    pd[, `:=`(lo = mean_density * exp(-1.96 * sdlog), hi = mean_density * exp(1.96 * sdlog))]
+  }
+  plot_data <- as_tibble(pd)
   
   ## normalize = TRUE rescales each FG's own series to its first
   ## NON-ZERO value (that value becomes 1, every other year relative to
@@ -3165,10 +3433,12 @@ plot_fg_timeseries_regional <- function(fg_index_regional, title = "FG density, 
   if (normalize) {
     setDT(plot_data)
     setorder(plot_data, FG_name, Year)
-    plot_data[, mean_density := {
+    plot_data[, ref := {
       first_nonzero <- mean_density[which(!is.na(mean_density) & mean_density != 0)[1]]
-      if (is.na(first_nonzero) || length(first_nonzero) == 0) mean_density else mean_density / first_nonzero
+      if (is.na(first_nonzero) || length(first_nonzero) == 0) 1 else first_nonzero
     }, by = FG_name]
+    plot_data[, mean_density := mean_density / ref]
+    if (has_ci) plot_data[, `:=`(lo = lo / ref, hi = hi / ref)]
     plot_data <- as_tibble(plot_data)
     y_lab <- paste0(y_lab, " (relative to first non-zero value = 1)")
   }
@@ -3178,9 +3448,11 @@ plot_fg_timeseries_regional <- function(fg_index_regional, title = "FG density, 
   ## as one unbroken line, using label_wrap_gen() ggplot2 already ships
   ## for exactly this.
   ggplot(plot_data, aes(x = Year, y = mean_density)) +
+    (if (has_ci) geom_ribbon(aes(ymin = lo, ymax = hi), fill = "steelblue", alpha = 0.2, na.rm = TRUE) else NULL) +
     geom_line(linewidth = 0.6, alpha = 0.8, colour = "steelblue") +
     facet_wrap(vars(FG_name), scales = "free_y", labeller = label_wrap_gen(width = 22)) +
-    labs(title = title, x = "Year", y = y_lab) +
+    labs(title = title, x = "Year", y = y_lab,
+         caption = if (has_ci) "Band: 95 % interval from haul-to-haul sampling variability (stratified variance, Cochran 1977)." else NULL) +
     theme_minimal(base_size = 11) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           strip.text = element_text(size = 7))
@@ -3242,10 +3514,13 @@ plot_strata_profile <- function(fg_index_stratified, strata_def, top_n_fg = 40) 
   top_fg <- profile[, .(tot = sum(mean_density_per_sample, na.rm = TRUE)), by = FG_name][
     order(-tot)][seq_len(min(top_n_fg, .N)), FG_name]
   
-  ggplot(profile[FG_name %in% top_fg], aes(x = stratum_label, y = mean_density_per_sample, fill = Stratum)) +
+  pd <- profile[FG_name %in% top_fg]
+  pd[, FG_label := paste(FG_num, FG_name)]                                      # panels in FG order, numbered
+  pd[, FG_label := factor(FG_label, levels = unique(FG_label[order(FG_num)]))]
+  ggplot(pd, aes(x = stratum_label, y = mean_density_per_sample, fill = Stratum)) +
     geom_col() +
     scale_fill_gradient(low = "lightblue", high = "navy", guide = "none") +
-    facet_wrap(vars(FG_name), scales = "free_y") +
+    facet_wrap(vars(FG_label), scales = "free_y", ncol = 7, labeller = ggplot2::label_wrap_gen(width = 28)) +
     labs(title = "Depth-strata density profile by FG", x = "Depth stratum", y = "Mean density per sample") +
     theme_minimal(base_size = 10) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -3545,7 +3820,33 @@ read_native_sheet_csv <- function(name, out_dir) {
 ## yet) is simply not there yet - finalize_workbook_sheet_order() skips
 ## it with a message rather than erroring, same as before.
 ## =================================================================
+## FGs and Fleets: lookup sheets right after "info" - FG_num + FG_name
+## (from Ecopath_B) and Fleet_num + Fleet_name (the fleet columns of
+## Ecopath_L / Ecopath_Di, numbered in that order). Rewritten every time
+## the workbook is trimmed, so they always match the other sheets.
+write_fg_fleet_lookup_sheets <- function(out_path) {
+  if (!file.exists(out_path) || !requireNamespace("openxlsx", quietly = TRUE)) return(invisible(NULL))
+  sh <- openxlsx::getSheetNames(out_path); out <- list()
+  if ("Ecopath_B" %in% sh) {
+    b <- openxlsx::read.xlsx(out_path, "Ecopath_B", check.names = FALSE, sep.names = " ")
+    if (all(c("FG_num", "FG_name") %in% names(b)))
+      out$FGs <- unique(data.table::data.table(FG_num = suppressWarnings(as.integer(b$FG_num)),
+                                               FG_name = as.character(b$FG_name)))[!is.na(FG_num)][order(FG_num)]
+  }
+  fl <- character(0)
+  for (s in intersect(c("Ecopath_L", "Ecopath_Di"), sh)) {
+    cn <- tryCatch(names(openxlsx::read.xlsx(out_path, s, rows = 1:2, check.names = FALSE, sep.names = " ")),
+                   error = function(e) character(0))
+    fl <- c(fl, setdiff(cn, c("FG_num", "FG_name", "Reference")))
+  }
+  fl <- unique(fl[!is.na(fl) & nzchar(fl) & !grepl("^total|total$", fl, ignore.case = TRUE)])
+  if (length(fl)) out$Fleets <- data.table::data.table(Fleet_num = seq_along(fl), Fleet_name = fl)
+  if (length(out)) upsert_workbook_sheets(out, out_path)
+  invisible(out)
+}
+
 trim_workbook_to_final_sheets <- function(out_path) {
+  tryCatch(write_fg_fleet_lookup_sheets(out_path), error = function(e) message("FGs/Fleets sheets not written: ", conditionMessage(e)))
   finalize_workbook_sheet_order(
     out_path = out_path,
     ## FG_References: see build_fg_references_sheet() below. Ecobase: see
@@ -3553,7 +3854,7 @@ trim_workbook_to_final_sheets <- function(out_path) {
     ## Biomass/PB/QB/reference-year from other published Western Med
     ## Ecopath models, for direct comparison against this model's own
     ## Ecopath_B/Ecopath_PBQB values). 11 final sheets total.
-    target_order = c("info", "FG_spp", "Ecopath_B", "Ecopath_L", "Ecopath_Di", "Ecopath_PBQB",
+    target_order = c("info", "FGs", "Fleets", "FG_spp", "Ecopath_B", "Ecopath_L", "Ecopath_Di", "Ecopath_PBQB",
                      "Ecopath_traits", "Ecopath_diet", "Ecosim_ts", "FG_References", "Ecobase"),
     drop_extras = TRUE
   )
@@ -3824,11 +4125,16 @@ finalize_ecopath_ecosim_summary_sheets <- function(out_path, year_ecopath,
     add_block(ecosim_b, "B")
     add_block(ecosim_l, "L")
     
+    if (!is.null(cd_ts) && !"Discard_t_km2" %in% names(cd_ts)) {
+      message("finalize_ecopath_ecosim_summary_sheets(): Catches_Discards_FG_ts.csv has no Discard_t_km2 column",
+              " (written by an older 02_fisheries.R) - the Ecosim_ts Discards block is left out; rerun 02.")
+      cd_ts <- NULL
+    }
     if (!is.null(cd_ts)) {
       for (fg_num in unique(cd_ts$FG_num)) {
         fg_name <- cd_ts[FG_num == fg_num, FG_name][1]
         ts_vals <- vapply(years, function(y) {
-          v <- cd_ts[FG_num == fg_num & Year == y, Discard_t]
+          v <- cd_ts[FG_num == fg_num & Year == y, Discard_t_km2]   # t/km2, as the catches (not Discard_t, tonnes)
           if (length(v) == 0) NA_real_ else v[1]
         }, numeric(1))
         ts_vals[!is.na(ts_vals) & ts_vals == 0] <- NA_real_   # no recorded discards -> blank, not an observed 0
@@ -5252,7 +5558,7 @@ append_reference_columns_to_final_sheets <- function(out_path) {
             "' yet - run build_fg_references_sheet() first. Skipping.")
     return(invisible(NULL))
   }
-  refs <- as.data.table(openxlsx::read.xlsx(out_path, sheet = "FG_References"))
+  refs <- as.data.table(openxlsx::read.xlsx(out_path, sheet = "FG_References", check.names = FALSE, sep.names = " "))
   if (!"FG_num" %in% names(refs)) {
     message("append_reference_columns_to_final_sheets(): 'FG_References' sheet has no FG_num column - skipping.")
     return(invisible(NULL))
@@ -5272,7 +5578,9 @@ append_reference_columns_to_final_sheets <- function(out_path) {
   updated <- list()
   for (sheet_name in names(sheet_ref_map)) {
     if (!sheet_name %in% existing_sheets) next
-    dt <- as.data.table(openxlsx::read.xlsx(out_path, sheet = sheet_name))
+    ## check.names/sep.names: keep the column names as written ("Spain - Bottom trawls"); the
+    ## defaults turned every space into a dot, and the sheet was saved back that way
+    dt <- as.data.table(openxlsx::read.xlsx(out_path, sheet = sheet_name, check.names = FALSE, sep.names = " "))
     if (!"FG_num" %in% names(dt)) {
       message("append_reference_columns_to_final_sheets(): '", sheet_name, "' has no FG_num column - skipping.")
       next
@@ -5291,7 +5599,7 @@ append_reference_columns_to_final_sheets <- function(out_path) {
   ## header) - combined here into one "<data> | method: <method>"
   ## string since this sheet gets only one trailing column.
   if ("Ecopath_PBQB" %in% existing_sheets) {
-    dt <- as.data.table(openxlsx::read.xlsx(out_path, sheet = "Ecopath_PBQB"))
+    dt <- as.data.table(openxlsx::read.xlsx(out_path, sheet = "Ecopath_PBQB", check.names = FALSE, sep.names = " "))
     if ("FG_num" %in% names(dt)) {
       dt[, FG_num := as.integer(FG_num)]
       if ("Reference" %in% names(dt)) dt[, Reference := NULL]
@@ -5371,7 +5679,26 @@ add_pbqb_to_ecopath_workbook <- function(fg_weighted, out_path, species_pb_qb = 
             " to guarantee every model FG gets a row here, even ones with no data yet.")
   }
   setorder(pbqb_sheet, FG_num)
-  
+
+  ## PHYTO_SOURCE = "copernicus": phytoplankton P/B = NPP / B from
+  ## 06_environment.R (out_dir/environment/ecopath_phytoplankton_B_PB.csv)
+  ## instead of the EcoBase value.
+  if (identical(get0("PHYTO_SOURCE", envir = .GlobalEnv, ifnotfound = "isimip"), "copernicus")) {
+    ef <- file.path(get0("out_dir", envir = .GlobalEnv, ifnotfound = ""), "environment", "ecopath_phytoplankton_B_PB.csv")
+    if (file.exists(ef)) {
+      e <- data.table::fread(ef)
+      for (i in seq_len(nrow(e))) {
+        key <- if (grepl("^Large", e$TargetGroup[i])) "large phyto" else "small phyto"
+        k <- grepl(key, pbqb_sheet$FG_name, ignore.case = TRUE)
+        if (any(k)) {
+          pbqb_sheet[k, PB_FG := e$PB[i]]
+          if ("PB_source" %in% names(pbqb_sheet)) pbqb_sheet[k, PB_source := "Copernicus (06_environment.R): NPP / B"]
+        }
+      }
+      message("add_pbqb_to_ecopath_workbook(): PHYTO_SOURCE = 'copernicus' - phytoplankton P/B = ", signif(e$PB[1], 3), " /yr from 06.")
+    } else message("add_pbqb_to_ecopath_workbook(): PHYTO_SOURCE = 'copernicus' but ", ef, " not found - EcoBase P/B kept.")
+  }
+
   ## The excel ecopath_ecosim file must have exactly
   ## the intended sheets; other sheets are saved as csv files, not
   ## kept in the final output excel file. PB_QB (FG-level) IS one
@@ -5859,4 +6186,58 @@ compute_multistanza_age_proportion_from_medits_tc <- function(multistanza_fg_pai
     message("[Multistanza age split - MEDITS TC] TC.csv matched but produced no usable juvenile proportion.")
   }
   result
+}
+
+## =================================================================
+## FishBase / SeaLifeBase snapshot (shared in pCloud, small)
+## =================================================================
+## rfishbase reads a WHOLE FishBase table for every call (downloaded the
+## first time on each laptop) and then keeps our ~1,400 species. Each
+## call's RESULT - only our species' rows - is saved compressed (xz) in
+## pCloud data/fishbase_snapshot/ and reused by every laptop for
+## FISHBASE_SNAPSHOT_DAYS (default 30), then fetched again. A call is
+## identified by function, server and arguments (species list sorted), so
+## a changed FG species list fetches again. Empty results (often a failed
+## download) are never saved. Files not refreshed for twice that period
+## are deleted, so the folder stays at a few MB. FISHBASE_SNAPSHOT_DAYS = 0
+## turns it off. Saved to out_dir/fishbase_snapshot when pCloud cannot be
+## written.
+.snapshot_dirs <- function(sub) {
+  pc <- get0("pcloud_dir", envir = .GlobalEnv, ifnotfound = NA)
+  od <- get0("out_dir", envir = .GlobalEnv, ifnotfound = NA)
+  c(if (!is.na(pc)) file.path(pc, "data", sub), if (!is.na(od)) file.path(od, sub))
+}
+fishbase_memo <- function(fn_name, server, args, fetch) {
+  days <- get0("FISHBASE_SNAPSHOT_DAYS", envir = .GlobalEnv, ifnotfound = 30)
+  if (!isTRUE(days > 0)) return(fetch())
+  ## The key is an md5 of plain text (function, server, sorted arguments), the
+  ## same on every computer and R version. rlang::hash() of the R objects
+  ## differed between the Mac (R 4.5) and Windows (R 4.2), so each laptop
+  ## fetched FishBase again and saved its own copy (2026-10-27).
+  txt <- paste(c(sub("^.*::", "", fn_name), server,
+                 vapply(args, function(a) paste(sort(unique(as.character(a))), collapse = "\x1f"), "")), collapse = "\x1e")
+  tf <- tempfile(); writeBin(charToRaw(enc2utf8(txt)), tf)
+  key <- unname(tools::md5sum(tf)); unlink(tf)
+  stem <- paste0(gsub("[^A-Za-z0-9]+", "_", sub("^.*::", "", fn_name)), "_", server, "_")
+  nm <- paste0(stem, "v2_", key, ".rds")
+  dirs <- .snapshot_dirs("fishbase_snapshot")
+  for (d in dirs) {
+    f <- file.path(d, nm)
+    if (file.exists(f) && as.numeric(difftime(Sys.time(), file.mtime(f), units = "days")) <= days) {
+      res <- tryCatch(readRDS(f), error = function(e) NULL)
+      if (data.table::is.data.table(res)) res <- data.table::setalloccol(res)   # := works on it afterwards
+      if (!is.null(res)) return(res)
+    }
+  }
+  res <- fetch()
+  if (NROW(res) > 0) for (d in dirs) {
+    ok <- tryCatch({ dir.create(d, recursive = TRUE, showWarnings = FALSE)
+      saveRDS(res, file.path(d, nm), compress = "xz")
+      old <- list.files(d, pattern = "\\.rds$", full.names = TRUE)
+      old <- old[as.numeric(difftime(Sys.time(), file.mtime(old), units = "days")) > 2 * days]
+      if (length(old)) unlink(old)
+      TRUE }, error = function(e) FALSE)
+    if (ok) break
+  }
+  res
 }

@@ -244,6 +244,18 @@ if (identical(STOCK_ASSESSMENT_SOURCE, "GFCM")) {
                                            asfis_file = if (exists("asfis_file")) asfis_file else NULL, update = GFCM_SAF_UPDATE)
   if (is.null(.gfcm_all)) STOCK_ASSESSMENT_SOURCE <- "RAM"
 }
+## Other stock assessments of FG species (outside the model GSAs, or
+## overlapping a stock in use; GFCM SAFs + RAM Legacy): review CSV only,
+## not used in the model (lib_gfcm_saf_online.R, gfcm_saf_other_stocks()).
+## GFCM_SAF_OTHER_STOCKS = FALSE skips it (the first run downloads their PDFs).
+if (!exists("GFCM_SAF_OTHER_STOCKS", envir = .GlobalEnv, inherits = FALSE)) GFCM_SAF_OTHER_STOCKS <- TRUE
+if (isTRUE(GFCM_SAF_OTHER_STOCKS)) {
+  if (!exists("gfcm_saf_other_stocks", mode = "function")) source(file.path(git_dir, "scripts/lib_gfcm_saf_online.R"), local = TRUE)
+  tryCatch(gfcm_saf_other_stocks(pcloud_dir, file.path(csv_out_dir, "stock_assessments_other_FG_species.csv"), FILTER_AREAS,
+                                 if (exists("dataframe2")) dataframe2 else fg_lookup_safe,
+                                 asfis_file = if (exists("asfis_file")) asfis_file else NULL),
+           error = function(e) message("[GFCM SAF other stocks] skipped: ", conditionMessage(e)))
+}
 STAR_RAMLEGACY_DIR <- if (identical(STOCK_ASSESSMENT_SOURCE, "GFCM")) dirname(.gfcm_all) else file.path(pcloud_dir, "data/fisheries/STAR_RAMLegacy")
 star_ram_path <- if (identical(STOCK_ASSESSMENT_SOURCE, "GFCM")) .gfcm_all else file.path(STAR_RAMLEGACY_DIR, "combined_medbs_star_ramlegacy.csv")
 message("[Stock assessments] source = ", STOCK_ASSESSMENT_SOURCE, " (", star_ram_path, ")")
@@ -2080,7 +2092,7 @@ PLANKTON_ALLOCATION <- list(
             "--minimum-longitude", bbox[["lon_min"]], "--maximum-longitude", bbox[["lon_max"]],
             "--minimum-latitude", bbox[["lat_min"]], "--maximum-latitude", bbox[["lat_max"]],
             if (!is.null(depth_max)) c("--minimum-depth", "0", "--maximum-depth", as.character(depth_max)),
-            "--output-filename", basename(nc_path), "--output-directory", dirname(nc_path))  # login comes from COPERNICUSMARINE_SERVICE_* env vars, never the command line
+            "--output-filename", shQuote(basename(nc_path)), "--output-directory", shQuote(dirname(nc_path)))  # login comes from COPERNICUSMARINE_SERVICE_* env vars, never the command line
   message("[CMEMS plankton] Downloading ", dataset_id, " / ", variable, " (", t0, " to ", t1, ")...")
   out <- suppressWarnings(system2("copernicusmarine", args, stdout = TRUE, stderr = TRUE, timeout = timeout_sec))
   ## Rejected login -> ask THIS user for their own account once, retry once.
@@ -2120,7 +2132,7 @@ PLANKTON_ALLOCATION <- list(
 ## Ecopath_B is expressed over. Without it the mean ran over the whole
 ## West Med bbox (open ocean, African coast), which is far more
 ## oligotrophic than the shelf/slope the model covers. Bathymetry from
-## marmap (NOAA ETOPO, same source as compute_strata_area_by_area());
+## wmed_get_bathy() (EMODnet or NOAA ETOPO, BATHY_SOURCE; same source as compute_strata_area_by_area());
 ## if that download fails the mask falls back to the polygons only.
 ## GSAs the model area actually covers: the ones with MEDITS strata area
 ## (strata_area_by_area), NOT all of FILTER_AREAS - FILTER_AREAS = 1:11
@@ -2159,7 +2171,7 @@ PLANKTON_ALLOCATION <- list(
     dmin <- if (exists("MEDITS_STRATA")) min(MEDITS_STRATA$depth_min) else 10
     dmax <- if (exists("MEDITS_STRATA")) max(MEDITS_STRATA$depth_max) else 800
   }
-  bathy <- tryCatch(marmap::getNOAA.bathy(lon1 = min(lon) - 0.1, lon2 = max(lon) + 0.1,
+  bathy <- tryCatch(wmed_get_bathy(lon1 = min(lon) - 0.1, lon2 = max(lon) + 0.1,
                                           lat1 = min(lat) - 0.1, lat2 = max(lat) + 0.1, resolution = 2),
                     error = function(e) { message("[Plankton domain] Bathymetry download failed (", conditionMessage(e),
                                                   ") - masking by GSA polygons only, no depth filter."); NULL })
@@ -2460,12 +2472,18 @@ fetch_cmems_detritus_biomass <- function(out_dir, force_refresh = FALSE,
 ##   csv_out_dir/isimip3a_cobalt2_plankton_detritus_1995.csv.
 ## =================================================================
 if (!exists("MACROZOO_FRACTION_OF_ZMESO")) MACROZOO_FRACTION_OF_ZMESO <- NA_real_
-if (!exists("ISIMIP_CACHE_DIR")) ISIMIP_CACHE_DIR <- file.path(if (exists("out_dir")) out_dir else csv_out_dir, "isimip3a_cache")
+if (!exists("ISIMIP_CACHE_DIR")) ISIMIP_CACHE_DIR <- file.path(get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = if (exists("out_dir")) out_dir else csv_out_dir), "isimip3a_cache")   # shared by every run folder
 ISIMIP_BASE_URL <- "https://files.isimip.org/ISIMIP3a/InputData/climate/ocean/obsclim/global"
 
 .isimip_get_file <- function(var) {
   dir.create(ISIMIP_CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
   candidates <- list(c("annual", "15arcmin"), c("annual", "60arcmin"), c("monthly", "60arcmin"))
+  ## a file already downloaded (any of the candidates) is used before any
+  ## download is tried: the failed annual-file attempts cost time every run
+  for (cnd in candidates) {
+    dest <- file.path(ISIMIP_CACHE_DIR, sprintf("gfdl-mom6-cobalt2_obsclim_%s_%s_global_%s_1961_2010.nc", var, cnd[2], cnd[1]))
+    if (file.exists(dest) && file.size(dest) > 1e5) return(dest)
+  }
   for (cnd in candidates) {
     fname <- sprintf("gfdl-mom6-cobalt2_obsclim_%s_%s_global_%s_1961_2010.nc", var, cnd[2], cnd[1])
     dest <- file.path(ISIMIP_CACHE_DIR, fname)
@@ -2535,12 +2553,37 @@ fetch_isimip_cobalt_plankton_biomass <- function(out_dir, force_refresh = FALSE,
   ## the cache is per model-area basis (the COBALT domain mean depends on it)
   out_csv_path <- file.path(out_dir, paste0("isimip3a_cobalt2_plankton_detritus_timeseries",
                                             if (identical(get0("MODEL_AREA_BASIS", ifnotfound = "medits_10_800"), "whole_gsa")) "_wholegsa" else "", ".csv"))
+  ## Shared copy of the result in pCloud (data/plankton_cache, ~20 KB): a
+  ## laptop without it would download ~500 MB of ISIMIP files, and without
+  ## Python (Copernicus) it cannot compute Detritus at all, so it recomputed
+  ## on every run (Windows, 2026-10-27). Used when the local copy is missing
+  ## or has no Detritus; written there whenever a complete one is computed.
+  shared_csv <- if (exists("pcloud_dir")) file.path(pcloud_dir, "data", "plankton_cache", basename(out_csv_path)) else NA_character_
+  if (!force_refresh && !is.na(shared_csv) && file.exists(shared_csv) &&
+      (!file.exists(out_csv_path) || !"Detritus" %in% fread(out_csv_path)$TargetGroup)) {
+    .sh <- tryCatch(fread(shared_csv), error = function(e) NULL)
+    if (!is.null(.sh) && "Detritus" %in% .sh$TargetGroup) {
+      fwrite(.sh, out_csv_path)
+      message("[ISIMIP] Using the shared result ", shared_csv, " (computed on another laptop; force_refresh = TRUE to recompute).")
+      return(invisible(.sh))
+    }
+  }
   if (!force_refresh && file.exists(out_csv_path)) {
     .cached <- fread(out_csv_path)
     ## a cache written while offline can miss Detritus (euphotic depth from
     ## Copernicus failed); it is then recomputed (2026-10-14)
     if ("Detritus" %in% .cached$TargetGroup) {
       message("[ISIMIP] Using cached ", out_csv_path, " (force_refresh = TRUE to recompute).")
+      if (!is.na(shared_csv) && !file.exists(shared_csv))   # share it with the other laptops
+        tryCatch({ dir.create(dirname(shared_csv), recursive = TRUE, showWarnings = FALSE); fwrite(.cached, shared_csv) }, error = function(e) NULL)
+      return(invisible(.cached))
+    }
+    ## Detritus needs the Copernicus Marine tool (Python). Without it (e.g. a
+    ## Windows laptop with no Python) a recompute gives the same result
+    ## without Detritus again, so the cache is used as it is - Detritus then
+    ## comes from the usual fallback (EE). Saves the recompute on every run.
+    if (Sys.which("copernicusmarine") == "" && !(exists("CMEMS_VENV_DIR") && dir.exists(CMEMS_VENV_DIR))) {
+      message("[ISIMIP] Using cached ", out_csv_path, " without Detritus (no Copernicus Marine tool on this computer to add it).")
       return(invisible(.cached))
     }
     message("[ISIMIP] Cached ", out_csv_path, " has no Detritus rows (written offline?) - recomputing.")
@@ -2607,6 +2650,8 @@ fetch_isimip_cobalt_plankton_biomass <- function(out_dir, force_refresh = FALSE,
           paste(sprintf("%s %.2f t WW/km2", base$TargetGroup, base$B), collapse = "; "),
           if (f_macro == 0) " | MacroZooplankton: no plankton-model Ecopath_B (field minimum / EE instead)" else "")
   (if (exists("safe_fwrite")) safe_fwrite else fwrite)(out, out_csv_path)
+  if (!is.na(shared_csv) && "Detritus" %in% out$TargetGroup)   # complete result -> pCloud for the other laptops
+    tryCatch({ dir.create(dirname(shared_csv), recursive = TRUE, showWarnings = FALSE); fwrite(out, shared_csv) }, error = function(e) NULL)
   out
 }
 
@@ -2783,6 +2828,29 @@ if (isTRUE(ESTIMATE_MACROZOO_IN_ECOPATH) && !is.null(plankton_model_rows) && nro
           " its Ecopath_B comes from the field-reference minimum (MACROZOO_SOURCE = '",
           if (exists("MACROZOO_SOURCE")) MACROZOO_SOURCE else "field_minimum", "').")
 }
+## PHYTO_SOURCE = "copernicus": Large/Small phytoplankton from 06_environment.R
+## (Copernicus MedBFM, before 1999 PISCES scaled to MedBFM; size split from
+## satellite size classes) instead of ISIMIP. One row per year of the
+## annual series (environment_timeseries_annual.csv, phyto_c x C:WW x share),
+## so Ecopath uses the YEAR_ECOPATH mean and Ecosim every year. Needs 06 to
+## have run first (tick 06 on the page); otherwise ISIMIP stays.
+if (!exists("PHYTO_SOURCE", envir = .GlobalEnv, inherits = FALSE)) PHYTO_SOURCE <- "isimip"
+if (identical(PHYTO_SOURCE, "copernicus")) {
+  .ef <- file.path(out_dir, "environment", "ecopath_phytoplankton_B_PB.csv")
+  .ea <- file.path(out_dir, "environment", "environment_timeseries_annual.csv")
+  if (file.exists(.ef) && file.exists(.ea)) {
+    .e <- fread(.ef); .a <- fread(.ea)[variable == "phyto_c"]
+    .c2w <- if (exists("PHYTO_C_TO_WW")) PHYTO_C_TO_WW else 9
+    .cop <- rbindlist(lapply(seq_len(nrow(.e)), function(i) .a[, .(Year = as.integer(year), Group = .e$TargetGroup[i],
+              Biomass_t = value * .c2w * .e$share[i] * study_area_km2,
+              Source_citation = paste0("COPERNICUS (06_environment.R, PHYTO_SOURCE = 'copernicus'): ", .e$Source_citation[i]))]))
+    plankton_model_rows <- rbindlist(list(if (!is.null(plankton_model_rows)) plankton_model_rows[!tolower(Group) %in% c("largephytoplankton", "smallphytoplankton")],
+                                          .cop), use.names = TRUE, fill = TRUE)
+    message("[Plankton biomass] PHYTO_SOURCE = 'copernicus': Large/Small phytoplankton from 06_environment.R (",
+            nrow(.cop), " rows, ", paste(range(.a$year), collapse = "-"), ").")
+  } else message("[Plankton biomass] PHYTO_SOURCE = 'copernicus' but 06_environment.R outputs are not there yet (",
+                 basename(.ef), ") - ISIMIP kept. Run 06 first.")
+}
 if (!is.null(plankton_model_rows) && nrow(plankton_model_rows) > 0) {
   plankton_model_rows <- plankton_model_rows[tolower(Group) %in% plankton_missing]
   fwrite(plankton_model_rows, file.path(csv_out_dir, "plankton_detritus_model_biomass_rows.csv"))
@@ -2871,7 +2939,7 @@ EUSEAMAP_AREA_CACHE <- file.path(BENTHIC_REF_DIR, paste0("euseamap2025_seagrass_
   bb <- c(min(xy[, 1]) - 0.05, max(xy[, 1]) + 0.05, min(xy[, 2]) - 0.05, max(xy[, 2]) + 0.05)
   bathy <- NULL
   for (res in c(0.25, 1)) {
-    bathy <- tryCatch(marmap::getNOAA.bathy(bb[1], bb[2], bb[3], bb[4], resolution = res, keep = FALSE),
+    bathy <- tryCatch(wmed_get_bathy(bb[1], bb[2], bb[3], bb[4], resolution = res),
                       error = function(e) NULL)
     if (!is.null(bathy)) break
   }
@@ -2965,8 +3033,8 @@ compute_mediseh_posidonia_area <- function(tif, area_shp, area_id_col, areas, p_
     hit <- is.finite(pv) & pv >= p_min
     a_all <- sum(av[hit])
     dv <- rep(Inf, length(pv))
-    bathy <- tryCatch(marmap::getNOAA.bathy(bb[["xmin"]], bb[["xmax"]], bb[["ymin"]], bb[["ymax"]], resolution = 0.25, keep = FALSE), error = function(e) NULL)
-    if (!is.null(bathy)) dv <- -raster::values(raster::resample(marmap::as.raster(bathy), rm, method = "ngb"))
+    bathy <- tryCatch(wmed_get_bathy(bb[["xmin"]], bb[["xmax"]], bb[["ymin"]], bb[["ymax"]], resolution = 0.25, as = "raster"), error = function(e) NULL)
+    if (!is.null(bathy)) dv <- -raster::values(raster::resample(bathy, rm, method = "ngb"))
     a_deep <- sum(av[hit & is.finite(dv) & dv >= min_depth])
     hh <- hit & is.finite(dv) & dv > 0
     if (any(hh)) {

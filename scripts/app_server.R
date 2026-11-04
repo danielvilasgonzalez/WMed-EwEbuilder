@@ -1,0 +1,1249 @@
+## WMed-EwEbuilder - building Ecopath with Ecosim inputs for the Western Mediterranean
+## (biomass, fisheries, P/B, Q/B, traits and diets). This file: app_server.R
+## =================================================================
+## app_server.R
+## Created by: Daniel Vilas
+##
+## The page's server code: runs for every visitor (input, output and session
+## come from the page). Runs the pipeline, shows progress, results and checks.
+## Kept in its own R file (not inside WMed-EwEbuilder.qmd) so it can be
+## edited and tested like any script, and RStudio's Visual editor cannot
+## rewrap or overwrite it. Sourced by the page with local = TRUE.
+## =================================================================
+
+## Paths: found by wmed_paths.R, the same way run_pipeline_demo.R finds them.
+.git_dir <- normalizePath("..")   # this .qmd sits in <git_dir>/scripts
+source(file.path(.git_dir, "scripts", "wmed_paths.R"), local = TRUE)
+.paths <- wmed_find_paths(.git_dir)  # config.local.R > config.R > standard pCloud Drive place
+## Paths shown on the page: the home folder as "~", so no user name is
+## displayed (the page may be shown on a projector or shared as a screenshot).
+.show_path <- function(p) {
+  if (is.null(p) || !length(p) || is.na(p)) return(p)
+  h <- normalizePath(path.expand("~"), winslash = "/", mustWork = FALSE)
+  p2 <- gsub("\\\\", "/", p)
+  if (startsWith(p2, h)) paste0("~", substring(p2, nchar(h) + 1)) else p2
+}
+.base_out <- unname(.paths$out_dir)   # main output folder: default-input results, caches, the page's run files
+## Results shown on the page: the folder of one run (wmed_paths.R:
+## wmed_run_name). Default inputs -> .base_out; any other area, years or FG
+## table -> .base_out/runs/<name>. Picked in the Results card, and set to
+## the run's folder when a run from this page finishes. .out_dir, .plot_dir,
+## .wb_path and .diet_path follow it (active bindings).
+.results_dir <- reactiveVal(.base_out)
+makeActiveBinding(".out_dir", function() shiny::isolate(.results_dir()), environment())
+## Run files live in out_dir/.qmd_run (not in R's temporary folder), so a page
+## reopened later still knows the last run started from here, and a run
+## that is still going.
+.run_dir <- if (!is.na(.base_out) && dir.exists(.base_out)) file.path(.base_out, ".qmd_run") else file.path(tempdir(), "wmed_qmd_run")
+dir.create(.run_dir, showWarnings = FALSE, recursive = TRUE)
+.status_file <- file.path(.run_dir, "status.txt")       # "done" or "error: ..." when the run ends; its time = end
+.console <- file.path(.run_dir, "console.txt")          # everything the run prints
+.progress_file <- file.path(.run_dir, "progress.txt")   # "--- Step i/5 ..." lines
+.pid_file <- file.path(.run_dir, "pid.txt")             # process id of the run
+.settings_file <- file.path(.run_dir, "settings.R")     # settings block of the run; its time = start
+
+## Whole-GSA area of each GSA from the map polygons (km2). An approximate
+## preview only: 01 computes the real A_model from the GSA shapefile and
+## the bathymetry (795,431 km2 for GSAs 1-11 in the 2026-10-15 run, before GSA 12 was added; the
+## simplified polygons give about 1 % more).
+.gsa_km2 <- tryCatch({
+  g <- sf::st_read(file.path(.git_dir, "scripts", "gsa_boundaries_westmed.geojson"), quiet = TRUE)
+  a <- tapply(as.numeric(sf::st_area(g)) / 1e6, g$gsa_num, sum)
+  setNames(as.numeric(a), names(a))
+}, error = function(e) NULL)
+## Depth cells of the model area written by 01 (out_dir/biomass/
+## model_area_cells.csv: GSA x depth band, km2, from the NOAA bathymetry).
+## With whole_gsa it holds every depth band, so both bases can be summed
+## from it: 10-800 m = cells with Depth_min_m >= 10 and Depth_max_m <= 800.
+model_cells <- reactive({
+  last_finished()
+  f <- if (!is.na(.out_dir)) file.path(.out_dir, "biomass", "model_area_cells.csv") else ""
+  if (!file.exists(f)) return(NULL)
+  x <- tryCatch(utils::read.csv(f), error = function(e) NULL)
+  if (is.null(x) || !all(c("AreaID", "Depth_min_m", "Depth_max_m", "area_km2") %in% names(x))) NULL else x
+})
+## --- Functional groups: the species -> FG csv the run uses -------------------
+.pcloud_dir <- .paths$pcloud_dir
+.fg_default <- if (!is.na(.pcloud_dir)) file.path(.pcloud_dir, "data", "FG_WMed_2026.csv") else NA_character_
+.fg_choices <- if (!is.na(.pcloud_dir) && dir.exists(file.path(.pcloud_dir, "data")))
+  list.files(file.path(.pcloud_dir, "data"), "^FG.*\\.csv$", full.names = TRUE, ignore.case = TRUE) else character(0)
+updateSelectInput(session, "fg_file", choices = setNames(.fg_choices, basename(.fg_choices)),
+                  selected = if (.fg_default %in% .fg_choices) .fg_default else .fg_choices[1])
+fg_path <- reactiveVal(.fg_default)
+run_target <- reactiveVal(NULL)   # output folder of the run started from this page
+## Output folder of a run with the inputs set on the page now (same rule as run_pipeline_demo.R)
+.inputs_run_dir <- function() {
+  custom <- identical(input$area_mode, "custom")
+  yr <- function(v) if (length(v) == 2) seq(v[1], v[2]) else v
+  wmed_run_dir(.base_out, wmed_run_name(
+    area_mode = if (custom) "custom" else "westmed", gsas = if (custom) integer(0) else as.integer(input$gsas),
+    basis = if (is.null(input$basis)) "whole_gsa" else input$basis, area_name = input$area_name,
+    year_ecopath = yr(input$ecopath_years), ts_years = yr(input$ts_years),
+    fg_file = { f <- fg_path(); if (is.null(f) || is.na(f)) NULL else f }))
+}
+.run_label <- function(d) {
+  if (is.null(d) || is.na(d)) return("-")
+  if (identical(normalizePath(d, mustWork = FALSE), normalizePath(.base_out, mustWork = FALSE))) "the main output folder (default inputs)"
+  else paste0("runs/", basename(d))
+}
+observeEvent(input$fg_file, if (nzchar(input$fg_file)) fg_path(input$fg_file))
+catch_path <- reactiveVal(NA_character_)
+observeEvent(input$catch_upload, {   # an uploaded catchability table is kept next to the run files
+  dest <- file.path(.run_dir, paste0("catchability_", gsub("[^A-Za-z0-9_.-]", "_", input$catch_upload$name)))
+  file.copy(input$catch_upload$datapath, dest, overwrite = TRUE)
+  x <- tryCatch(data.table::fread(file = dest), error = function(e) NULL)
+  if (is.null(x) || !all(c("ScientificName", "q") %in% names(x))) {
+    showNotification("The catchability table needs columns ScientificName and q.", type = "error"); return() }
+  catch_path(normalizePath(dest))
+  showNotification(sprintf("Catchability table loaded: %d species.", nrow(x)), duration = 5)
+})
+observeEvent(input$fg_upload, {   # an uploaded csv is kept next to the run files so the run can read it
+  dest <- file.path(.run_dir, paste0("uploaded_", gsub("[^A-Za-z0-9_.-]", "_", input$fg_upload$name)))
+  file.copy(input$fg_upload$datapath, dest, overwrite = TRUE)
+  fg_path(dest)
+})
+fg_table <- reactive({
+  f <- fg_path()
+  if (is.na(f) || !file.exists(f)) return(list(error = paste("File not found:", f)))
+  x <- tryCatch(data.table::fread(f, encoding = "UTF-8"), error = function(e) NULL)
+  if (is.null(x)) return(list(error = paste("Could not read", basename(f))))
+  need <- c("FG_number", "FG_name", "species")
+  if (!all(need %in% names(x))) return(list(error = paste0(basename(f), " is missing column(s): ", paste(setdiff(need, names(x)), collapse = ", "),
+                                                         ". Columns found: ", paste(names(x), collapse = ", "))))
+  list(data = x, path = f)
+})
+output$fg_summary <- renderUI({
+  ft <- fg_table()
+  if (!is.null(ft$error)) return(tags$div(class = "alert alert-danger py-2 small mb-0", ft$error))
+  x <- data.table::copy(ft$data)
+  has_group <- "FG_group" %in% names(x)
+  x[, FG_number := suppressWarnings(as.numeric(FG_number))]
+  fg <- x[!is.na(FG_number), .(FG_name = paste(unique(FG_name), collapse = " / "),
+                               FG_group = if (has_group) paste(unique(stats::na.omit(FG_group)), collapse = " / ") else NA_character_,
+                               n_species = data.table::uniqueN(species)), by = FG_number][order(FG_number)]
+  ## Checks: one name per FG number, each species in one FG only, no gaps in the numbers
+  multi_name <- fg[grepl(" / ", FG_name), FG_number]
+  sp2 <- x[!is.na(species) & nzchar(species), .(n = data.table::uniqueN(FG_number)), by = species][n > 1, species]
+  gaps <- setdiff(seq(min(fg$FG_number), max(fg$FG_number)), fg$FG_number)
+  warn <- c(if (length(multi_name)) paste("FG number(s) with more than one FG_name:", paste(multi_name, collapse = ", ")),
+            if (length(sp2)) paste0(length(sp2), " species in more than one FG (", paste(head(sp2, 3), collapse = ", "),
+                                    if (length(sp2) > 3) ", ...", ") - expected only for multistanza groups such as hake juv./adult"),
+            if (length(gaps)) paste("Missing FG number(s):", paste(gaps, collapse = ", ")))
+  stat <- function(label, value, note = NULL)
+    column(3, tags$div(class = "wm-stat", tags$div(class = "l", label), tags$div(class = "v", value), if (!is.null(note)) tags$div(class = "n", note)))
+  ## Species with biomass in the last run / species in the FG file (01 writes
+  ## fg_species_coverage.csv); refreshed when a run finishes.
+  run_state()
+  .cov_f <- file.path(.inputs_run_dir(), "biomass", "fg_species_coverage.csv")
+  cov <- if (file.exists(.cov_f)) tryCatch(data.table::fread(.cov_f), error = function(e) NULL) else NULL
+  has_cov <- !is.null(cov) && all(c("FG_num", "coverage", "coverage_survey") %in% names(cov))
+  if (has_cov) fg <- merge(fg, cov[, .(FG_number = as.numeric(FG_num), coverage, coverage_survey, species_without_biomass)], by = "FG_number", all.x = TRUE)
+  rows <- lapply(seq_len(nrow(fg)), function(i)
+    tags$tr(tags$td(fg$FG_number[i]), tags$td(fg$FG_name[i]), if (has_group) tags$td(fg$FG_group[i]), tags$td(fg$n_species[i]),
+            if (has_cov) tags$td(title = if (!is.na(fg$species_without_biomass[i]) && nzchar(fg$species_without_biomass[i])) paste("No biomass:", fg$species_without_biomass[i]) else NULL,
+                                 fg$coverage[i]),
+            if (has_cov) tags$td(fg$coverage_survey[i])))
+  tagList(
+    fluidRow(
+      stat("File", basename(ft$path), format(file.mtime(ft$path), "edited %d %b %Y, %H:%M")),
+      stat("Functional groups", nrow(fg), paste0("FG ", min(fg$FG_number), "-", max(fg$FG_number))),
+      stat("Species", data.table::uniqueN(x$species)),
+      if (has_cov) stat("With biomass (last run)", paste0(sum(cov$n_with_biomass), "/", sum(cov$n_species_fg_file)),
+                        paste0(sum(cov$n_observed_survey), " observed in the surveys; ", format(file.mtime(.cov_f), "%d %b %H:%M")))),
+    if (length(warn)) tags$div(class = "alert alert-warning py-2 small mt-2 mb-2", lapply(warn, function(w) tags$div(w))),
+    tags$div(class = "wm-fg-table mt-2",
+      tags$table(class = "table table-sm table-striped",
+        tags$thead(tags$tr(tags$th("FG_number"), tags$th("FG_name"), if (has_group) tags$th("FG_group"), tags$th("N species"),
+                           if (has_cov) tags$th(title = "Species with biomass in the last run / species in the FG file (hover a value for the species without biomass)", "With biomass"),
+                           if (has_cov) tags$th(title = "Species observed by MEDITS/MEDIAS in the Ecopath years / species in the FG file", "Observed in survey"))),
+        tags$tbody(rows))))
+})
+
+## Coastal state of each GSA - the same table as GSA_COASTAL_STATE in 02_fisheries.R
+.gsa_state <- c("1" = "Spain", "2" = "Spain", "3" = "Morocco", "4" = "Algeria", "5" = "Spain", "6" = "Spain",
+                "7" = "France", "8" = "France", "9" = "Italy", "10" = "Italy", "11" = "Italy", "12" = "Tunisia")
+.unsurveyed <- c(3, 4, 12)
+## Expected minutes per script (01..05): the median of the last 5 runs
+## started from this page on this laptop (out_dir/.qmd_run/step_times.csv,
+## filled from the "--- Step i/5 done in x min" lines at the end of every
+## run). Until a script has run here, the times of the Windows run of
+## 2026-10-29 are used. 01 is slower the first time after a change of GSAs
+## (bathymetry download).
+.step_min_default <- c(6.8, 11.7, 4.9, 5.1, 1.6, 15)   # 06: a rerun with the years cached; the first run takes hours
+.step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 validation", "06 environment")
+
+## --- Custom region from an uploaded shapefile / polygon file ---------------
+custom_shape <- reactiveVal(NULL)   # list(path, sf) of the uploaded region
+## Built-in example region: the Mediterranean cetacean migration corridor
+## (Real Decreto 699/2018; scripts/example_regions/README.md)
+observeEvent(input$custom_example, {
+  f <- file.path(.git_dir, "scripts", "example_regions", "cetacean_migration_corridor_RD699_2018.shp")
+  if (!file.exists(f)) { showNotification(paste("Example file not found:", f), type = "error"); return() }
+  g <- tryCatch(sf::st_transform(sf::st_read(f, quiet = TRUE), 4326), error = function(e) { showNotification(conditionMessage(e), type = "error"); NULL })
+  if (is.null(g)) return()
+  updateTextInput(session, "area_name", value = "cetacean_corridor")
+  custom_shape(list(path = normalizePath(f), sf = g))
+  tmp <- tempfile(fileext = ".geojson"); sf::st_write(sf::st_geometry(g), tmp, quiet = TRUE)
+  session$sendCustomMessage("wm-custom-shape", list(geojson = paste(readLines(tmp, warn = FALSE), collapse = "")))
+  showNotification("Example region loaded: Mediterranean cetacean migration corridor (area name 'cetacean_corridor').", type = "message")
+})
+observeEvent(input$custom_shp, {
+  up <- input$custom_shp
+  name <- gsub("[^A-Za-z0-9_-]", "_", if (nzchar(input$area_name)) input$area_name else "custom_region")
+  dest <- file.path(.base_out, "shapefiles", "custom", name)   # kept in the main output folder, one folder per region
+  ## Files from earlier uploads for this region are kept, so the parts of a
+  ## shapefile can also be uploaded one after the other.
+  dir.create(dest, recursive = TRUE, showWarnings = FALSE)
+  for (i in seq_len(nrow(up))) {
+    if (grepl("\\.zip$", up$name[i], ignore.case = TRUE)) utils::unzip(up$datapath[i], exdir = dest, junkpaths = TRUE)
+    else file.copy(up$datapath[i], file.path(dest, up$name[i]), overwrite = TRUE)
+  }
+  ## macOS zips carry "._name" / __MACOSX copies that are not real files
+  junk <- list.files(dest, "^\\._", full.names = TRUE, all.files = TRUE)
+  if (length(junk)) unlink(junk)
+  all_f <- list.files(dest, full.names = TRUE)
+  stem <- tolower(tools::file_path_sans_ext(basename(all_f))); ext <- tolower(tools::file_ext(all_f))
+  shp <- all_f[ext == "shp"]
+  if (length(shp)) {
+    ## the shapefile whose .shx and .dbf are also there (same name, any case)
+    ok <- vapply(shp, function(x) all(c("shx", "dbf") %in% ext[stem == tolower(tools::file_path_sans_ext(basename(x)))]), logical(1))
+    if (!any(ok)) {
+      have <- sort(unique(ext[stem == tolower(tools::file_path_sans_ext(basename(shp[1])))]))
+      showNotification(paste0("Shapefile '", basename(shp[1]), "': found ", paste0(".", have, collapse = ", "),
+                              "; still missing ", paste0(".", setdiff(c("shx", "dbf"), have), collapse = " and "),
+                              " (with the same name). Upload the missing part(s), or all parts together, or a .zip."),
+                       type = "error", duration = 12)
+      return()
+    }
+    f <- shp[ok][1]
+  } else {
+    f <- all_f[ext %in% c("geojson", "json", "gpkg", "kml")][1]
+    if (is.na(f)) { showNotification("No .shp, .geojson, .gpkg or .kml found in the upload.", type = "error"); return() }
+  }
+  if (grepl("\\.shp$", f, ignore.case = TRUE) && !"prj" %in% ext[stem == tolower(tools::file_path_sans_ext(basename(f)))])
+    showNotification("No .prj file: coordinates are assumed to be lon/lat (WGS84).", type = "warning", duration = 8)
+  g <- tryCatch(sf::st_read(f, quiet = TRUE), error = function(e) { showNotification(conditionMessage(e), type = "error"); NULL })
+  if (is.null(g)) return()
+  if (is.na(sf::st_crs(g))) sf::st_crs(g) <- 4326 else g <- sf::st_transform(g, 4326)
+  g <- g[!sf::st_is_empty(g), ]
+  custom_shape(list(path = normalizePath(f), sf = g))
+  tmp <- tempfile(fileext = ".geojson"); sf::st_write(sf::st_geometry(g), tmp, quiet = TRUE)
+  session$sendCustomMessage("wm-custom-shape", list(geojson = paste(readLines(tmp, warn = FALSE), collapse = "")))
+})
+
+## --- Area summary cards ---------------------------------------------------
+output$area_summary <- renderUI({
+  stat <- function(label, value, note = NULL, warn = FALSE)
+    column(3, tags$div(class = paste("wm-stat", if (warn) "warn"),
+                       tags$div(class = "l", label), tags$div(class = "v", value),
+                       if (!is.null(note)) tags$div(class = "n", note)))
+  if (identical(input$area_mode, "custom") && identical(input$custom_type, "shapefile")) {
+    cs <- custom_shape()
+    if (is.null(cs)) return(tags$div(class = "alert alert-secondary mb-0", "Upload the region file to see it on the map."))
+    a <- suppressWarnings(as.numeric(sum(sf::st_area(cs$sf)))) / 1e6
+    bb <- sf::st_bbox(cs$sf)
+    return(fluidRow(
+      stat("Region", input$area_name, basename(cs$path)),
+      stat("Polygons", nrow(cs$sf), "one model area each"),
+      stat("Polygon area", paste(format(round(a, -2), big.mark = ","), "km\u00b2"), "as drawn, land included"),
+      stat("Extent", sprintf("%.1f-%.1f\u00b0E", bb["xmin"], bb["xmax"]), sprintf("%.1f-%.1f\u00b0N", bb["ymin"], bb["ymax"]))))
+  }
+  if (identical(input$area_mode, "custom")) {
+    b <- c(input$bbox_xmin, input$bbox_xmax, input$bbox_ymin, input$bbox_ymax)
+    ok <- all(is.finite(b)) && b[2] > b[1] && b[4] > b[3]
+    km2 <- if (ok) (b[2] - b[1]) * 111.32 * cos(mean(b[3:4]) * pi / 180) * (b[4] - b[3]) * 110.57 else NA
+    return(fluidRow(
+      stat("Region", input$area_name),
+      stat("Box", if (ok) sprintf("%.1f-%.1f\u00b0E, %.1f-%.1f\u00b0N", b[1], b[2], b[3], b[4]) else "invalid", warn = !ok),
+      stat("Box area", if (ok) paste(format(round(km2, -2), big.mark = ","), "km\u00b2") else "-", "rectangle, land included"),
+      stat("Scripts", "01-05", "catch from the overlapping GSAs")))
+  }
+  g <- as.numeric(input$gsas)
+  if (!length(g)) return(tags$div(class = "alert alert-danger mb-0", "No GSA selected - click the map or a quick-select button."))
+  ## Area: from the depth cells 01 wrote (exact, from the bathymetry) when
+  ## the last run covered these GSAs; otherwise the map polygons (whole GSA)
+  cells <- model_cells()
+  basis <- input$basis
+  per_gsa <- if (!is.null(cells)) {
+    keep <- if (identical(basis, "medits_10_800")) cells$Depth_min_m >= 10 & cells$Depth_max_m <= 800 else rep(TRUE, nrow(cells))
+    tapply(cells$area_km2[keep], cells$AreaID[keep], sum)
+  } else NULL
+  have <- !is.null(per_gsa) && all(as.character(g) %in% names(per_gsa))
+  fmt <- function(x) paste(format(round(x, -2), big.mark = ","), "km\u00b2")
+  area_box <- if (have) {
+    stat("Model area", fmt(sum(per_gsa[as.character(g)])),
+         if (identical(basis, "medits_10_800")) "MEDITS strata 10-800 m, from the bathymetry (01)" else "whole GSA, coast to bottom (01)")
+  } else if (identical(basis, "whole_gsa") && !is.null(.gsa_km2)) {
+    stat("Model area", paste0("\u2248 ", fmt(sum(.gsa_km2[as.character(g)], na.rm = TRUE))), "from the map polygons; 01 computes the exact value")
+  } else stat("Model area", "computed by 01", "these GSAs are not in the last run's model_area_cells.csv", warn = TRUE)
+  uns <- intersect(g, .unsurveyed)
+  fluidRow(
+    stat("GSAs", length(g), paste(sort(g), collapse = ", ")),
+    area_box,
+    stat("Survey coverage", paste0(length(setdiff(g, .unsurveyed)), " of ", length(g)),
+         if (length(uns)) paste0("GSA ", paste(uns, collapse = ", "), ": survey density assumed") else "all GSAs sampled by MEDITS",
+         warn = length(uns) > 0),
+    stat("Catch countries", length(unique(.gsa_state[as.character(g)])), paste(unique(.gsa_state[as.character(g)]), collapse = ", ")))
+})
+
+## --- Settings block: the exact code the Run button executes ---------------
+## Paths written into R code must use "/" - on Windows a path such as
+## C:\Users\... inside "..." is read as escape codes (\U) and the run fails.
+.fwd <- function(p) gsub("\\\\", "/", p)
+## --- Which scripts to run ---------------------------------------------------
+## Tick boxes 01-05 -> RUN_STEPS. A later script reads what the earlier ones
+## wrote to the output folder, so a script can run alone only if those files
+## are already there (from an earlier run). What each one reads:
+##   02: ecopath_ecosim_inputs.xlsx (Ecopath_B) and biomass_proportion_by_species_fg.csv, from 01
+##   03: biomass_proportion_by_species_fg.csv from 01; F_by_fg.csv from 02
+##   04: ecopath_ecosim_inputs.xlsx and biomass_proportion_by_species_fg.csv, from 01
+##        (03's P/B, Q/B only feed the references sheet - used if present)
+##   05: ecopath_ecosim_inputs.xlsx from 01; F_by_fg.csv from 02
+steps_sel <- reactive(sort(as.integer(input$steps_chk)))
+steps_txt <- reactive({
+  s <- steps_sel()
+  if (!length(s)) "integer(0)"
+  else if (length(s) == 1) as.character(s)
+  else if (all(diff(s) == 1)) paste0(min(s), ":", max(s))
+  else paste0("c(", paste(s, collapse = ", "), ")")
+})
+observeEvent(input$steps_all,    updateCheckboxGroupInput(session, "steps_chk", selected = 1:6))
+observeEvent(input$steps_main,   updateCheckboxGroupInput(session, "steps_chk", selected = 1:5))
+observeEvent(input$steps_only6,  updateCheckboxGroupInput(session, "steps_chk", selected = 6))
+observeEvent(input$steps_none,   updateCheckboxGroupInput(session, "steps_chk", selected = character(0)))
+observeEvent(input$steps_after1, updateCheckboxGroupInput(session, "steps_chk", selected = 2:5))
+observeEvent(input$steps_only5,  updateCheckboxGroupInput(session, "steps_chk", selected = 5))
+.step_needs <- list(
+  `2` = list(list(1, "ecopath_ecosim_inputs.xlsx"), list(1, "biomass/biomass_proportion_by_species_fg.csv")),
+  `3` = list(list(1, "biomass/biomass_proportion_by_species_fg.csv"), list(2, "fisheries/F_by_fg.csv")),
+  `4` = list(list(1, "ecopath_ecosim_inputs.xlsx"), list(1, "biomass/biomass_proportion_by_species_fg.csv")),
+  `5` = list(list(1, "ecopath_ecosim_inputs.xlsx"), list(2, "fisheries/F_by_fg.csv")))
+.step_out <- c(`1` = "biomass", `2` = "fisheries", `3` = "pbqb-traits", `4` = "diet", `5` = "validation", `6` = "environment")
+## settings lines that change results (no comments, RUN_STEPS, CLEAN_START or source())
+.result_settings <- function(x) {
+  x <- trimws(sub("#.*$", "", x[!grepl("^\\s*##", x)]))
+  x[nzchar(x) & !grepl("^(RUN_STEPS|CLEAN_START)\\b|^source\\(", x)]
+}
+steps_problems <- reactive({
+  s <- steps_sel()
+  if (is.na(.base_out)) return(list(missing = character(0), stale = character(0), changed = character(0)))
+  od <- .inputs_run_dir()   # this run's folder: the outputs of earlier runs with the same inputs
+  missing <- character(0)
+  for (k in s) for (nd in .step_needs[[as.character(k)]]) {
+    p <- nd[[1]]; f <- nd[[2]]
+    if (!(p %in% s) && !file.exists(file.path(od, f)))
+      missing <- c(missing, sprintf("%s needs %s from %s, which is not in the output folder yet - tick %s too.",
+                                    .step_names[k], basename(f), .step_names[p], .step_names[p]))
+  }
+  ## later scripts left unticked whose outputs on disk came from the old run of an earlier ticked one
+  stale <- character(0)
+  if (length(s)) {
+    later <- setdiff(seq_len(5), s)
+    later <- later[later > min(s)]
+    later <- later[dir.exists(file.path(od, .step_out[as.character(later)]))]
+    if (length(later)) stale <- sprintf("The outputs of %s on disk will still come from the previous run, so they won't match the new %s.",
+                                        paste(.step_names[later], collapse = ", "), .step_names[min(s)])
+  }
+  ## skipped earlier scripts: were their outputs made with the same settings?
+  changed <- character(0)
+  if (length(s) && min(s) > 1 && file.exists(.settings_file)) {
+    old <- .result_settings(.settings_lines()); new <- .result_settings(config_code())
+    diff_new <- setdiff(new, old)
+    if (length(diff_new)) changed <- diff_new
+  }
+  list(missing = unique(missing), stale = stale, changed = changed)
+})
+output$steps_check <- renderUI({
+  pr <- steps_problems()
+  out <- list()
+  if (length(pr$missing))
+    out <- c(out, list(tags$div(class = "alert alert-danger py-1 px-2 mb-1 small", lapply(pr$missing, tags$div))))
+  if (length(pr$stale))
+    out <- c(out, list(tags$div(class = "alert alert-warning py-1 px-2 mb-1 small", pr$stale)))
+  if (length(pr$changed))
+    out <- c(out, list(tags$div(class = "alert alert-warning py-1 px-2 mb-1 small",
+      tags$div(sprintf("Settings differ from the last run (%s), whose outputs the unticked earlier scripts would reuse. Changed or new:",
+                       format(file.mtime(.settings_file), "%d %b %H:%M"))),
+      tags$code(style = "white-space: pre-wrap; font-size: .8rem;", paste(pr$changed, collapse = "\n")),
+      tags$div("Tick the earlier scripts too if those settings should apply to them."))))
+  tagList(out)
+})
+
+config_code <- reactive({
+  yr <- function(v) paste0(v[1], ":", v[2])
+  tf <- function(x) if (isTRUE(x)) "TRUE" else "FALSE"
+  common <- c(
+    sprintf("YEAR_ECOPATH     <- %s   # Ecopath baseline", yr(input$ecopath_years)),
+    sprintf("TS_YEARS         <- %s   # Ecosim biomass series", yr(input$ts_years)),
+    sprintf("STRATA           <- %s", tf(input$strata)),
+    sprintf("DROP_OUTLIERS    <- %s", tf(input$drop_outliers)),
+    sprintf("NORMALIZE_TS     <- %s", tf(input$normalize_ts)),
+    sprintf("ECOPATH_B_FILL_MODE  <- \"%s\"   # FGs with no Ecopath-years biomass", if (isTRUE(input$fill_b)) "window_mean" else "nearest"),
+    if (isTRUE(input$fill_b) && length(input$fill_years) == 2) sprintf("ECOPATH_B_FILL_YEARS <- %s", yr(input$fill_years)),
+    if (!is.na(fg_path())) sprintf("FG_SPECIES_FILE  <- \"%s\"   # species -> FG table", .fwd(fg_path())),
+    sprintf("APPLY_CATCHABILITY <- %s   # MEDITS catchability correction", tf(input$catch_q)),
+    if (isTRUE(input$catch_q) && !is.na(catch_path())) sprintf("CATCHABILITY_FILE <- \"%s\"   # uploaded catchability table", .fwd(catch_path())),
+    sprintf("HIGH_F_B_FIX     <- \"%s\"   # FGs with F > 1: none / min_from_catch / ecopath_estimate", if (is.null(input$high_f)) "none" else input$high_f),
+    sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (06)", if (is.null(input$phyto_src)) "isimip" else input$phyto_src))
+  head <- c(sprintf("## WMed-EwEbuilder settings - from WMed-EwEbuilder.qmd, %s", format(Sys.time(), "%Y-%m-%d %H:%M")),
+            "## Run from the scripts/ folder of the repo (folders found by wmed_paths.R).",
+            "CLEAN_START      <- FALSE   # keep the settings below")
+  if (identical(input$area_mode, "custom")) {
+    c(head,
+      sprintf("RUN_STEPS        <- %s", steps_txt()),
+      "AREA_MODE        <- \"custom\"",
+      sprintf("AREA_NAME        <- \"%s\"", gsub("[^A-Za-z0-9_-]", "_", input$area_name)),
+      if (identical(input$custom_type, "shapefile")) c(
+        "CUSTOM_AREA_TYPE <- \"shapefile\"",
+        sprintf("CUSTOM_SHAPEFILE_PATH <- \"%s\"", if (is.null(custom_shape())) "<upload the region file>" else .fwd(custom_shape()$path)))
+      else c(
+        "CUSTOM_AREA_TYPE <- \"bbox\"",
+        sprintf("CUSTOM_BBOX      <- c(xmin = %s, xmax = %s, ymin = %s, ymax = %s)",
+                input$bbox_xmin, input$bbox_xmax, input$bbox_ymin, input$bbox_ymax)),
+      common,
+      "## the ticked steps run for the region; catch (02) from the GSA(s) it overlaps, weighted by overlap",
+      "source(\"run_pipeline_demo.R\")")
+  } else {
+    c(head,
+      sprintf("RUN_STEPS        <- %s", steps_txt()),
+      sprintf("MODEL_GSAS       <- c(%s)", paste(sort(as.numeric(input$gsas)), collapse = ", ")),
+      sprintf("MODEL_AREA_BASIS <- \"%s\"", input$basis),
+      common,
+      "## catch / effort years (02) follow the Ecopath and Ecosim years",
+      "source(\"run_pipeline_demo.R\")")
+  }
+})
+output$config_text <- renderText(paste(config_code(), collapse = "\n"))
+output$dl_config <- downloadHandler(
+  filename = function() if (identical(input$area_mode, "custom")) "wmed_custom_settings.R" else "wmed_pipeline_settings.R",
+  content = function(file) writeLines(config_code(), file))
+
+## --- Run -------------------------------------------------------------------
+run_state <- reactiveVal("idle")          # idle | running | done | error
+run_started <- reactiveVal(NULL)
+run_finished <- reactiveVal(NULL)
+run_steps <- reactiveVal(1:5)
+step_seen <- reactiveVal(list())          # step number -> time its start line was first seen
+last_finished <- reactiveVal(Sys.time())  # changes after every run -> images reload
+run_note <- reactiveVal("")
+
+.pid_alive <- function() {
+  pid <- if (file.exists(.pid_file)) suppressWarnings(as.integer(readLines(.pid_file, warn = FALSE)[1])) else NA
+  if (is.na(pid)) return(FALSE)
+  if (.Platform$OS.type == "windows") {   # pskill(pid, 0) does not test a process on Windows
+    out <- tryCatch(suppressWarnings(system2("tasklist", c("/FI", shQuote(paste("PID eq", pid)), "/NH", "/FO", "CSV"),
+                                             stdout = TRUE, stderr = FALSE)), error = function(e) character(0))
+    return(any(grepl(sprintf('"%d"', pid), out, fixed = TRUE)))
+  }
+  isTRUE(tryCatch(tools::pskill(pid, 0L), error = function(e) FALSE))
+}
+## Text read from the run's files is made valid UTF-8 before it is shown:
+## a Windows message in the run's console (e.g. the Microsoft Store
+## "Python not found" text, in the system code page) is not UTF-8, and
+## one such line closed the page's connection ("Could not decode a text
+## frame as UTF-8") - the page went grey (2026-10-27).
+.utf8 <- function(x) {
+  bad <- !is.na(x) & !validUTF8(x)
+  if (any(bad)) x[bad] <- iconv(x[bad], "CP1252", "UTF-8", sub = "?")
+  bad <- !is.na(x) & !validUTF8(x)
+  if (any(bad)) x[bad] <- iconv(x[bad], "UTF-8", "UTF-8", sub = "?")
+  x
+}
+.settings_lines <- function() if (file.exists(.settings_file)) readLines(.settings_file, warn = FALSE) else character(0)
+
+## Minutes each script took, per run (run = start time of the run)
+.times_file <- file.path(.run_dir, "step_times.csv")
+.step_done_min <- function() {   # minutes of the scripts done so far in this run, named by step
+  l <- if (file.exists(.progress_file)) readLines(.progress_file, warn = FALSE) else character(0)
+  l <- grep("^--- Step \\d/\\d done in [0-9.]+ min", l, value = TRUE)
+  setNames(as.numeric(sub("^--- Step \\d/\\d done in ([0-9.]+) min.*", "\\1", l)), sub("^--- Step (\\d)/\\d.*", "\\1", l))
+}
+.record_step_times <- function() {
+  m <- .step_done_min(); if (!length(m) || !file.exists(.settings_file)) return(invisible())
+  run <- format(file.mtime(.settings_file), "%Y-%m-%d %H:%M:%S")
+  old <- if (!file.exists(.times_file)) NULL else tryCatch(utils::read.csv(.times_file, stringsAsFactors = FALSE), error = function(e) NULL)
+  if (!is.null(old) && run %in% old$run) return(invisible())
+  new <- data.frame(run = run, step = as.integer(names(m)), minutes = unname(m))
+  tryCatch(utils::write.csv(rbind(old, new), .times_file, row.names = FALSE), error = function(e) NULL)
+}
+.step_min_now <- function() {
+  d <- .step_min_default
+  h <- if (!file.exists(.times_file)) NULL else tryCatch(utils::read.csv(.times_file, stringsAsFactors = FALSE), error = function(e) NULL)
+  if (!is.null(h) && nrow(h)) for (k in seq_along(d)) {
+    x <- utils::tail(h$minutes[h$step == k & is.finite(h$minutes)], 5)
+    if (length(x)) d[k] <- stats::median(x)
+  }
+  d
+}
+
+## Reopened page: pick up the last run started from here (finished, failed,
+## or still going)
+if (file.exists(.settings_file)) {
+  run_started(file.mtime(.settings_file))
+  .st <- grep("^RUN_STEPS", .settings_lines(), value = TRUE)
+  run_steps(tryCatch(eval(parse(text = sub("^[^<]*<-", "", .st[1]))), error = function(e) 1:5))
+  if (file.exists(.status_file)) {
+    run_state(if (identical(readLines(.status_file, warn = FALSE)[1], "done")) "done" else "error")
+    run_finished(file.mtime(.status_file))
+    if (identical(isolate(run_state()), "done")) .record_step_times()   # a run that ended while the page was closed (isolate: no reactive context here)
+  } else if (.pid_alive()) {
+    run_state("running")
+  } else {
+    run_state("error"); run_finished(file.mtime(.console))
+    run_note("The last run from this page stopped without finishing (R or RStudio was closed?).")
+  }
+}
+
+observe({   # Run button label; disabled while running or with no shapefile (disabled= needs shiny >= 1.11)
+  custom <- identical(input$area_mode, "custom")
+  no_shape <- custom && identical(input$custom_type, "shapefile") && is.null(custom_shape())
+  lab <- if (identical(run_state(), "running")) "Running..." else if (custom) "Run pipeline for this region" else "Run pipeline"
+  if (utils::packageVersion("shiny") >= "1.11.0")
+    updateActionButton(session, "run", label = lab, disabled = no_shape || identical(run_state(), "running")) else
+    updateActionButton(session, "run", label = lab)
+})
+
+## Stop: ends the run's R process and everything it started (e.g. a
+## copernicusmarine download), after a confirmation. Outputs of scripts
+## that already finished stay; the script that was running is incomplete.
+observe({
+  if (utils::packageVersion("shiny") >= "1.11.0")
+    updateActionButton(session, "stop", disabled = !identical(run_state(), "running"))
+})
+observeEvent(input$stop, {
+  if (!identical(run_state(), "running")) { showNotification("No run is going.", duration = 4); return() }
+  showModal(modalDialog(title = "Stop the run?",
+    "The script that is running now stops halfway; scripts that already finished keep their outputs.",
+    footer = tagList(modalButton("Cancel"), actionButton("stop_yes", "Stop the run", class = "btn-danger"))))
+})
+.stopped_by_user <- function() file.exists(.status_file) && isTRUE(grepl("stopped by the user", readLines(.status_file, warn = FALSE)[1]))
+observeEvent(input$stop_yes, {
+  removeModal()
+  pid <- if (file.exists(.pid_file)) suppressWarnings(as.integer(readLines(.pid_file, warn = FALSE)[1])) else NA
+  if (!is.na(pid)) {
+    if (.Platform$OS.type == "windows") {
+      ## /T also ends the processes the run started (Rscript children, copernicusmarine)
+      suppressWarnings(system2("taskkill", c("/PID", pid, "/T", "/F"), stdout = FALSE, stderr = FALSE))
+    } else {
+      suppressWarnings(system2("pkill", c("-TERM", "-P", pid), stdout = FALSE, stderr = FALSE))
+      tools::pskill(pid)
+    }
+  }
+  writeLines("error: stopped by the user", .status_file)
+  run_state("error"); run_finished(Sys.time()); last_finished(Sys.time())
+  run_note("Stopped by the user - outputs of the scripts that had finished are kept.")
+  showNotification("Run stopped.", type = "warning", duration = 6)
+})
+
+observeEvent(input$run, {
+  custom <- identical(input$area_mode, "custom")
+  if (identical(run_state(), "running")) return()
+  if (custom && identical(input$custom_type, "shapefile") && is.null(custom_shape())) {
+    showNotification("Upload the region file first.", type = "error"); return() }
+  if (!custom && !length(input$gsas)) { showNotification("Select at least one GSA.", type = "error"); return() }
+  if (!length(steps_sel())) { showNotification("Tick at least one script to run.", type = "error"); return() }
+  .chk <- steps_problems()
+  if (length(.chk$missing)) {
+    showNotification(paste(c("Can't start:", .chk$missing), collapse = " "), type = "error", duration = 15); return() }
+  ## 06 needs a Copernicus Marine login: ask for it first if this laptop has none
+  if (6 %in% steps_sel() && !.cm_has_login()) { .cm_login_modal(then_run = TRUE); return() }
+  .start_run()
+})
+
+## Starts the run (Run button, or after the Copernicus login window)
+.start_run <- function() {
+  custom <- identical(isolate(input$area_mode), "custom")
+  unlink(c(.status_file, .progress_file, .console, .pid_file))
+  writeLines(isolate(config_code()), .settings_file)
+  Sys.setenv(WMED_PROGRESS_FILE = .progress_file)   # inherited by the Rscript process
+  ## The settings block, with the final source() wrapped so the result is reported back here
+  body <- isolate(config_code())
+  body <- body[!grepl("^##", body)]
+  body <- sub("^source\\(\"01_biomass.R\"\\).*$", paste0(
+    "res <- tryCatch({ cat('--- Step 1/5: 01_biomass.R\\n', file = Sys.getenv('WMED_PROGRESS_FILE'), append = TRUE); ",
+    "source('01_biomass.R'); cat('--- Step 1/5 done\\n', file = Sys.getenv('WMED_PROGRESS_FILE'), append = TRUE); 'done' }, ",
+    "error = function(e) paste('error:', conditionMessage(e)))"), body)
+  ## Windows: the run writes its own console.txt through an R connection.
+  ## With system2(stdout = file) Windows keeps that file locked while the
+  ## run goes, so this page could not read it ("cannot open the
+  ## connection") and the box stayed empty. Every message is flushed at
+  ## once so the box is live; system2's own output (R start-up errors
+  ## only) goes to console_raw.txt.
+  win_head <- if (.Platform$OS.type == "windows") c(
+    sprintf(".wm_con <- file('%s', open = 'wt')", .fwd(.console)),
+    "sink(.wm_con); sink(.wm_con, type = 'message')",
+    "globalCallingHandlers(message = function(m) { cat(conditionMessage(m), file = .wm_con); flush(.wm_con); invokeRestart('muffleMessage') })")
+  win_tail <- if (.Platform$OS.type == "windows") "flush(.wm_con); sink(type = 'message'); sink(); close(.wm_con)"
+  code <- paste(c(sprintf("writeLines(as.character(Sys.getpid()), '%s')", .fwd(.pid_file)), win_head, sub("^source\\(\"run_pipeline_demo.R\"\\)$",
+                      "res <- tryCatch({ source('run_pipeline_demo.R'); 'done' }, error = function(e) paste('error:', conditionMessage(e)))", body),
+                  win_tail, sprintf("writeLines(res, '%s')", .fwd(.status_file))), collapse = "\n")
+  old <- setwd(file.path(.git_dir, "scripts")); on.exit(setwd(old))
+  ## The run's code goes in a file: on Windows a multi-line "Rscript -e" does
+  ## not survive the command line (cmd.exe), so the run never started there.
+  .run_script <- file.path(.run_dir, "run.R")
+  writeLines(code, .run_script)
+  .out_file <- if (.Platform$OS.type == "windows") file.path(.run_dir, "console_raw.txt") else .console
+  system2(file.path(R.home("bin"), "Rscript"), shQuote(.fwd(.run_script)), wait = FALSE, stdout = .out_file, stderr = .out_file)
+  run_state("running"); run_started(Sys.time()); run_finished(NULL); run_note(""); step_seen(list())
+  run_target(isolate(.inputs_run_dir()))
+  run_steps(isolate(steps_sel()))
+  showNotification(paste0("Pipeline started - outputs in ", .run_label(isolate(run_target())), ". Progress is shown below the button."), duration = 8)
+}
+
+## --- Copernicus Marine login (needed by 06 environment) -------------------
+## Each user types their own account once in a window on the page. It is
+## saved in that user's own .Renviron (as COPERNICUSMARINE_SERVICE_USERNAME
+## / _PASSWORD, read by lib_cmems_phytoplankton_biomass.R) and set for this
+## R session, so the run started from here inherits it. It never goes into
+## the settings block, the run's script or the logs.
+.renviron_candidates <- function() {
+  up <- Sys.getenv("USERPROFILE")
+  unique(c(path.expand("~/.Renviron"), if (nzchar(up)) file.path(up, c(".Renviron", "Documents/.Renviron"))))
+}
+.cm_has_login <- function() {
+  if (!nzchar(Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME")))
+    for (f in .renviron_candidates()) if (file.exists(f)) try(readRenviron(f), silent = TRUE)
+  if (nzchar(Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME")) && nzchar(Sys.getenv("COPERNICUSMARINE_SERVICE_PASSWORD"))) return(TRUE)
+  up <- Sys.getenv("USERPROFILE")
+  any(file.exists(unique(c(path.expand("~/.copernicusmarine/.copernicusmarine-credentials"),
+                           if (nzchar(up)) file.path(up, ".copernicusmarine", ".copernicusmarine-credentials")))))
+}
+cm_then_run <- reactiveVal(FALSE)
+.cm_login_modal <- function(then_run = FALSE) {
+  cm_then_run(then_run)
+  showModal(modalDialog(title = "Copernicus Marine login",
+    tags$p("06 environment downloads data from the Copernicus Marine Service, which needs your own free account (",
+           tags$a("register here", href = "https://data.marine.copernicus.eu/register", target = "_blank"), ")."),
+    textInput("cm_user", "Username", value = Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME")),
+    passwordInput("cm_pass", "Password"),
+    tags$small(class = "text-muted", "Saved only on this computer, in your own .Renviron file; never in the code, the settings or the logs."),
+    footer = tagList(modalButton("Cancel"), actionButton("cm_save", if (then_run) "Save and run" else "Save", class = "btn-primary"))))
+}
+observeEvent(input$cm_login_link, .cm_login_modal(then_run = FALSE))
+observeEvent(input$cm_save, {
+  u <- trimws(input$cm_user); p <- input$cm_pass
+  if (!nzchar(u) || !nzchar(p)) { showNotification("Type the username and the password.", type = "error"); return() }
+  Sys.setenv(COPERNICUSMARINE_SERVICE_USERNAME = u, COPERNICUSMARINE_SERVICE_PASSWORD = p)
+  f <- path.expand("~/.Renviron")
+  ok <- tryCatch({
+    old <- if (file.exists(f)) readLines(f, warn = FALSE) else character(0)
+    old <- old[!grepl("^COPERNICUSMARINE_SERVICE_(USERNAME|PASSWORD)=", old)]
+    writeLines(c(old, paste0("COPERNICUSMARINE_SERVICE_USERNAME=", u), paste0("COPERNICUSMARINE_SERVICE_PASSWORD=", p)), f)
+    Sys.chmod(f, mode = "0600"); TRUE
+  }, error = function(e) FALSE)
+  removeModal()
+  showNotification(if (ok) "Copernicus login saved." else "Login set for this session only (could not write .Renviron).",
+                   type = if (ok) "message" else "warning", duration = 6)
+  if (isTRUE(cm_then_run())) { cm_then_run(FALSE); .start_run() }
+})
+
+## Poll the status file while a run is going
+observe({
+  if (!identical(run_state(), "running")) return()
+  invalidateLater(5000)
+  if (file.exists(.status_file)) {
+    res <- readLines(.status_file, warn = FALSE)[1]
+    run_state(if (identical(res, "done")) "done" else "error")
+    run_finished(file.mtime(.status_file))
+    if (!is.null(run_target()) && dir.exists(run_target())) .results_dir(run_target())   # show this run's results
+    last_finished(Sys.time())
+    if (identical(res, "done")) .record_step_times()
+    showNotification(if (identical(res, "done")) "Pipeline finished - plots updated." else res,
+                     type = if (identical(res, "done")) "message" else "error", duration = NULL)
+  } else if (file.exists(.pid_file) && !.pid_alive()) {
+    run_state("error"); run_finished(Sys.time()); last_finished(Sys.time())
+    run_note("The run stopped without finishing - see the last lines below.")
+  }
+})
+
+## Progress: read the "--- Step i/5: ..." / "--- Step i/5 done in x min ---"
+## lines that run_pipeline_demo.R writes, and estimate the share done from
+## the expected minutes per script.
+output$run_progress <- renderUI({
+  invalidateLater(3000)
+  st <- run_state()
+  if (identical(st, "idle")) {
+    steps <- steps_sel()
+    if (!length(steps)) return(tags$small(class = "text-danger", "Tick at least one script."))
+    sm <- .step_min_now()
+    return(tags$small(class = "text-muted", sprintf("Expected run time about %.0f min (%s; from the last runs on this laptop).",
+                                                   sum(sm[steps]), paste(sprintf("%s %.0f", .step_names[steps], sm[steps]), collapse = ", "))))
+  }
+  lines <- if (file.exists(.progress_file)) readLines(.progress_file, warn = FALSE) else character(0)
+  started <- as.integer(sub("^--- Step (\\d)/\\d:.*", "\\1", grep("^--- Step \\d/\\d: ", lines, value = TRUE)))
+  finished <- as.integer(sub("^--- Step (\\d)/\\d done.*", "\\1", grep("^--- Step \\d/\\d done", lines, value = TRUE)))
+  seen <- isolate(step_seen())
+  for (k in setdiff(started, as.integer(names(seen)))) seen[[as.character(k)]] <- Sys.time()
+  isolate(step_seen(seen))
+  ## time left = expected minutes of the scripts not started yet + what is
+  ## left of the expected time of the running one (at least 5 % of it)
+  sm <- .step_min_now(); took <- .step_done_min()
+  steps <- run_steps()
+  current <- setdiff(started, finished); current <- if (length(current)) max(current) else NA
+  done_min <- sum(took[as.character(intersect(finished, steps))], na.rm = TRUE)
+  cur_min <- if (!is.na(current)) as.numeric(difftime(Sys.time(), seen[[as.character(current)]], units = "mins")) else 0
+  left_min <- sum(sm[setdiff(steps, c(finished, current))]) +
+              (if (!is.na(current)) max(sm[current] - cur_min, 0.05 * sm[current]) else 0)
+  pct <- if (st == "done") 100 else if (st == "error") round(100 * done_min / max(done_min + left_min, 1e-9)) else round(100 * (done_min + cur_min) / (done_min + cur_min + left_min))
+  elapsed <- as.numeric(difftime(if (is.null(run_finished())) Sys.time() else run_finished(), run_started(), units = "mins"))
+  label <- switch(st,
+    running = paste0(if (!is.na(current)) paste0("Running ", .step_names[current]) else "Starting",
+                     " - ", length(intersect(finished, steps)), " of ", length(steps), " script(s) done - ",
+                     sprintf("%.1f", elapsed), " min elapsed, about ", sprintf("%.0f", left_min), " min left"),
+    done = sprintf("Finished %s, in %.1f min", format(run_finished(), "%d %b %H:%M"), elapsed),
+    error = if (.stopped_by_user()) "Stopped with the Stop button" else "Stopped with an error - see below")
+  colour <- switch(st, running = "bg-info", done = "bg-success", error = "bg-danger")
+  ## one chip per script: done / running / waiting
+  chips <- lapply(steps, function(k) {
+    cls <- if (k %in% finished || st == "done") "bg-success"
+           else if (identical(k, current)) (if (st == "error") "bg-danger" else "bg-info")
+           else "bg-light text-dark"
+    tags$span(class = paste("badge rounded-pill me-1 mb-1", cls), style = "font-size: .95rem; padding: .45em .8em;", .step_names[k])
+  })
+  tagList(
+    tags$div(style = "font-size: 1.15rem; font-weight: 600; margin-bottom: .35rem;",
+             switch(st, running = if (!is.na(current)) paste0("Step ", current, "/6: ", .step_names[current]) else "Starting...",
+                    done = "Finished", error = if (.stopped_by_user()) "Stopped" else "Stopped with an error")),
+    tags$div(class = "progress mb-2", style = "height: 34px; border-radius: 17px; font-size: 1.05rem;",
+             tags$div(class = paste("progress-bar progress-bar-striped", colour, if (st == "running") "progress-bar-animated"),
+                      role = "progressbar", style = paste0("width: ", pct, "%; font-weight: 600;"), paste0(pct, "%"))),
+    tags$div(class = "mb-2", chips),
+    tags$div(style = "font-size: 1rem;", label))
+})
+
+output$run_status <- renderText({
+  invalidateLater(5000)
+  st <- run_state()
+  .tail30 <- function(f) if (file.exists(f)) tryCatch(paste(.utf8(tail(readLines(f, warn = FALSE), 30)), collapse = "\n"),
+                                                    error = function(e) "") else ""
+  tail_txt <- .tail30(.console)
+  tail_txt <- gsub(normalizePath(path.expand("~"), winslash = "/", mustWork = FALSE), "~", gsub("\\\\", "/", tail_txt), fixed = TRUE)   # no user name on screen
+  ## Windows: R start-up errors land in console_raw.txt (see the Run button)
+  if (!nzchar(tail_txt) && st == "error") tail_txt <- .tail30(file.path(.run_dir, "console_raw.txt"))
+  paste0("Status: ", st, "\nOutput folder: ", .show_path(.out_dir),
+         if (st == "error" && file.exists(.status_file)) paste0("\n", .utf8(readLines(.status_file, warn = FALSE)[1])) else "",
+         if (nzchar(run_note())) paste0("\n", run_note()) else "",
+         if (nzchar(tail_txt)) paste0("\n--- last lines ---\n", tail_txt) else "")
+})
+
+## --- Files under out_dir for the figures in the text ------------------------
+.ctype <- c(png = "image/png", csv = "text/csv", pdf = "application/pdf", txt = "text/plain",
+            xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+.file_url <- session$registerDataObj("wmfile", .base_out, function(data, req) {
+  q <- shiny::parseQueryString(req$QUERY_STRING)
+  data <- .out_dir                                  # the results folder shown now
+  root <- normalizePath(data, mustWork = FALSE)
+  f <- normalizePath(file.path(data, if (is.null(q$f)) "" else q$f), mustWork = FALSE)
+  ext <- tolower(tools::file_ext(f))
+  if (is.null(q$f) || !startsWith(f, root) || !file.exists(f) || dir.exists(f) || !ext %in% names(.ctype))
+    return(list(status = 404L, headers = list("Content-Type" = "text/plain"), body = "not found"))
+  list(status = 200L, headers = list("Content-Type" = .ctype[[ext]]), body = readBin(f, "raw", file.info(f)$size))
+})
+## Images kept in the repo (top folder and docs/): the workflow figure
+.repo_url <- session$registerDataObj("wmrepo", .git_dir, function(data, req) {
+  q <- shiny::parseQueryString(req$QUERY_STRING)
+  root <- normalizePath(data, mustWork = FALSE)
+  f <- normalizePath(file.path(data, if (is.null(q$f)) "" else q$f), mustWork = FALSE)
+  ext <- tolower(tools::file_ext(f))
+  types <- c(jpg = "image/jpeg", jpeg = "image/jpeg", png = "image/png", svg = "image/svg+xml")
+  if (is.null(q$f) || !startsWith(f, root) || !file.exists(f) || !ext %in% names(types))
+    return(list(status = 404L, headers = list("Content-Type" = "text/plain"), body = "not found"))
+  list(status = 200L, headers = list("Content-Type" = types[[ext]]), body = readBin(f, "raw", file.info(f)$size))
+})
+observe({   # tell the page where to load the figures from; again after every run
+  last_finished()
+  session$sendCustomMessage("wmfile-base", list(base = .file_url, repo = .repo_url, v = as.integer(Sys.time())))
+})
+
+## --- Folders on this computer -------------------------------------------------
+output$folders <- renderUI({
+  row <- function(label, path, from, ok)
+    tags$tr(tags$td(if (ok) "\u2705" else "\u274C"), tags$td(tags$strong(label)),
+            tags$td(tags$code(if (is.na(path)) "not found" else .show_path(path))), tags$td(class = "text-muted", if (!is.na(from)) from))
+  tagList(
+    tags$table(class = "table table-sm mb-2", style = "font-size:.85rem;",
+      row("Repo (git_dir)", .paths$git_dir, "this page's folder", dir.exists(file.path(.paths$git_dir, "scripts"))),
+      row("pCloud data (pcloud_dir)", .paths$pcloud_dir, .paths$pcloud_from, !is.na(.paths$pcloud_dir)),
+      row("Outputs (out_dir)", .paths$out_dir, .paths$out_from, dir.exists(.paths$out_dir))),
+    if (is.na(.paths$pcloud_dir)) tags$div(class = "alert alert-danger py-2 small",
+      "The pCloud folder '", .wmed_pcloud_name, "' was not found on this computer. Is pCloud Drive running? ",
+      "Otherwise paste its path below and save."),
+    tags$details(open = if (is.na(.paths$pcloud_dir)) NA else NULL,
+      tags$summary(class = "small text-muted", "Change the folders for this computer"),
+      fluidRow(
+        column(5, textInput("set_pcloud", "pCloud folder", value = if (is.na(.paths$pcloud_dir)) "" else .show_path(.paths$pcloud_dir), width = "100%")),
+        column(5, textInput("set_out", "Output folder", value = .show_path(.paths$out_dir), width = "100%")),
+        column(2, tags$label(HTML("&nbsp;")), actionButton("save_folders", "Save", class = "btn-outline-primary w-100"))),
+      tags$div(class = "wm-help", "Saved in config.local.R in the repo, for this computer only (not committed). Reopen the page after saving.")))
+})
+observeEvent(input$save_folders, {
+  pc <- path.expand(trimws(input$set_pcloud)); od <- path.expand(trimws(input$set_out))
+  if (!dir.exists(pc)) { showNotification(paste("Folder not found:", pc), type = "error"); return() }
+  if (!dir.exists(od) && !dir.create(od, recursive = TRUE, showWarnings = FALSE)) {
+    showNotification(paste("Cannot create:", od), type = "error"); return() }
+  f <- wmed_save_local_config(.git_dir, out_dir = od, pcloud_dir = pc)
+  showNotification(paste("Saved to", f, "- stop the page and open it again (Run Document)."), duration = NULL)
+})
+
+## --- Downloads: the output files of the last run ----------------------------
+makeActiveBinding(".wb_path", function() if (!is.na(.out_dir)) file.path(.out_dir, "ecopath_ecosim_inputs.xlsx") else NA_character_, environment())
+makeActiveBinding(".diet_path", function() if (!is.na(.out_dir)) file.path(.out_dir, "diet", "diet_matrix_main_vs_reference.xlsx") else NA_character_, environment())
+.out_tables <- function(pattern) {   # csv/xlsx under out_dir (not the plots or the page's run files)
+  if (is.na(.out_dir)) return(character(0))
+  f <- list.files(.out_dir, "\\.(csv|xlsx)$", recursive = TRUE)
+  f <- f[!grepl("^(plots|plots_old|\\.qmd_run|isimip3a_cache|shapefiles|GFCM_GSA_shp|runs|previous_runs)", f)]
+  f[grepl(pattern, f)]
+}
+.send_file <- function(path) function(file) {
+  if (is.function(path)) path <- path()   # the file of the results folder shown when the button is clicked
+  if (!file.exists(path)) stop("Not found: ", path, " - run the pipeline first.")
+  file.copy(path, file)
+}
+.send_zip <- function(pattern) function(file) {
+  f <- .out_tables(pattern)
+  if (!length(f)) stop("No tables found in ", .out_dir, " - run the pipeline first.")
+  old <- setwd(.out_dir); on.exit(setwd(old))
+  if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, f) else utils::zip(file, f, flags = "-q")
+}
+.stamp <- function() format(Sys.time(), "%Y%m%d")
+output$dl_workbook <- downloadHandler(function() paste0("ecopath_ecosim_inputs_", .stamp(), ".xlsx"), .send_file(function() .wb_path))
+output$dl_diet     <- downloadHandler(function() paste0("diet_matrix_main_vs_reference_", .stamp(), ".xlsx"), .send_file(function() .diet_path))
+output$dl_review   <- downloadHandler(function() paste0("WMed_EwE_REVIEW_tables_", .stamp(), ".zip"), .send_zip("REVIEW"))
+output$dl_all      <- downloadHandler(function() paste0("WMed_EwE_all_tables_", .stamp(), ".zip"), .send_zip("."))
+output$dl_info <- renderUI({
+  last_finished()
+  if (is.na(.wb_path) || !file.exists(.wb_path)) return(tags$small(class = "text-muted", " No workbook yet - run the pipeline."))
+  tags$small(class = "text-muted", sprintf(" Workbook written %s; %d tables in the output folder.",
+                                           format(file.mtime(.wb_path), "%d %b %Y, %H:%M"), length(.out_tables("."))))
+})
+
+## --- Setup check (card 0): what a new computer needs ------------------------
+## One line per item: ok / problem and what to do. Nothing is installed or
+## changed here; it only looks.
+.setup_items <- function() {
+  row <- function(item, ok, detail, fix = "") data.frame(item = item, ok = ok, detail = detail, fix = fix, stringsAsFactors = FALSE)
+  out <- list()
+  out[[1]] <- row("Repository", !is.na(.git_dir) && file.exists(file.path(.git_dir, "scripts", "01_biomass.R")), .show_path(.git_dir))
+  pc <- .paths$pcloud_dir
+  out[[2]] <- row("Shared data (pCloud)", !is.na(pc) && dir.exists(pc), if (is.na(pc)) "not found" else .show_path(pc),
+                  "Start pCloud Drive, or set the folder above (card 0).")
+  out[[3]] <- row("FG table", !is.na(pc) && file.exists(file.path(pc, "data", "FG_WMed_2026.csv")),
+                  if (is.na(pc)) "-" else .show_path(file.path(pc, "data", "FG_WMed_2026.csv")), "Check that pCloud has finished syncing the data folder.")
+  wr <- !is.na(.base_out) && dir.exists(.base_out) && {
+    tf <- file.path(.base_out, ".write_test"); ok <- tryCatch(file.create(tf), error = function(e) FALSE); unlink(tf); isTRUE(ok) }
+  out[[4]] <- row("Output folder writable", wr, if (is.na(.base_out)) "not set" else .show_path(.base_out), "Choose another output folder above.")
+  need <- c("data.table", "ggplot2", "openxlsx", "readxl", "sf", "terra", "raster", "rfishbase", "duckdbfs", "worrms",
+            "httr", "jsonlite", "ncdf4", "pdftools", "TropFishR", "ragg", "patchwork", "shiny", "rmarkdown")
+  miss <- need[!vapply(need, requireNamespace, logical(1), quietly = TRUE)]
+  out[[5]] <- row("R packages", !length(miss), if (length(miss)) paste("missing:", paste(miss, collapse = ", ")) else
+                    paste0("all ", length(need), " core packages found (R ", getRversion(), ")"),
+                  "They are installed on the first run (install_packages.R), or run source('install_packages.R') in the scripts folder.")
+  old_to <- options(timeout = 8); on.exit(options(old_to), add = TRUE)
+  net <- tryCatch({ con <- url("https://cloud.r-project.org", open = "rb"); close(con); TRUE }, error = function(e) FALSE, warning = function(w) FALSE)
+  out[[6]] <- row("Internet", net, if (net) "reachable" else "no connection", "Needed for the first run (downloads) and for 06.")
+  cli <- tryCatch({
+    source(file.path(.git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"), local = TRUE)
+    suppressMessages(ensure_copernicusmarine_cli(auto_install = FALSE))
+  }, error = function(e) FALSE)
+  out[[7]] <- row("Copernicus tool (06 only)", isTRUE(cli), if (isTRUE(cli)) Sys.which("copernicusmarine") else "copernicusmarine not found",
+                  "Only for 06 environment: install Python, then 'pip install copernicusmarine'.")
+  out[[8]] <- row("Copernicus login (06 only)", .cm_has_login(), if (.cm_has_login()) "saved on this computer" else "not saved",
+                  "Use 'enter or change the login' under the scripts to run (card 4).")
+  do.call(rbind, out)
+}
+observeEvent(input$setup_check, {
+  output$setup_report <- renderUI({
+    x <- .setup_items()
+    tags$table(class = "table table-sm small mt-2 mb-0",
+      tags$tbody(lapply(seq_len(nrow(x)), function(i) tags$tr(
+        tags$td(if (x$ok[i]) "\u2705" else "\u274C"), tags$td(tags$strong(x$item[i])),
+        tags$td(tags$code(x$detail[i]), if (!x$ok[i] && nzchar(x$fix[i])) tags$div(class = "text-danger", x$fix[i]))))))
+  })
+})
+
+## --- Run summary (card 6): what to look at after a run ----------------------
+## Per script: the log of the last run, its errors and warnings; then the
+## FGs with F > 1 and the FGs with no Ecopath B (from the REVIEW tables).
+.last_logs <- function() {
+  if (is.na(.out_dir)) return(character(0))
+  f <- list.files(.out_dir, "^\\d{8}_0[1-6]_.*_log\\.txt$", full.names = TRUE)
+  if (!length(f)) return(character(0))
+  step <- sub("^\\d{8}_(0[1-6])_.*$", "\\1", basename(f))
+  f <- f[order(file.mtime(f), decreasing = TRUE)]; step <- sub("^\\d{8}_(0[1-6])_.*$", "\\1", basename(f))
+  f <- f[!duplicated(step)]
+  f[order(basename(f))]
+}
+output$dl_logs <- downloadHandler(function() paste0("WMed_EwE_logs_", .stamp(), ".zip"), function(file) {
+  f <- .last_logs(); if (!length(f)) stop("No logs yet - run the pipeline first.")
+  old <- setwd(.out_dir); on.exit(setwd(old))
+  if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, basename(f)) else utils::zip(file, basename(f), flags = "-q")
+})
+output$run_summary <- renderUI({
+  last_finished()
+  logs <- .last_logs()
+  if (!length(logs)) return(NULL)
+  rows <- lapply(logs, function(f) {
+    l <- .utf8(readLines(f, warn = FALSE))
+    err <- grep("^ERROR|^Error|ERROR:|\\bfailed\\b|FAILED|Execution halted|no data downloaded|rejected the|refused the login|No Copernicus Marine login", l, value = TRUE)
+    err <- err[!grepl("error = function|0 error", err)]
+    wrn <- grep("^Warning|^Aviso|Warning message|skipped -|could not|\\[download\\] nothing|FALLBACK", l, value = TRUE)
+    wrn <- setdiff(wrn, err)
+    ## Click a row's message to see every error and warning of that script
+    ## (home folder shown as ~, so no user name on screen)
+    .hm <- normalizePath(path.expand("~"), winslash = "/", mustWork = FALSE)
+    all_msg <- gsub(.hm, "~", c(err, wrn), fixed = TRUE)
+    first <- if (length(err)) tags$code(substr(all_msg[1], 1, 160)) else if (length(wrn)) tags$small(substr(all_msg[1], 1, 160)) else "ok"
+    tags$tr(tags$td(sub("_log\\.txt$", "", sub("^\\d{8}_", "", basename(f)))),
+            tags$td(format(file.mtime(f), "%d %b %H:%M")),
+            tags$td(class = if (length(err)) "text-danger fw-bold" else "", length(err)),
+            tags$td(length(wrn)),
+            tags$td(if (length(all_msg) > 1 || (length(all_msg) == 1 && nchar(all_msg[1]) > 160))
+              tags$details(tags$summary(style = "cursor: pointer;", first, tags$span(class = "text-primary ms-1", sprintf("(show all %d)", length(all_msg)))),
+                tags$ol(class = "small mb-1 mt-1 ps-3", style = "max-height: 260px; overflow-y: auto;",
+                  lapply(seq_along(all_msg), function(i) tags$li(class = if (i <= length(err)) "text-danger" else NULL, substr(all_msg[i], 1, 400)))))
+              else first))
+  })
+  rd <- function(p) { f <- file.path(.out_dir, p); if (file.exists(f)) tryCatch(data.table::fread(f), error = function(e) NULL) else NULL }
+  fhi <- rd("validation/F_above_1_REVIEW.csv"); nob <- rd("biomass/fg_missing_ecopath_B_REVIEW.csv")
+  tags$div(class = "card mb-3", tags$div(class = "card-body py-2",
+    tags$strong("Summary of the last run"),
+    tags$table(class = "table table-sm small mb-2",
+      tags$thead(tags$tr(tags$th("Script"), tags$th("Log written"), tags$th("Errors"), tags$th("Warnings / notes"), tags$th("First one"))),
+      tags$tbody(rows)),
+    if (!is.null(fhi) && nrow(fhi) && all(c("FG_name", "F") %in% names(fhi)))
+      tags$div(class = "small", tags$strong(sprintf("F > 1 (%d FG): ", nrow(fhi))),
+               paste(sprintf("%s %.2g", fhi$FG_name, fhi$F), collapse = ", "),
+               " - see the 'F by country' figure for where it comes from."),
+    if (!is.null(nob) && nrow(nob)) {
+      nm <- if ("FG_name" %in% names(nob)) nob$FG_name else as.character(nob[[1]])
+      det <- grepl("detritus|discard", nm, ignore.case = TRUE)     # detritus groups: no P/B or EE, B is not estimated
+      tagList(
+        if (any(!det)) tags$div(class = "small", tags$strong(sprintf("No Ecopath B (%d FG): ", sum(!det))),
+                                paste(nm[!det], collapse = ", "), " - Ecopath estimates them from EE."),
+        if (any(det)) tags$div(class = "small", tags$strong("Detritus group(s) without B: "), paste(nm[det], collapse = ", "),
+                               " - Ecopath does not estimate a detritus biomass from EE; enter one in EwE if you have it (it only sets the detritus turnover)."))
+    },
+    tags$div(class = "small text-muted", "Full logs: 'Logs of the last run (.zip)' above, or the *_log.txt files in ", tags$code(.show_path(.out_dir)), ".")))
+})
+
+## --- Results: key plots and every plot in out_dir/plots ----------------------
+## The PNGs are served straight from out_dir/plots (no copy); "?v=<time>"
+## makes the browser fetch a plot again after a run rewrites it.
+makeActiveBinding(".plot_dir", function() if (!is.na(.out_dir)) file.path(.out_dir, "plots") else NA_character_, environment())
+## Served through the session (registerDataObj), which works inside Quarto;
+## only files under out_dir/plots can be read this way.
+.plot_url <- session$registerDataObj("wmplot", .base_out, function(data, req) {
+  q <- shiny::parseQueryString(req$QUERY_STRING)
+  data <- .plot_dir                                 # plots of the results folder shown now
+  root <- normalizePath(data, mustWork = FALSE)
+  f <- normalizePath(file.path(data, if (is.null(q$f)) "" else q$f), mustWork = FALSE)
+  if (is.null(q$f) || !startsWith(f, root) || !file.exists(f) || dir.exists(f))
+    return(list(status = 404L, headers = list("Content-Type" = "text/plain"), body = "not found"))
+  list(status = 200L, headers = list("Content-Type" = "image/png", "Cache-Control" = "max-age=3600"),
+       body = readBin(f, "raw", file.info(f)$size))
+})
+.key_plots <- c("Biomass by source"   = "biomass/biomass_by_fg_source.png",
+                "Biomass series"      = "biomass/survey_fg_density_timeseries_regional.png",
+                "Catch by FG"         = "fisheries/01_catches_per_FG.png",
+                "Catch by FG x fleet" = "fisheries/07_catch_by_fg_and_fleet.png",
+                "Discards by FG x fleet" = "fisheries/08_discards_by_fg_and_fleet.png",
+                "Effort by fleet"     = "fisheries/05_effort_by_country_fleet.png",
+                "P/B vs Q/B"          = "validation/fg_pb_qb_scatter.png",
+                "F by FG"             = "validation/F_by_fg.png",
+                "F by country"        = "validation/12b_F_by_country.png",
+                "P/Q by FG"           = "validation/PQ_ratio_by_fg.png",
+                "Diet matrix"         = "diets/diet_matrix_heatmap.png",
+                "PREBAL"              = "validation/15_prebal.png",
+                "vs 1995 model"       = "validation/biomass_vs_old_model_by_fg.png",
+                "Phytoplankton sources" = "validation/11b_phytoplankton_sources.png",
+                "Environment"         = "environment/environment_timeseries.png")
+
+output$results <- renderUI({
+  last_finished(); st <- run_state()
+  files <- if (!is.na(.plot_dir)) list.files(.plot_dir, "\\.png$", recursive = TRUE) else character(0)
+  if (!length(files)) return(tags$div(class = "alert alert-secondary py-2 small mb-0", "No plots yet - click Run pipeline."))
+  mt <- file.mtime(file.path(.plot_dir, files)); names(mt) <- files
+  src <- function(f) paste0(.plot_url, "&f=", utils::URLencode(f, reserved = TRUE), "&v=", as.integer(mt[[f]]))
+  fmt <- function(t) format(t, "%d %b %Y, %H:%M")
+
+  ## Where these plots come from
+  newest <- max(mt)
+  set <- .settings_lines()
+  set <- gsub("\\s+", " ", trimws(sub("#.*", "", set[grepl("^(MODEL_GSAS|MODEL_AREA_BASIS|YEAR_ECOPATH|TS_YEARS|START_YEAR|END_YEAR|DROP_OUTLIERS)", set)])))
+  from_here <- !is.null(run_finished()) && !is.null(run_started()) &&
+               newest >= run_started() && newest <= run_finished() + 120
+  banner <- if (identical(st, "running")) {
+    tags$div(class = "alert alert-warning py-2 small", "A run is going. These are the previous plots; they are replaced when it finishes.")
+  } else if (from_here && identical(st, "done")) {
+    tags$div(class = "alert alert-success py-2 small",
+             tags$strong("From the run started on this page "), sprintf("on %s, finished %s. ", fmt(run_started()), fmt(run_finished())),
+             tags$br(), tags$code(paste(set, collapse = "; ")))
+  } else {
+    tags$div(class = "alert alert-info py-2 small",
+             sprintf("Plots last written %s by a run outside this page (from the R console or another session).", fmt(newest)),
+             if (!is.null(run_started())) sprintf(" The last run from this page was on %s.", fmt(run_started())))
+  }
+
+  ## Key plots: one tab each
+  ids <- paste0("wm-key-", seq_along(.key_plots))
+  key_nav <- tags$ul(class = "nav nav-tabs", role = "tablist",
+    lapply(seq_along(.key_plots), function(i)
+      tags$li(class = "nav-item", role = "presentation",
+              tags$button(class = paste("nav-link", if (i == 1) "active"), type = "button", role = "tab",
+                          `data-bs-toggle` = "tab", `data-bs-target` = paste0("#", ids[i]), names(.key_plots)[i]))))
+  key_body <- tags$div(class = "tab-content",
+    lapply(seq_along(.key_plots), function(i) {
+      f <- .key_plots[[i]]
+      tags$div(class = paste("tab-pane fade", if (i == 1) "show active"), id = ids[i], role = "tabpanel",
+               if (f %in% files) tags$img(class = "wm-key-img", src = src(f), alt = basename(f))
+               else tags$div(class = "alert alert-secondary small mt-2", "Not available yet: plots/", f))
+    }))
+
+  ## All plots: thumbnails, filter by folder, search by name
+  folder <- dirname(files)
+  ord <- order(folder, basename(files)); files <- files[ord]; folder <- folder[ord]
+  counts <- table(folder)
+  filt <- tags$div(class = "wm-filter",
+    tags$button(type = "button", class = "btn btn-sm btn-outline-primary active", `data-folder` = "", sprintf("All (%d)", length(files))),
+    lapply(names(counts), function(d)
+      tags$button(type = "button", class = "btn btn-sm btn-outline-primary", `data-folder` = d, sprintf("%s (%d)", d, counts[[d]]))),
+    tags$input(id = "wm-search", type = "search", class = "form-control form-control-sm", placeholder = "Search plot name"))
+  grid <- tags$div(class = "wm-grid",
+    lapply(seq_along(files), function(i)
+      tags$div(class = "wm-thumb", `data-folder` = folder[i], `data-name` = tolower(basename(files[i])),
+               tags$img(src = src(files[i]), loading = "lazy", alt = basename(files[i]), title = "Click to zoom"),
+               tags$div(class = "wm-thumb-folder", folder[i]),
+               tags$div(class = "wm-thumb-name", sub("\\.png$", "", basename(files[i]))))))
+
+  tagList(
+    banner,
+    tags$ul(class = "nav nav-pills wm-view", role = "tablist",
+      tags$li(class = "nav-item", tags$button(class = "nav-link active", type = "button", `data-bs-toggle` = "pill",
+                                              `data-bs-target` = "#wm-view-key", "Key plots")),
+      tags$li(class = "nav-item", tags$button(class = "nav-link", type = "button", `data-bs-toggle` = "pill",
+                                              `data-bs-target` = "#wm-view-all", sprintf("All plots (%d)", length(files))))),
+    tags$div(class = "tab-content",
+      tags$div(class = "tab-pane fade show active", id = "wm-view-key", key_nav, key_body),
+      tags$div(class = "tab-pane fade", id = "wm-view-all", filt, grid)),
+    tags$small(class = "text-muted", "Click any plot to zoom. Plots are read from ", tags$code(.show_path(.plot_dir)), "."))
+})
+
+## --- FG explorer: one FG's Ecosim series from the workbook ----------------
+## Reads the Ecosim_ts sheet (rows: Name, Type, ..., Target "N: FG", then one
+## row per year) and plots the relative biomass, with the survey sampling
+## band (index x (1 +/- 1.96 CV), from biomass/survey_index_cv_by_fg_year.csv)
+## when the FG has one, and the catches and discards.
+.ecosim_ts <- reactive({
+  last_finished()
+  if (is.na(.wb_path) || !file.exists(.wb_path)) return(NULL)
+  x <- tryCatch(openxlsx::read.xlsx(.wb_path, "Ecosim_ts", colNames = FALSE), error = function(e) NULL)
+  if (is.null(x) || nrow(x) < 11) return(NULL)
+  lab <- trimws(as.character(x[[1]]))
+  r_type <- which(lab == "Type")[1]; r_tgt <- which(lab == "Target")[1]; r_int <- which(lab == "Interval")[1]
+  if (anyNA(c(r_type, r_tgt, r_int))) return(NULL)
+  yrs <- suppressWarnings(as.integer(lab[(r_int + 1):nrow(x)]))
+  out <- lapply(2:ncol(x), function(j) {
+    tgt <- as.character(x[r_tgt, j]); if (is.na(tgt) || !grepl("^\\d+:", tgt)) return(NULL)
+    data.frame(FG_num = as.integer(sub(":.*", "", tgt)), FG_name = trimws(sub("^\\d+:", "", tgt)),
+               type = as.character(x[r_type, j]), Year = yrs,
+               value = suppressWarnings(as.numeric(x[(r_int + 1):nrow(x), j])), stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, out)
+  if (is.null(out)) NULL else out[!is.na(out$Year) & !is.na(out$value), ]
+})
+## Ecopath baseline of each FG (Ecopath_B sheet): B in t/km2, the years it
+## averages (the info sheet / column name), EE when B is left to Ecopath,
+## and its source (Reference column).
+.ecopath_b <- reactive({
+  last_finished()
+  if (is.na(.wb_path) || !file.exists(.wb_path)) return(NULL)
+  x <- tryCatch(openxlsx::read.xlsx(.wb_path, "Ecopath_B", check.names = FALSE, sep.names = " "), error = function(e) NULL)
+  if (is.null(x) || !all(c("FG_num", "Biomass") %in% names(x))) return(NULL)
+  yc <- grep("^Biomass_\\d{4}(_\\d{4})?$", names(x), value = TRUE)
+  yrs <- if (length(yc)) { v <- as.integer(unlist(regmatches(yc[1], gregexpr("\\d{4}", yc[1])))); seq(min(v), max(v)) } else integer(0)
+  data.frame(FG_num = as.integer(x$FG_num), B = suppressWarnings(as.numeric(x$Biomass)),
+             EE = if ("EE_input" %in% names(x)) suppressWarnings(as.numeric(x$EE_input)) else NA_real_,
+             Ref = if ("Reference" %in% names(x)) as.character(x$Reference) else NA_character_,
+             years = if (length(yrs)) paste(range(yrs), collapse = "-") else NA_character_,
+             y0 = if (length(yrs)) min(yrs) else NA_integer_, y1 = if (length(yrs)) max(yrs) else NA_integer_, stringsAsFactors = FALSE)
+})
+.fmt_b <- function(v) if (!is.finite(v)) "-" else if (v == 0) "0" else if (v >= 0.01) formatC(v, format = "fg", digits = 3) else formatC(v, format = "e", digits = 2)
+output$fg_explore_info <- renderUI({
+  e <- .ecopath_b(); req(input$fg_explore)
+  if (is.null(e)) return(NULL)
+  r <- e[e$FG_num == as.integer(input$fg_explore), ]
+  if (!nrow(r)) return(NULL)
+  r <- r[1, ]
+  ref <- if (is.na(r$Ref) || !nzchar(r$Ref)) "no source recorded" else r$Ref
+  tags$div(class = "small mt-1",
+    tags$strong("Ecopath B", if (!is.na(r$years)) paste0(" (", r$years, ")"), ": "),
+    if (is.finite(r$B)) paste(.fmt_b(r$B), "t/km\u00b2") else
+      if (is.finite(r$EE)) paste0("left to Ecopath (EE = ", r$EE, ")") else "none",
+    tags$details(class = "d-inline ms-2", tags$summary(class = "d-inline text-muted", "source"),
+                 tags$div(class = "text-muted", style = "white-space: normal;", ref)))
+})
+## Every FG of the workbook (FGs sheet, else Ecopath_B), also those without
+## an Ecosim series; those are marked "(no series)" in the list.
+.fg_list <- reactive({
+  last_finished()
+  if (is.na(.wb_path) || !file.exists(.wb_path)) return(NULL)
+  sh <- tryCatch(openxlsx::getSheetNames(.wb_path), error = function(e) character(0))
+  x <- NULL
+  if ("FGs" %in% sh) x <- tryCatch(openxlsx::read.xlsx(.wb_path, "FGs", check.names = FALSE), error = function(e) NULL)
+  if (is.null(x) || !all(c("FG_num", "FG_name") %in% names(x)))
+    x <- tryCatch(openxlsx::read.xlsx(.wb_path, "Ecopath_B", check.names = FALSE, sep.names = " "), error = function(e) NULL)
+  if (is.null(x) || !all(c("FG_num", "FG_name") %in% names(x))) return(NULL)
+  unique(data.frame(FG_num = as.integer(x$FG_num), FG_name = as.character(x$FG_name), stringsAsFactors = FALSE))
+})
+observe({
+  d <- .ecosim_ts(); fl <- .fg_list()
+  fg <- rbind(if (!is.null(fl)) fl, if (!is.null(d) && nrow(d)) unique(d[, c("FG_num", "FG_name")]))
+  if (is.null(fg) || !nrow(fg)) return()
+  fg <- fg[!duplicated(fg$FG_num), ]; fg <- fg[order(fg$FG_num), ]
+  has_b <- if (!is.null(d)) fg$FG_num %in% d$FG_num[d$type == "Biomass (relative)"] else rep(FALSE, nrow(fg))
+  ch <- stats::setNames(fg$FG_num, paste0(fg$FG_num, " - ", fg$FG_name, ifelse(has_b, "", "  (no biomass series)")))
+  updateSelectInput(session, "fg_explore", choices = ch, selected = { s <- isolate(input$fg_explore); if (is.null(s) || !s %in% ch) ch[1] else s })
+})
+output$fg_explore_plot <- renderPlot({
+  d <- .ecosim_ts()
+  validate(need(!is.null(d) && nrow(d), "No Ecosim_ts sheet yet - run the pipeline (01 and 02)."))
+  req(input$fg_explore)
+  .fg_now <- as.integer(input$fg_explore)
+  d <- d[d$FG_num == .fg_now, ]
+  cvf <- file.path(.out_dir, "biomass", "survey_index_cv_by_fg_year.csv")
+  b <- d[d$type == "Biomass (relative)", ]
+  if (nrow(b) && file.exists(cvf)) {
+    cv <- tryCatch(data.table::fread(cvf), error = function(e) NULL)
+    if (!is.null(cv) && all(c("FG_num", "Year", "cv_index") %in% names(cv))) {
+      cv <- as.data.frame(cv)[cv$FG_num == .fg_now, c("Year", "cv_index")]
+      b <- merge(b, cv, by = "Year", all.x = TRUE)
+      b$lo <- pmax(0, b$value * (1 - 1.96 * b$cv_index)); b$hi <- b$value * (1 + 1.96 * b$cv_index)
+    }
+  }
+  ## One colour per series, one legend for both panels (patchwork collects it)
+  cols <- c("Biomass (relative)" = "#0072B2", "Catches" = "#D55E00", "Discards" = "#009E73")
+  sc <- ggplot2::scale_colour_manual(values = cols, limits = names(cols), drop = FALSE, name = NULL)
+  th <- ggplot2::theme_minimal(base_size = 13) + ggplot2::theme(legend.position = "bottom")
+  note_panel <- function(title, txt) ggplot2::ggplot() +
+    ggplot2::annotate("text", x = 0, y = 0, label = txt, size = 3.4, colour = "grey30", lineheight = 1.1) +
+    ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 13) + ggplot2::xlim(-1, 1)
+  empty <- function(title) ggplot2::ggplot() + ggplot2::annotate("text", x = 0, y = 0, label = paste("No", tolower(title))) +
+    ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 13)
+  p1 <- if (nrow(b)) {
+    b$series <- "Biomass (relative)"
+    p <- ggplot2::ggplot(b, ggplot2::aes(Year, value, colour = series))
+    if ("lo" %in% names(b) && any(!is.na(b$lo)))
+      p <- p + ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), fill = cols[["Biomass (relative)"]], colour = NA, alpha = 0.2, na.rm = TRUE)
+    e <- .ecopath_b(); r <- if (!is.null(e)) e[e$FG_num == .fg_now, ][1, ] else NULL
+    sub <- if (!is.null(r) && nrow(r) && !is.na(r$FG_num))
+      paste0("Ecopath B", if (!is.na(r$years)) paste0(" ", r$years), ": ",
+             if (is.finite(r$B)) paste(.fmt_b(r$B), "t/km\u00b2") else if (is.finite(r$EE)) paste0("left to Ecopath (EE ", r$EE, ")") else "none") else NULL
+    if (!is.null(r) && nrow(r) && is.finite(r$y0))   # the Ecopath baseline years
+      p <- p + ggplot2::annotate("rect", xmin = r$y0 - 0.5, xmax = r$y1 + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
+    p + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) + sc + th +
+      ggplot2::labs(title = "Biomass (relative to the first year)", subtitle = sub, x = NULL, y = "B / B first year")
+  } else {
+    .nm <- if (!is.null(.fg_list())) .fg_list()$FG_name[match(.fg_now, .fg_list()$FG_num)] else ""
+    note_panel("Biomass", if (grepl("detritus|discard", .nm, ignore.case = TRUE))
+      "Detritus group: no biomass series.\nEcosim does not fit detritus\nto a time series."
+    else "No biomass series for this group.\nNo survey index, literature or\nstock-assessment trend was found,\nso Ecosim has no biomass series\nto fit for it. Its Ecopath B is below.")
+  }
+  ct <- d[d$type %in% c("Catches", "Discards"), ]
+  p2 <- if (nrow(ct)) {
+    ct$series <- ct$type
+    ggplot2::ggplot(ct, ggplot2::aes(Year, value, colour = series)) + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) +
+      sc + th + ggplot2::labs(title = "Catches and discards", x = NULL, y = "t/km\u00b2")
+  } else note_panel("Catches and discards", "No catch or discards recorded\nfor this group in the data sources.")
+  if (requireNamespace("patchwork", quietly = TRUE))
+    patchwork::wrap_plots(p1, p2, ncol = 2, guides = "collect") & ggplot2::theme(legend.position = "bottom")
+  else p1
+}, res = 96)
+
+## --- Load a settings file (presets) -------------------------------------
+## A settings .R from 'Download .R' (or written by hand) sets the inputs
+## again. The file is NOT run: only its simple assignments are read
+## (numbers, text, TRUE/FALSE, c(), a:b), so a file from someone else
+## cannot execute code on this computer.
+.read_settings <- function(path) {
+  ex <- tryCatch(parse(path, keep.source = FALSE), error = function(e) NULL)
+  if (is.null(ex)) return(NULL)
+  safe <- function(e) {
+    if (is.atomic(e)) return(TRUE)
+    if (is.call(e)) return(as.character(e[[1]])[1] %in% c("c", ":", "-", "(") && all(vapply(as.list(e)[-1], safe, logical(1))))
+    FALSE
+  }
+  out <- list()
+  for (e in ex) {
+    if (!is.call(e) || !as.character(e[[1]]) %in% c("<-", "=") || !is.name(e[[2]]) || !safe(e[[3]])) next
+    out[[as.character(e[[2]])]] <- eval(e[[3]], baseenv())
+  }
+  out
+}
+observeEvent(input$settings_upload, {
+  s <- .read_settings(input$settings_upload$datapath)
+  if (is.null(s) || !length(s)) {
+    showNotification("No settings found in that file (it must be an .R settings file, e.g. from 'Download .R').", type = "error"); return()
+  }
+  rng <- function(v) c(min(v), max(v))
+  used <- character(0); u <- function(k) used <<- c(used, k)
+  if (!is.null(s$YEAR_ECOPATH)) { updateSliderInput(session, "ecopath_years", value = rng(s$YEAR_ECOPATH)); u("YEAR_ECOPATH") }
+  if (!is.null(s$TS_YEARS))     { updateSliderInput(session, "ts_years", value = rng(s$TS_YEARS)); u("TS_YEARS") }
+  sw <- c(STRATA = "strata", DROP_OUTLIERS = "drop_outliers", NORMALIZE_TS = "normalize_ts", APPLY_CATCHABILITY = "catch_q")
+  for (k in names(sw)) if (is.logical(s[[k]])) { updateCheckboxInput(session, sw[[k]], value = isTRUE(s[[k]])); u(k) }
+  if (!is.null(s$ECOPATH_B_FILL_MODE)) { updateCheckboxInput(session, "fill_b", value = identical(s$ECOPATH_B_FILL_MODE, "window_mean")); u("ECOPATH_B_FILL_MODE") }
+  if (!is.null(s$ECOPATH_B_FILL_YEARS)) { updateSliderInput(session, "fill_years", value = rng(s$ECOPATH_B_FILL_YEARS)); u("ECOPATH_B_FILL_YEARS") }
+  if (!is.null(s$HIGH_F_B_FIX)) { updateSelectInput(session, "high_f", selected = s$HIGH_F_B_FIX); u("HIGH_F_B_FIX") }
+  if (!is.null(s$PHYTO_SOURCE)) { updateSelectInput(session, "phyto_src", selected = s$PHYTO_SOURCE); u("PHYTO_SOURCE") }
+  if (!is.null(s$RUN_STEPS))    { updateCheckboxGroupInput(session, "steps_chk", selected = as.character(s$RUN_STEPS)); u("RUN_STEPS") }
+  if (identical(s$AREA_MODE, "custom")) {
+    updateRadioButtons(session, "area_mode", selected = "custom"); u("AREA_MODE")
+    if (!is.null(s$AREA_NAME)) { updateTextInput(session, "area_name", value = s$AREA_NAME); u("AREA_NAME") }
+    if (!is.null(s$CUSTOM_AREA_TYPE)) { updateRadioButtons(session, "custom_type", selected = s$CUSTOM_AREA_TYPE); u("CUSTOM_AREA_TYPE") }
+    b <- s$CUSTOM_BBOX
+    if (length(b) == 4) {
+      if (is.null(names(b))) names(b) <- c("xmin", "xmax", "ymin", "ymax")
+      for (k in c("xmin", "xmax", "ymin", "ymax")) updateNumericInput(session, paste0("bbox_", k), value = unname(b[[k]]))
+      u("CUSTOM_BBOX")
+    }
+  } else {
+    if (!is.null(s$MODEL_GSAS) || !is.null(s$AREA_MODE)) updateRadioButtons(session, "area_mode", selected = "westmed")
+    if (!is.null(s$MODEL_GSAS)) { updateCheckboxGroupInput(session, "gsas", selected = as.character(s$MODEL_GSAS)); u("MODEL_GSAS") }
+    if (!is.null(s$MODEL_AREA_BASIS)) { updateRadioButtons(session, "basis", selected = s$MODEL_AREA_BASIS); u("MODEL_AREA_BASIS") }
+  }
+  skipped <- setdiff(names(s), c(used, "CLEAN_START"))
+  showNotification(HTML(paste0("Settings loaded: ", paste(used, collapse = ", "),
+                               if (length(skipped)) paste0("<br>Not set on the page (set them in the R console): ", paste(skipped, collapse = ", ")),
+                               if (!is.null(s$CUSTOM_SHAPEFILE_PATH)) "<br>Upload the region file again (a shapefile path cannot be loaded).")),
+                   type = "message", duration = 12)
+})
+
+## --- Which run's results to show -------------------------------------------
+## Every output folder with a workbook: the main one (default inputs) and
+## each out_dir/runs/<name>. Newest first.
+.run_folders <- function() {
+  if (is.na(.base_out)) return(character(0))
+  d <- unname(c(.base_out, list.dirs(file.path(.base_out, "runs"), recursive = FALSE)))
+  d <- d[file.exists(file.path(d, "ecopath_ecosim_inputs.xlsx")) | dir.exists(file.path(d, "plots"))]
+  if (!length(d)) return(character(0))
+  mt <- vapply(d, function(x) { f <- file.path(x, "ecopath_ecosim_inputs.xlsx"); as.numeric(if (file.exists(f)) file.mtime(f) else file.mtime(x)) }, 0, USE.NAMES = FALSE)
+  o <- order(-mt); d <- d[o]; mt <- mt[o]
+  stats::setNames(d, paste0(vapply(d, .run_label, ""), " - ", format(as.POSIXct(mt, origin = "1970-01-01"), "%d %b %H:%M")))
+}
+observe({
+  last_finished()
+  ch <- .run_folders()
+  sel <- isolate(.results_dir())
+  if (length(ch) && !sel %in% ch) sel <- ch[[1]]
+  updateSelectInput(session, "results_run", choices = ch, selected = sel)
+  if (length(ch) && !identical(sel, isolate(.results_dir()))) .results_dir(sel)
+})
+observeEvent(input$results_run, {
+  if (!nzchar(input$results_run) || identical(input$results_run, .results_dir())) return()
+  .results_dir(input$results_run); last_finished(Sys.time())
+}, ignoreInit = TRUE)
+output$results_run_note <- renderUI({
+  last_finished(); want <- .inputs_run_dir(); shown <- .results_dir()
+  if (identical(normalizePath(want, mustWork = FALSE), normalizePath(shown, mustWork = FALSE))) return(NULL)
+  tags$div(class = "wm-help", "The inputs set above would write to ", tags$code(.run_label(want)),
+           if (!want %in% .run_folders()) " (no results there yet)" else "", "; shown here: ", tags$code(.run_label(shown)), ".")
+})

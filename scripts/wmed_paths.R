@@ -15,7 +15,7 @@
 ## Order for pcloud_dir and out_dir (the first folder that EXISTS on this
 ## computer wins, so a path written for another laptop is skipped):
 ##   1. config.local.R  - this computer only (git-ignored; written by
-##                        medbs_pipeline_methodology.qmd or
+##                        WMed-EwEbuilder.qmd or
 ##                        run_pipeline_demo.R when you pick a folder)
 ##   2. config.R        - shared in the repo (Daniel's paths)
 ##   3. environment variables WMED_PCLOUD_DIR / WMED_OUT_DIR
@@ -26,7 +26,7 @@
 ##      and for out_dir ~/WMed_EwE_output (created if missing)
 ##
 ## Used by run_pipeline_demo.R, 01-05 (when run on their own) and
-## medbs_pipeline_methodology.qmd.
+## WMed-EwEbuilder.qmd.
 ## =================================================================
 
 .wmed_pcloud_name <- "EwE Western Med 2026"
@@ -48,6 +48,41 @@
   NA_character_
 }
 
+## Home folder. On some Windows set-ups R's "~" does not expand (the
+## 2026-10-27 run wrote its outputs to C:/~/WMed_EwE_output), so on
+## Windows fall back to the user's Documents folder (where R puts "~"
+## normally), then the user profile.
+.wmed_home <- function() {
+  h <- gsub("\\\\", "/", path.expand("~"))
+  if (.Platform$OS.type == "windows" && (grepl("~", h, fixed = TRUE) || !dir.exists(h))) {
+    up <- Sys.getenv("USERPROFILE")
+    for (cand in c(file.path(up, "Documents"), up))
+      if (nzchar(up) && dir.exists(cand)) return(gsub("\\\\", "/", cand))
+  }
+  h
+}
+## Broken HOME on Windows (e.g. HOME set to "~"): repaired for this R
+## session and everything it starts (the pipeline's Rscript, git, package
+## caches), so no user has to change Windows settings. Windows' own
+## default for HOME is the user profile (C:/Users/<name>). The Windows
+## setting itself is not changed.
+local({
+  if (.Platform$OS.type != "windows") return(invisible())
+  h <- Sys.getenv("HOME"); up <- Sys.getenv("USERPROFILE")
+  if (nzchar(h) && (grepl("~", h, fixed = TRUE) || !dir.exists(h)) && nzchar(up) && dir.exists(up)) {
+    Sys.setenv(HOME = gsub("\\\\", "/", up))
+    message("[wmed_paths] HOME was '", h, "' (not a folder) - using ", Sys.getenv("HOME"), " for this R session.")
+  }
+})
+
+## "~/x" -> <home>/x with .wmed_home(); other paths unchanged
+.wmed_expand <- function(p) {
+  p <- gsub("\\\\", "/", p)
+  i <- !is.na(p) & grepl("^~(/|$)", p)
+  p[i] <- paste0(.wmed_home(), substring(p[i], 2))
+  p
+}
+
 ## Values of out_dir / pcloud_dir written in one config file
 .wmed_read_config <- function(f) {
   e <- new.env()
@@ -59,7 +94,7 @@
 
 wmed_find_paths <- function(git_dir = NULL) {
   if (is.null(git_dir) || is.na(git_dir)) git_dir <- .wmed_repo_root()
-  git_dir <- sub("/+$", "", path.expand(git_dir))
+  git_dir <- sub("/+$", "", .wmed_expand(git_dir))
   cfg_files <- c(file.path(git_dir, "config.local.R"), file.path(git_dir, "scripts", "config.local.R"),
                  file.path(git_dir, "config.R"), file.path(git_dir, "scripts", "config.R"))
   cfg_files <- cfg_files[file.exists(cfg_files)]
@@ -68,7 +103,7 @@ wmed_find_paths <- function(git_dir = NULL) {
     cand <- c(vapply(cfg, function(x) x[[name]], ""), extra)
     src <- c(basename(cfg_files), names(extra))
     keep <- !is.na(cand) & nzchar(cand)
-    cand <- path.expand(cand[keep]); src <- src[keep]
+    cand <- .wmed_expand(cand[keep]); src <- src[keep]
     hit <- which(dir.exists(cand))[1]
     if (is.na(hit)) list(path = NA_character_, from = NA_character_) else list(path = sub("/+$", "", cand[hit]), from = src[hit])
   }
@@ -79,7 +114,7 @@ wmed_find_paths <- function(git_dir = NULL) {
                              `pCloud Drive (volume)` = file.path("/Volumes/pCloud Drive", .wmed_pcloud_name)))
   od <- pick("out_dir", c(env = Sys.getenv("WMED_OUT_DIR")))
   if (is.na(od$path)) {
-    od <- list(path = file.path(path.expand("~"), "WMed_EwE_output"), from = "default (~/WMed_EwE_output)")
+    od <- list(path = file.path(.wmed_home(), "WMed_EwE_output"), from = "default (~/WMed_EwE_output)")
     dir.create(od$path, recursive = TRUE, showWarnings = FALSE)
   }
   ok <- !is.na(git_dir) && file.exists(file.path(git_dir, "scripts", "01_biomass.R")) && !is.na(pc$path) && dir.exists(od$path)
@@ -111,8 +146,46 @@ wmed_save_local_config <- function(git_dir, out_dir = NULL, pcloud_dir = NULL) {
   old <- if (file.exists(f)) .wmed_read_config(f) else list(out_dir = NA, pcloud_dir = NA)
   out_dir <- if (is.null(out_dir)) old$out_dir else out_dir
   pcloud_dir <- if (is.null(pcloud_dir)) old$pcloud_dir else pcloud_dir
+  ## "/" in the saved paths: a Windows path with "\" inside "..." is not valid R
+  if (!is.na(out_dir)) out_dir <- gsub("\\\\", "/", out_dir)
+  if (!is.na(pcloud_dir)) pcloud_dir <- gsub("\\\\", "/", pcloud_dir)
   writeLines(c("## config.local.R - folders on THIS computer (not committed; see wmed_paths.R).",
                if (!is.na(out_dir)) sprintf('out_dir    <- "%s"', out_dir),
                if (!is.na(pcloud_dir)) sprintf('pcloud_dir <- "%s"', pcloud_dir)), f)
   invisible(f)
+}
+
+## --- One output folder per set of inputs ------------------------------
+## A run writes to out_dir only with the default inputs (GSAs 1-12, whole
+## GSA area, Ecopath 1994-1996, Ecosim 1995-2023, FG_WMed_2026.csv). Any
+## other area, years or FG table writes to its own folder,
+##   out_dir/runs/<area>__EP<years>_TS<years>[__FG-<table>]
+## e.g. runs/GSA6-7__EP1994-1996_TS1995-2023, runs/myBox__EP2000-2002_TS2000-2020,
+## so runs with different inputs never overwrite each other; the same
+## inputs again reuse (and overwrite) their folder. Downloads and caches
+## (bathymetry, taxonomy, Copernicus, GSA shapefile) stay in out_dir and
+## are shared by every run. Used by run_pipeline_demo.R and the page.
+wmed_run_name <- function(area_mode = "westmed", gsas = 1:12, basis = "whole_gsa", area_name = NULL,
+                          year_ecopath = 1994:1996, ts_years = 1995:2023, fg_file = NULL,
+                          default_fg = "FG_WMed_2026.csv") {
+  rng <- function(v) { v <- range(as.integer(v)); if (v[1] == v[2]) v[1] else paste(v, collapse = "-") }
+  gsas <- sort(unique(as.integer(gsas)))
+  custom <- identical(area_mode, "custom")
+  fg <- if (is.null(fg_file) || is.na(fg_file) || !nzchar(fg_file)) default_fg else basename(fg_file)
+  is_default <- !custom && identical(gsas, 1:12) && identical(basis, "whole_gsa") &&
+    identical(as.integer(range(year_ecopath)), c(1994L, 1996L)) && identical(as.integer(range(ts_years)), c(1995L, 2023L)) &&
+    identical(fg, default_fg)
+  if (is_default) return("")
+  area <- if (custom) gsub("[^A-Za-z0-9_-]", "_", if (is.null(area_name) || !nzchar(area_name)) "custom_region" else area_name) else {
+    runs <- split(gsas, cumsum(c(1, diff(gsas) != 1)))
+    paste0("GSA", paste(vapply(runs, function(r) if (length(r) > 2) paste0(r[1], "to", r[length(r)]) else paste(r, collapse = "-"), ""),
+                        collapse = "-"), if (identical(basis, "medits_10_800")) "_medits10-800" else "")
+  }
+  years <- paste0("EP", rng(year_ecopath), "_TS", rng(ts_years))
+  fgp <- if (!identical(fg, default_fg)) paste0("FG-", gsub("[^A-Za-z0-9_-]", "_", sub("\\.[A-Za-z]+$", "", fg))) else NULL
+  paste(c(area, years, fgp), collapse = "__")
+}
+wmed_run_dir <- function(base_out_dir, run_name) {
+  base_out_dir <- sub("/+$", "", base_out_dir)
+  if (is.null(run_name) || !nzchar(run_name)) base_out_dir else file.path(base_out_dir, "runs", run_name)
 }

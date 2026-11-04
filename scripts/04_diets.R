@@ -26,8 +26,15 @@
   }
   p
 }
-ggsave <- function(filename, plot = ggplot2::last_plot(), ..., bg = "white", readable = TRUE)
-  ggplot2::ggsave(filename, if (isTRUE(readable)) .readable(plot) else plot, ..., bg = bg)
+## PNGs are drawn with ragg when installed: several times faster than the
+## default png() device, above all on Windows (where the 30-panel
+## coverage map took ~3 min instead of ~20 s on a Mac), same look.
+ggsave <- function(filename, plot = ggplot2::last_plot(), ..., bg = "white", readable = TRUE) {
+  dots <- list(...)
+  if (is.null(dots$device) && grepl("\\.png$", filename, ignore.case = TRUE) && requireNamespace("ragg", quietly = TRUE))
+    dots$device <- ragg::agg_png
+  do.call(ggplot2::ggsave, c(list(filename, if (isTRUE(readable)) .readable(plot) else plot), dots, list(bg = bg)))
+}
 if (!exists("PLOT_DPI", envir = .GlobalEnv, inherits = FALSE)) PLOT_DPI <- 300
 
 ## --- Folders on any laptop (wmed_paths.R) ----------------------------------
@@ -156,10 +163,14 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
     stop("[04_diets.R] out_dir was pre-set by the calling script but doesn't exist on this machine: \"",
          out_dir, "\". Fix it in the driver script (e.g. run_pipeline_demo.R) before sourcing this file.")
   }
-} else if (tolower(Sys.info()[["user"]]) == "daniel" && .Platform$OS.type == "unix") {
-  out_dir <- "/Users/daniel/Work/iMARES/WMed EwE Model/output/"
-  pcloud_dir   <- "/Users/daniel/pCloud Drive/EwE Western Med 2026/"
-  git_dir <-"/Users/daniel/Documents/GitHub/WMed_EwE/"
+} else if (isTRUE(local({   # run on its own: folders from wmed_paths.R (config.local.R, config.R, or the standard pCloud place)
+  .d <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+  if (!file.exists(file.path(.d, "wmed_paths.R"))) .d <- getwd()
+  file.exists(file.path(.d, "wmed_paths.R")) && {
+    source(file.path(.d, "wmed_paths.R"), local = TRUE)
+    isTRUE(wmed_set_paths(dirname(.d))$ok)
+  }
+}))) {
 } else {
   if (!requireNamespace("rstudioapi", quietly = TRUE) || !rstudioapi::isAvailable()) {
     stop("This script requires RStudio. Please select the output directory manually.")
@@ -631,7 +642,8 @@ fetch_fishbase_diet_for_species <- function(species_names) {
   
   fetch_one <- function(fn_name, ..., server) {
     if (!exists(fn_name, where = asNamespace("rfishbase"), inherits = FALSE)) return(data.table())
-    tryCatch(as.data.table(do.call(get(fn_name, envir = asNamespace("rfishbase")), list(..., server = server))),
+    tryCatch(fishbase_memo(fn_name, server, list(...),   # shared FishBase snapshot (lib_survey_fg_density_functions.R)
+                           function() as.data.table(do.call(get(fn_name, envir = asNamespace("rfishbase")), list(..., server = server)))),
              error = function(e) {
                message("[04_diets.R] rfishbase::", fn_name, "(server = '", server, "') failed: ", conditionMessage(e))
                data.table()

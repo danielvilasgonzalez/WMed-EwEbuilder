@@ -107,15 +107,42 @@ CMEMS_VENV_DIR <- Sys.getenv("COPERNICUSMARINE_VENV", unset = path.expand("~/.co
   FALSE
 }
 
+## Sys.which() that ignores the Windows "App execution alias" stubs in
+## ...\WindowsApps\ (python.exe / python3.exe / pip.exe that only open the
+## Microsoft Store): on a Windows laptop without Python they made the run
+## try to build a virtualenv and pip-install, and step 01 hung (2026-10-27).
+.cmems_which <- function(name) {
+  p <- Sys.which(name)
+  if (.Platform$OS.type == "windows" && nzchar(p) && grepl("WindowsApps", p, ignore.case = TRUE)) "" else p
+}
+
+## Windows: pip puts copernicusmarine.exe in the Scripts folder of the
+## Python install (or of the user site), which is often not on PATH.
+.cmems_windows_scripts <- function() {
+  if (.Platform$OS.type != "windows" || Sys.which("copernicusmarine") != "") return(FALSE)
+  roots <- c(Sys.getenv("LOCALAPPDATA"), Sys.getenv("APPDATA"))
+  cand <- unlist(lapply(roots[nzchar(roots)], function(r) c(
+    Sys.glob(file.path(r, "Programs", "Python", "*", "Scripts", "copernicusmarine.exe")),
+    Sys.glob(file.path(r, "Python", "*", "Scripts", "copernicusmarine.exe")))))
+  if (!length(cand)) return(FALSE)
+  Sys.setenv(PATH = paste(normalizePath(dirname(cand[1])), Sys.getenv("PATH"), sep = .Platform$path.sep))
+  message("[CMEMS diag] CLI check: found ", cand[1], " (added its folder to PATH for this R session).")
+  TRUE
+}
+
 ensure_copernicusmarine_cli <- function(auto_install = TRUE) {
+  if (Sys.which("copernicusmarine") == "") .cmems_windows_scripts()
   if (Sys.which("copernicusmarine") == "") .cmems_use_venv_if_present()
+  ## A run started from the page (Rscript, not interactive) never installs
+  ## Python packages itself: CMEMS is only a fallback / cross-check here.
+  if (!interactive() && !isTRUE(getOption("wmed.cmems_auto_install", FALSE))) auto_install <- FALSE
   if (Sys.which("copernicusmarine") != "") {
     message("[CMEMS diag] CLI check: ok (found on PATH at '", Sys.which("copernicusmarine"), "').")
     return(TRUE)
   }
   if (auto_install) {
     ## Preferred install route: a dedicated venv (works under Homebrew/PEP 668).
-    py_venv <- if (Sys.which("python3") != "") "python3" else NA
+    py_venv <- if (.cmems_which("python3") != "") "python3" else NA
     if (!is.na(py_venv)) {
       message("[CMEMS diag] CLI check: not found - creating a virtualenv at '", CMEMS_VENV_DIR,
               "' and installing copernicusmarine into it...")
@@ -139,7 +166,7 @@ ensure_copernicusmarine_cli <- function(auto_install = TRUE) {
   }
   message("[CMEMS diag] CLI check: not found on PATH - attempting to install now via pip",
           " ('pip install copernicusmarine')...")
-  pip_bin <- if (Sys.which("pip3") != "") "pip3" else if (Sys.which("pip") != "") "pip" else NA
+  pip_bin <- if (.cmems_which("pip3") != "") "pip3" else if (.cmems_which("pip") != "") "pip" else NA
   if (is.na(pip_bin)) {
     message("[CMEMS diag] CLI check: FAILED - neither 'pip3' nor 'pip' found on PATH either.",
             " Install Python/pip first, or install copernicusmarine manually.")
@@ -155,7 +182,7 @@ ensure_copernicusmarine_cli <- function(auto_install = TRUE) {
     ## '...' which is not on PATH"). Rather than give up, ask Python
     ## itself where its user-site bin directory is and add it to PATH
     ## for the rest of THIS R session if the binary is actually there.
-    py_bin <- if (Sys.which("python3") != "") "python3" else if (Sys.which("python") != "") "python" else NA
+    py_bin <- if (.cmems_which("python3") != "") "python3" else if (.cmems_which("python") != "") "python" else NA
     if (!is.na(py_bin)) {
       user_base <- tryCatch(system2(py_bin, c("-m", "site", "--user-base"), stdout = TRUE),
                             error = function(e) character(0))
@@ -202,6 +229,16 @@ ensure_copernicusmarine_cli <- function(auto_install = TRUE) {
 ensure_copernicusmarine_credentials <- function(renviron_path = "~/.Renviron", force_prompt = FALSE) {
   cm_user <- Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME", unset = NA)
   cm_pass <- Sys.getenv("COPERNICUSMARINE_SERVICE_PASSWORD", unset = NA)
+  ## A run started from the page (Rscript) may not have read the .Renviron
+  ## where the login was saved (on Windows R looks in Documents, and HOME
+  ## can be broken): read the usual places explicitly.
+  if (!force_prompt && (is.na(cm_user) || !nzchar(cm_user))) {
+    up <- Sys.getenv("USERPROFILE")
+    for (f in unique(c(path.expand(renviron_path), if (nzchar(up)) file.path(up, c(".Renviron", "Documents/.Renviron")))))
+      if (file.exists(f)) try(readRenviron(f), silent = TRUE)
+    cm_user <- Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME", unset = NA)
+    cm_pass <- Sys.getenv("COPERNICUSMARINE_SERVICE_PASSWORD", unset = NA)
+  }
   if (force_prompt) {
     message("[CMEMS diag] Copernicus Marine rejected the stored login - asking for your own username and password.")
     cm_user <- NA; cm_pass <- NA
@@ -212,6 +249,13 @@ ensure_copernicusmarine_credentials <- function(renviron_path = "~/.Renviron", f
   }
 
   message("[CMEMS diag] Credentials check: not set (COPERNICUSMARINE_SERVICE_USERNAME/PASSWORD absent).")
+  ## Nobody can type a password into a run started from the page (Rscript):
+  ## a prompt there can wait forever. CMEMS is skipped instead.
+  if (!interactive()) {
+    message("[CMEMS diag] Not an interactive session - CMEMS skipped (it is only a fallback / cross-check).",
+            " Run 01 once from the R console to enter the Copernicus Marine login.")
+    return(NULL)
+  }
 
   have_rstudio_popup <- requireNamespace("rstudioapi", quietly = TRUE) &&
     tryCatch(isTRUE(rstudioapi::isAvailable()), error = function(e) FALSE)
@@ -268,6 +312,7 @@ ensure_copernicusmarine_credentials <- function(renviron_path = "~/.Renviron", f
                  paste0("COPERNICUSMARINE_SERVICE_USERNAME=", cm_user),
                  paste0("COPERNICUSMARINE_SERVICE_PASSWORD=", cm_pass))
   writeLines(new_lines, renviron_full_path)
+  Sys.chmod(renviron_full_path, mode = "0600")
   message("[CMEMS diag] Credentials check: ok (entered just now, saved to ", renviron_full_path,
           " - you won't be asked again on future runs).")
 
@@ -346,7 +391,7 @@ fetch_cmems_phytoplankton_biomass <- function(out_dir, force_refresh = FALSE,
               "--minimum-longitude", bbox["lon_min"], "--maximum-longitude", bbox["lon_max"],
               "--minimum-latitude", bbox["lat_min"], "--maximum-latitude", bbox["lat_max"],
               "--minimum-depth", "0", "--maximum-depth", as.character(integration_depth_m),
-              "--output-filename", basename(nc_path), "--output-directory", dirname(nc_path),
+              "--output-filename", shQuote(basename(nc_path)), "--output-directory", shQuote(dirname(nc_path)),
               cred_args)  # '--force-download' removed: the option no longer exists in copernicusmarine toolbox v2
     printable_args <- if (!is.na(cm_pass)) gsub(cm_pass, "***", args, fixed = TRUE) else args
     message("[CMEMS diag] Download attempt: copernicusmarine ",
@@ -435,4 +480,15 @@ fetch_cmems_phytoplankton_biomass <- function(out_dir, force_refresh = FALSE,
   })
 
   invisible(result)
+}
+
+
+## Enter (or change) the Copernicus Marine login once, from the R console:
+##   source("lib_cmems_phytoplankton_biomass.R"); wmed_copernicus_login()
+## It asks for the username and password (RStudio pop-ups, password
+## hidden) and saves them in your own ~/.Renviron, where runs started from
+## the page find them. Nothing is written to the code or the logs.
+wmed_copernicus_login <- function() {
+  if (!interactive()) stop("Run wmed_copernicus_login() from the R console (it asks for the password).")
+  invisible(!is.null(ensure_copernicusmarine_credentials(force_prompt = TRUE)))
 }

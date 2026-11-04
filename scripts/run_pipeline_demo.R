@@ -32,9 +32,11 @@ if (!exists("CLEAN_START", envir = .GlobalEnv, inherits = FALSE) || isTRUE(CLEAN
   invisible(gc())
 }
 options(warn = 1)
-## RUN_STEPS: which scripts to run (1 = 01_biomass ... 5 = 05_validation).
+## RUN_STEPS: which scripts to run (1 = 01_biomass ... 5 = 05_validation,
+## 6 = 06_environment, the Copernicus environmental drivers; 6 runs before
+## 5 when both are asked, so the validation can compare its phytoplankton).
 ## Default all; e.g. RUN_STEPS <- 5 redraws the validation plots from the
-## outputs already on disk (used by medbs_pipeline_methodology.qmd).
+## outputs already on disk (used by WMed-EwEbuilder.qmd).
 if (!exists("RUN_STEPS", envir = .GlobalEnv, inherits = FALSE)) RUN_STEPS <- 1:5
 
 RUN_MODE <- "westmed_default"   # Western Mediterranean (GSAs 1-12, or a custom region inside them)
@@ -75,6 +77,15 @@ if (length(.missing)) stop("[run_pipeline_demo.R] These folders do not exist on 
 if (any(!file.exists(.scripts))) stop("[run_pipeline_demo.R] Missing in git_dir:\n  ",
                                       paste(.scripts[!file.exists(.scripts)], collapse = "\n  "), call. = FALSE)
 
+## Packages: install_packages.R checks every package the pipeline uses and
+## installs what is missing (a new laptop gets everything before step 01
+## starts; on a ready laptop this takes about a second).
+source(file.path(git_dir, "scripts", "install_packages.R"))
+
+## Run record and history (lib_run_record.R): the previous results are
+## copied to out_dir/previous_runs/ before this run overwrites them.
+source(file.path(git_dir, "scripts", "lib_run_record.R"))   # the previous run is archived below, once this run's folder is known
+
 ## ---- 2. Run settings -----------------------------------------------
 if (RUN_MODE == "westmed_default") {
   ## Western Med model. Model area and years are set here (all scripts
@@ -92,7 +103,7 @@ if (RUN_MODE == "westmed_default") {
   ##   MODEL_GSAS, coast to bottom (depths outside 10-800 m filled with
   ##   AquaMaps); "medits_10_800" = only the 10-800 m MEDITS strata.
   ## A value already set before this file is sourced wins (e.g. from
-  ## medbs_pipeline_methodology.qmd's params, with CLEAN_START <- FALSE).
+  ## WMed-EwEbuilder.qmd's params, with CLEAN_START <- FALSE).
   .set_default <- function(name, value) if (!exists(name, envir = .GlobalEnv, inherits = FALSE)) assign(name, value, envir = .GlobalEnv)
   .set_default("MODEL_GSAS",       1:12)
   .set_default("MODEL_AREA_BASIS", "whole_gsa")
@@ -157,14 +168,31 @@ if (RUN_MODE == "westmed_default") {
 if (.custom_run) {
   if (!exists("AREA_NAME", envir = .GlobalEnv, inherits = FALSE)) AREA_NAME <- "custom_region"
   AREA_NAME <- gsub("[^A-Za-z0-9_-]", "_", AREA_NAME)
-  if (basename(sub("/+$", "", out_dir)) != AREA_NAME) out_dir <- file.path(sub("/+$", "", out_dir), AREA_NAME)
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   if (exists("MODEL_GSAS", envir = .GlobalEnv, inherits = FALSE)) rm(MODEL_GSAS, envir = .GlobalEnv)   # 01 uses the region's own polygons
   FILTER_AREAS <- NULL
-  message("\n=== Custom region '", AREA_NAME, "': steps ", paste(RUN_STEPS, collapse = ", "), "; outputs in ", out_dir, " ===\n")
 } else {
   FILTER_AREAS <- MODEL_GSAS   # the survey/catch filters of 01 and 02 follow the model GSAs
 }
+
+## ---- Output folder of this run (wmed_paths.R: wmed_run_name) ------------
+## Default inputs -> out_dir itself; any other area, years or FG table ->
+## out_dir/runs/<area>__EP<years>_TS<years>[__FG-<table>], so runs with
+## different inputs never overwrite each other. OUT_BASE_DIR keeps the
+## main folder: downloads and caches stay there, shared by every run.
+## The scripts see the run folder as out_dir.
+OUT_BASE_DIR <- sub("/+$", "", out_dir)   # the main output folder, from wmed_set_paths() above
+RUN_NAME <- wmed_run_name(area_mode = if (.custom_run) "custom" else "westmed",
+                          gsas = if (.custom_run) integer(0) else MODEL_GSAS, basis = get0("MODEL_AREA_BASIS", ifnotfound = "whole_gsa"),
+                          area_name = get0("AREA_NAME", ifnotfound = NULL), year_ecopath = YEAR_ECOPATH, ts_years = TS_YEARS,
+                          fg_file = get0("FG_SPECIES_FILE", ifnotfound = NULL))
+RUN_DIR <- wmed_run_dir(OUT_BASE_DIR, RUN_NAME)
+out_dir <- RUN_DIR
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+if (nzchar(RUN_NAME)) writeLines(c(paste("Run:", RUN_NAME), paste("Last run:", format(Sys.time(), "%Y-%m-%d %H:%M"))),
+                                 file.path(out_dir, "RUN_INFO.txt"))
+message("\n=== ", if (nzchar(RUN_NAME)) paste0("Inputs differ from the defaults: own folder runs/", RUN_NAME) else "Default inputs: main output folder",
+        ". Run folder: ", out_dir, " ===\n")
+tryCatch(wmed_archive_previous_run(out_dir), error = function(e) message("[run record] previous run not archived: ", conditionMessage(e)))
 ## Custom region, before 02: the catch GSAs from 01's overlap table
 .set_custom_catch_gsas <- function() {
   ov <- file.path(out_dir, "biomass", "custom_gsa_overlap.csv")
@@ -180,15 +208,16 @@ if (.custom_run) {
 ## objects and settings of earlier ones). A failing step stops the run
 ## and names the step and its log. 05 is optional and never stops the run.
 .t0 <- Sys.time()
+.step_minutes <- list()
 ## Progress file (set WMED_PROGRESS_FILE, as the Run button of
-## medbs_pipeline_methodology.qmd does): one line when a step starts and
+## WMed-EwEbuilder.qmd does): one line when a step starts and
 ## one when it ends, written with base::cat so the scripts' own logging
 ## cannot redirect it.
 .progress_file <- Sys.getenv("WMED_PROGRESS_FILE", "")
 .progress <- function(txt) if (nzchar(.progress_file)) base::cat(txt, "\n", sep = "", file = .progress_file, append = TRUE)
 .run_step <- function(i, script, note = "") {
-  message(sprintf("\n--- Step %d/5: %s %s---", i, script, note))
-  .progress(sprintf("--- Step %d/5: %s", i, script))
+  message(sprintf("\n--- Step %d/6: %s %s---", i, script, note))
+  .progress(sprintf("--- Step %d/6: %s", i, script))
   t <- Sys.time()
   ## Each script sets options(error = ...) to write errors to its log; put
   ## the session's own handler back afterwards, or every later error in this
@@ -203,8 +232,9 @@ if (.custom_run) {
                   call. = FALSE)
            })
   while (sink.number() > 0) sink()
-  message(sprintf("--- Step %d/5 done in %.1f min ---", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
-  .progress(sprintf("--- Step %d/5 done in %.1f min", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
+  message(sprintf("--- Step %d/6 done in %.1f min ---", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
+  .step_minutes[[sprintf("%02d", i)]] <<- round(as.numeric(difftime(Sys.time(), t, units = "mins")), 1)
+  .progress(sprintf("--- Step %d/6 done in %.1f min", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
 }
 
 if (1 %in% RUN_STEPS) .run_step(1, "01_biomass.R", "[MEDITS/MEDIAS + unsurveyed groups; the first run after a strata change rebuilds the strata areas from NOAA bathymetry - needs internet] ")
@@ -212,14 +242,29 @@ if (.custom_run && any(2:5 %in% RUN_STEPS)) .set_custom_catch_gsas()
 if (2 %in% RUN_STEPS) .run_step(2, "02_fisheries.R", "[catch, landings, discards, effort, F] ")
 if (3 %in% RUN_STEPS) .run_step(3, "03_pbqb-traits.R", "[P/B, Q/B, traits; includes the EcoBase query] ")
 if (4 %in% RUN_STEPS) .run_step(4, "04_diets.R", "[diet matrix] ")
+## 06 never stops the run: a missing Copernicus login or download only skips it
+if (6 %in% RUN_STEPS)
+  tryCatch(.run_step(6, "06_environment.R", "[Copernicus: temperature, salinity, NPP, phytoplankton B and P/B; the first run downloads several GB] "),
+           error = function(e) message("06_environment.R failed (the other steps are not affected): ", conditionMessage(e)))
 
 if (!exists("RUN_VALIDATION", envir = .GlobalEnv, inherits = FALSE)) RUN_VALIDATION <- TRUE
 if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
   tryCatch(.run_step(5, "05_validation.R", "[comparison with the 1995 model + all checks] "),
            error = function(e) message("05_validation.R failed (steps 1-4 are complete): ", conditionMessage(e)))
 } else {
-  message("--- Step 5/5: skipped (RUN_VALIDATION = FALSE) ---")
+  if (5 %in% RUN_STEPS) message("--- Step 5/6: skipped (RUN_VALIDATION = FALSE) ---")
 }
+
+## Run record: settings, minutes per step, git commit, R and package
+## versions, input files (out_dir/run_record_<time>.json + the info sheet)
+.rec_names <- c("RUN_STEPS", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
+                "AREA_MODE", "AREA_NAME", "CUSTOM_AREA_TYPE", "CUSTOM_BBOX", "STRATA", "DROP_OUTLIERS", "NORMALIZE_TS",
+                "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE", "HIGH_F_B_FIX")
+.rec_settings <- Filter(Negate(is.null), lapply(stats::setNames(.rec_names, .rec_names), function(n)
+  if (exists(n, envir = .GlobalEnv, inherits = FALSE)) get(n, envir = .GlobalEnv) else NULL))
+if (exists("FG_SPECIES_FILE", envir = .GlobalEnv)) .rec_settings$FG_SPECIES_FILE <- basename(FG_SPECIES_FILE)
+tryCatch(wmed_write_run_record(out_dir, git_dir, pcloud_dir, .t0, .rec_settings, .step_minutes),
+         error = function(e) message("[run record] not written: ", conditionMessage(e)))
 
 message(sprintf("\n=== Pipeline finished in %.1f min. Workbook: %s ===",
                 as.numeric(difftime(Sys.time(), .t0, units = "mins")),

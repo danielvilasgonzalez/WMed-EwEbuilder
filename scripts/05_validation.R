@@ -26,8 +26,15 @@
   }
   p
 }
-ggsave <- function(filename, plot = ggplot2::last_plot(), ..., bg = "white", readable = TRUE)
-  ggplot2::ggsave(filename, if (isTRUE(readable)) .readable(plot) else plot, ..., bg = bg)
+## PNGs are drawn with ragg when installed: several times faster than the
+## default png() device, above all on Windows (where the 30-panel
+## coverage map took ~3 min instead of ~20 s on a Mac), same look.
+ggsave <- function(filename, plot = ggplot2::last_plot(), ..., bg = "white", readable = TRUE) {
+  dots <- list(...)
+  if (is.null(dots$device) && grepl("\\.png$", filename, ignore.case = TRUE) && requireNamespace("ragg", quietly = TRUE))
+    dots$device <- ragg::agg_png
+  do.call(ggplot2::ggsave, c(list(filename, if (isTRUE(readable)) .readable(plot) else plot), dots, list(bg = bg)))
+}
 if (!exists("PLOT_DPI", envir = .GlobalEnv, inherits = FALSE)) PLOT_DPI <- 300
 
 ## --- Folders on any laptop (wmed_paths.R) ----------------------------------
@@ -145,10 +152,14 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
     stop("[05_validation.R] out_dir was pre-set by the calling script but doesn't exist on this machine: \"",
          out_dir, "\". Fix it in the driver script (e.g. run_pipeline_demo.R) before sourcing this file.")
   }
-} else if (tolower(Sys.info()[["user"]]) == "daniel" && .Platform$OS.type == "unix") {
-  out_dir <- "/Users/daniel/Work/iMARES/WMed EwE Model/output/"
-  pcloud_dir   <- "/Users/daniel/pCloud Drive/EwE Western Med 2026/"
-  git_dir <-"/Users/daniel/Documents/GitHub/WMed_EwE/"
+} else if (isTRUE(local({   # run on its own: folders from wmed_paths.R (config.local.R, config.R, or the standard pCloud place)
+  .d <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+  if (!file.exists(file.path(.d, "wmed_paths.R"))) .d <- getwd()
+  file.exists(file.path(.d, "wmed_paths.R")) && {
+    source(file.path(.d, "wmed_paths.R"), local = TRUE)
+    isTRUE(wmed_set_paths(dirname(.d))$ok)
+  }
+}))) {
 } else {
   if (!requireNamespace("rstudioapi", quietly = TRUE) || !rstudioapi::isAvailable()) {
     stop("This script requires RStudio. Please select the output directory manually.")
@@ -686,16 +697,29 @@ fwrite(bio_cmp, file.path(csv_out_dir, "biomass_vs_old_model_REVIEW.csv"))
   x_old <- rng[2] * 30; x_new <- rng[2] * 300; x_rat <- rng[2] * 3000
   pts <- melt(d, id.vars = c("label"), measure.vars = c("old", "new"), variable.name = "model", value.name = "B")[is.finite(B) & B > 0]
   pts[, model := factor(model, levels = c("old", "new"), labels = c("Old WMed 1995 model", "New pipeline"))]
+  ## Rows where new/old is outside [VALIDATION_RATIO_LOW, VALIDATION_RATIO_HIGH]
+  ## (default 0.5-2) get a shaded band and a coloured, bold ratio.
+  hi_lab <- paste0("new/old > ", VALIDATION_RATIO_HIGH); lo_lab <- paste0("new/old < ", VALIDATION_RATIO_LOW)
+  d[, flag := fifelse(!is.na(ratio) & ratio > VALIDATION_RATIO_HIGH, hi_lab,
+               fifelse(!is.na(ratio) & ratio < VALIDATION_RATIO_LOW, lo_lab, NA_character_))]
+  d[, y_pos := as.numeric(label)]
   ggplot() +
+    scale_y_discrete(limits = levels(d$label)) +
+    geom_rect(data = d[!is.na(flag)], aes(xmin = 0, xmax = Inf, ymin = y_pos - 0.5, ymax = y_pos + 0.5, fill = flag), alpha = 0.35) +
     geom_segment(data = d[is.finite(new) & is.finite(old) & new > 0 & old > 0], aes(x = old, xend = new, y = label, yend = label), colour = "grey75", linewidth = 0.5) +
     geom_point(data = pts, aes(x = B, y = label, colour = model), size = 1.8) +
     geom_text(data = d, aes(x = x_old, y = label, label = .fmt_b(old)), size = 2.1, colour = "grey35", hjust = 1) +
     geom_text(data = d, aes(x = x_new, y = label, label = .fmt_b(new)), size = 2.1, colour = "firebrick", hjust = 1) +
-    geom_text(data = d, aes(x = x_rat, y = label, label = ifelse(is.na(ratio), "", paste0("x", signif(ratio, 2)))), size = 2.1, hjust = 1) +
+    geom_text(data = d[is.na(flag)], aes(x = x_rat, y = label, label = ifelse(is.na(ratio), "", paste0("x", signif(ratio, 2)))), size = 2.1, hjust = 1) +
+    geom_text(data = d[!is.na(flag)], aes(x = x_rat, y = label, label = paste0("x", signif(ratio, 2)), colour = flag), size = 2.3, hjust = 1, fontface = "bold", show.legend = FALSE) +
     annotate("text", x = c(x_old, x_new, x_rat), y = Inf, label = c("old", "new", "new/old"), vjust = -0.4, hjust = 1, size = 2.4, fontface = "bold") +
     scale_x_log10() + coord_cartesian(clip = "off") +
-    scale_colour_manual(values = c("Old WMed 1995 model" = "grey40", "New pipeline" = "firebrick")) +
-    labs(title = title, subtitle = sub, x = "Biomass (t/km2, log scale)", y = NULL, colour = NULL) +
+    scale_colour_manual(values = setNames(c("grey40", "firebrick", "#b2182b", "#2166ac"), c("Old WMed 1995 model", "New pipeline", hi_lab, lo_lab)),
+                        breaks = c("Old WMed 1995 model", "New pipeline")) +
+    scale_fill_manual(values = setNames(c("#f4a582", "#92c5de"), c(hi_lab, lo_lab)), drop = FALSE, name = NULL) +
+    labs(title = title, subtitle = paste0(sub, "\nShaded rows: new/old above ", VALIDATION_RATIO_HIGH, " (red) or below ", VALIDATION_RATIO_LOW,
+                                          " (blue); ", sum(!is.na(d$flag)), " of ", sum(!is.na(d$ratio)), " FGs."),
+         x = "Biomass (t/km2, log scale)", y = NULL, colour = NULL) +
     theme_minimal(base_size = 8) + theme(legend.position = "top", plot.margin = margin(18, 8, 5, 5))
 }
 p_bio <- tryCatch(.bio_pair_plot("old_B_t_km2_on_new_area", "Ecopath B: new pipeline vs old WMed 1995 model (same total tonnes)",
@@ -813,11 +837,21 @@ validation_plots[["02_pbqb_plausibility"]] <- tryCatch({
   p <- fread(file.path(out_dir, "pbqb-traits", "plausibility_flag_REVIEW.csv"))
   d <- p[!is.na(PB_FG) & !is.na(QB_FG) & PB_FG > 0 & QB_FG > 0]
   if (nrow(d) == 0) stop("no FG has both a positive PB_FG and QB_FG to plot")
+  .num <- intersect(c("FG_num", "FG"), names(d))[1]                 # the FG number column is 'FG' in this file
+  d[, lab := if ("FG_name" %in% names(d)) paste(if (!is.na(.num)) get(.num) else "", FG_name) else if (!is.na(.num)) as.character(get(.num)) else ""]
+  d[, lab := trimws(lab)]
+  .lab_layer <- if (requireNamespace("ggrepel", quietly = TRUE))
+    ggrepel::geom_text_repel(aes(label = lab), size = 2.1, max.overlaps = Inf, min.segment.length = 0, segment.size = 0.2,
+                             segment.colour = "grey60", show.legend = FALSE, seed = 1)
+  else geom_text(aes(label = lab), size = 2.1, vjust = -0.7, show.legend = FALSE)
   ggplot(d, aes(x = PB_FG, y = QB_FG, color = plausibility_flag)) +
     geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey50") +           # QB = PB (P/Q = 1, the impossible boundary)
-    geom_abline(slope = 1/0.05, intercept = 0, linetype = "dotted", colour = "grey70") +      # P/Q = 0.05 (bottom of typical band)
-    geom_abline(slope = 1/0.3, intercept = 0, linetype = "dotted", colour = "grey70") +       # P/Q = 0.3 (top of typical band)
-    geom_point(size = 2, alpha = 0.8) +
+    ## On log axes geom_abline works in log10 units: QB = PB / k is
+    ## log10(QB) = log10(PB) + log10(1/k), i.e. slope 1, intercept log10(1/k).
+    ## (Until 2026-11-03 these were slope 1/k, intercept 0: wrong lines.)
+    geom_abline(slope = 1, intercept = log10(1/0.05), linetype = "dotted", colour = "grey60") +   # P/Q = 0.05 (bottom of typical band)
+    geom_abline(slope = 1, intercept = log10(1/0.3), linetype = "dotted", colour = "grey60") +    # P/Q = 0.3 (top of typical band)
+    geom_point(size = 2, alpha = 0.8) + .lab_layer +
     scale_x_log10() + scale_y_log10() +
     scale_color_manual(values = c("Plausible" = "grey30", "Outside typical 0.05-0.3 P/Q range - review" = "darkorange",
                                   "IMPOSSIBLE (PB_FG <= 0)" = "firebrick", "IMPOSSIBLE (QB_FG <= 0)" = "firebrick",
@@ -1041,6 +1075,87 @@ validation_plots[["11_zooplankton_total_field_check"]] <- tryCatch({
     theme_minimal(base_size = 9)
 }, error = function(e) { message("[05_validation.R plot] zooplankton field check skipped - ", conditionMessage(e)); NULL })
 
+## 11b) Phytoplankton B and P/B: every source side by side.
+##  - Ecopath inputs now in the workbook (Ecopath_B, Ecopath_PBQB; B from
+##    the ISIMIP COBALT section of 01b, P/B from EcoBase)
+##  - ISIMIP3a GFDL-MOM6-COBALT2, 1995 (01b; B only)
+##  - Copernicus Marine (06_environment.R): MedBFM, before 1999 PISCES
+##    scaled to MedBFM; B 1995, P/B = NPP 1994-1995 / B 1995
+##  - old WMed 1995 model (WMed_EwE.xlsx), as published (t/km2 of its
+##    own area: phytoplankton is a density, so no area rescaling)
+##  Time series: total phytoplankton B per year, ISIMIP vs Copernicus.
+##  All B in t WW/km2 (C:WW 1:9 in both model sources).
+validation_plots[["11b_phytoplankton_sources"]] <- tryCatch({
+  phy_fg <- if (!is.null(new_B)) new_B[grepl("phytoplankton", FG_name, ignore.case = TRUE), .(FG_num, FG_name)] else data.table()
+  if (!nrow(phy_fg)) stop("no phytoplankton FG in Ecopath_B")
+  phy_fg[, group := fifelse(grepl("large", FG_name, ignore.case = TRUE), "Large", fifelse(grepl("small", FG_name, ignore.case = TRUE), "Small", FG_name))]
+  rows <- list()
+  ## Ecopath inputs now
+  bb <- new_B[FG_num %in% phy_fg$FG_num, .(FG_num, B = suppressWarnings(as.numeric(Biomass)))]
+  pp <- if (!is.null(new_PBQB)) new_PBQB[FG_num %in% phy_fg$FG_num, .(FG_num, PB = suppressWarnings(as.numeric(PB_FG)))] else data.table(FG_num = integer(), PB = numeric())
+  rows$now <- merge(merge(phy_fg, bb, by = "FG_num", all.x = TRUE), pp, by = "FG_num", all.x = TRUE)[, source := "Ecopath now (B ISIMIP, P/B EcoBase)"]
+  ## ISIMIP 1995
+  isi_f <- file.path(out_dir, "biomass", "isimip3a_cobalt2_plankton_detritus_timeseries_wholegsa.csv")
+  isi <- if (file.exists(isi_f)) fread(isi_f) else NULL
+  if (!is.null(isi)) {
+    i95 <- isi[Year == 1995 & grepl("Phytoplankton", TargetGroup)]
+    rows$isimip <- data.table(group = sub("Phytoplankton", "", i95$TargetGroup), B = i95$Biomass_t_km2, PB = NA_real_,
+                              source = "ISIMIP COBALT2, 1995")
+  }
+  ## Copernicus (06_environment.R)
+  env_f <- file.path(out_dir, "environment", "ecopath_phytoplankton_B_PB.csv")
+  env <- if (file.exists(env_f)) fread(env_f) else NULL
+  if (!is.null(env)) rows$env <- data.table(group = sub("Phytoplankton", "", env$TargetGroup), B = env$Biomass_t_km2, PB = env$PB,
+                                            source = paste0("Copernicus (B ", env$B_year[1], ", P/B ", env$PB_npp_years[1], ")"))
+  else message("[05_validation.R] Phytoplankton sources: no environment/ecopath_phytoplankton_B_PB.csv yet - run 06_environment.R to add Copernicus.")
+  ## old 1995 model
+  if (exists("comparison_dt") && nrow(comparison_dt)) {
+    old <- comparison_dt[FG_num %in% phy_fg$FG_num & metric %in% c("Biomass", "PB"), .(FG_num, metric, old_value)]
+    if (nrow(old)) {
+      old <- dcast(old, FG_num ~ metric, value.var = "old_value", fun.aggregate = function(x) x[1])
+      if (!"PB" %in% names(old)) old[, PB := NA_real_]
+      if (!"Biomass" %in% names(old)) old[, Biomass := NA_real_]
+      rows$old <- merge(phy_fg, old, by = "FG_num")[, .(group, B = Biomass, PB, source = "Old 1995 model")]
+    }
+  }
+  cmp <- rbindlist(lapply(rows, function(x) x[, .(source, group, B, PB)]), fill = TRUE)
+  cmp <- rbind(cmp, cmp[, .(group = "Total", B = if (all(is.na(B))) NA_real_ else sum(B, na.rm = TRUE),
+                            PB = if (all(is.na(PB) | is.na(B))) NA_real_ else sum(PB * B, na.rm = TRUE) / sum(B[!is.na(PB)], na.rm = TRUE)),
+                        by = source])
+  cmp[, P_t_km2_yr := B * PB]
+  fwrite(cmp, file.path(csv_out_dir, "phytoplankton_sources_REVIEW.csv"))
+  message("[05_validation.R] Phytoplankton sources (total B t/km2 | P/B): ",
+          paste(cmp[group == "Total", sprintf("%s %s | %s", source, signif(B, 3), signif(PB, 3))], collapse = "; "))
+  cmp[, group := factor(group, levels = c("Large", "Small", "Total"))]
+  p_b <- ggplot(cmp[is.finite(B)], aes(x = B, y = source, colour = group)) +
+    geom_point(size = 3, position = position_dodge(width = 0.5)) +
+    labs(title = "Phytoplankton B by source", x = "B (t WW/km2)", y = NULL, colour = NULL) +
+    theme_minimal(base_size = 10) + theme(legend.position = "top")
+  p_pb <- ggplot(cmp[is.finite(PB)], aes(x = PB, y = source, colour = group)) +
+    geom_point(size = 3, position = position_dodge(width = 0.5)) +
+    labs(title = "Phytoplankton P/B by source", x = "P/B (yr-1)", y = NULL, colour = NULL) +
+    theme_minimal(base_size = 10) + theme(legend.position = "none")
+  ## annual total B: ISIMIP vs Copernicus
+  ts <- list()
+  if (!is.null(isi)) ts$isi <- isi[grepl("Phytoplankton", TargetGroup), .(B = sum(Biomass_t_km2)), by = .(year = Year)][, source := "ISIMIP3a COBALT2"]
+  ann_f <- file.path(out_dir, "environment", "environment_timeseries_annual.csv")
+  if (file.exists(ann_f)) {
+    ann <- fread(ann_f)[variable == "phyto_c"]
+    c2ww <- if (exists("PHYTO_C_TO_WW")) PHYTO_C_TO_WW else 9
+    ts$env <- ann[, .(year, B = value * c2ww, source = fifelse(grepl("PISCES", source), "Copernicus (PISCES scaled to MedBFM)", "Copernicus MedBFM"))]
+  }
+  ts <- rbindlist(ts, fill = TRUE)
+  p_ts <- if (nrow(ts)) ggplot(ts, aes(x = year, y = B, colour = source)) + geom_line() + geom_point(size = 1.2) +
+    labs(title = "Total phytoplankton B per year", x = NULL, y = "B (t WW/km2)", colour = NULL) +
+    theme_minimal(base_size = 10) + theme(legend.position = "bottom") + guides(colour = guide_legend(ncol = 1)) else NULL
+  p <- (p_b / p_pb) | p_ts
+  if (!is.null(p_ts)) p <- p + patchwork::plot_layout(widths = c(1.2, 1))
+  if (is.null(p_ts)) p <- p_b / p_pb
+  p + patchwork::plot_annotation(title = "Phytoplankton: Ecopath inputs vs ISIMIP, Copernicus and the old 1995 model",
+                                 subtitle = paste0("Copernicus (06_environment.R): MedBFM 0-200 m; before 1999 PISCES scaled to MedBFM month by month.\n",
+                                                   "Large/Small from satellite size classes, same P/B for both. B in t WW/km2 (C:WW 1:9)."))
+}, error = function(e) { message("[05_validation.R plot] phytoplankton sources skipped - ", conditionMessage(e)); NULL })
+
 ## 12) Ecosim time series: new Ecosim_ts vs the old model's "timeseries"
 ## sheet (WMed_EwE.xlsx). Series are matched by target FG (old names
 ## through old_to_new_fg_crosswalk.csv, else exact name) and by kind
@@ -1106,7 +1221,7 @@ for (.k in c("Biomass", "Catch")) {
     dl <- melt(d, id.vars = c("panel", "Year"), measure.vars = c("I_new", "I_old"), variable.name = "series", value.name = "I")
     dl[, series := fifelse(series == "I_new", "New pipeline", "Old model (1995)")]
     ggplot(dl, aes(Year, I, colour = series)) + geom_line() + geom_point(size = 0.6) +
-      facet_wrap(~ panel, scales = "free_y") +
+      facet_wrap(~ panel, scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
       scale_colour_manual(values = c("New pipeline" = "firebrick", "Old model (1995)" = "grey30")) +
       labs(title = paste0("Ecosim ", tolower(.k), " time series: new vs old model"),
            subtitle = "Each series divided by its mean over the common years; panels sorted by correlation r (lowest first)",
@@ -1136,6 +1251,98 @@ f_hi <- tryCatch({
 }, error = function(e) { message("[05_validation.R] F > 1 check skipped - ", conditionMessage(e)); NULL })
 .add_summary_row("Fishing mortality above 1 (F_above_1_REVIEW.csv)", file.path(csv_out_dir, "F_above_1_REVIEW.csv"), if (is.null(f_hi)) NA_integer_ else nrow(f_hi))
 if (!is.null(f_hi) && nrow(f_hi)) message("[05_validation.R] F > 1 for ", nrow(f_hi), " FG(s): ", paste(sprintf("%s (%.2f)", f_hi$FG_name, f_hi$F), collapse = ", "))
+
+## (a2) Where does a high F come from? F by country (the catch data are by
+## country; MEDITS biomass is by GSA, grouped to the country of each GSA).
+## For each FG with F >= REGIONAL_F_MIN (0.5) in the Ecopath years:
+##   catch share  c_k = C_k / sum(C)       C_k = mean catch of country k, Ecopath years
+##   biomass share b_k = B_k / sum(B)      B_k = sum over its GSAs of D_g x A_g
+##     D_g = MEDITS mean density of the FG in GSA g (t/km2, Ecopath years),
+##     A_g = model area of GSA g (model_area_by_gsa.csv). GSAs without MEDITS
+##     (3 Morocco, 4 Algeria, 12 Tunisia) get the area-weighted mean D of the
+##     surveyed GSAs (ASSUMPTION, as in 01's imputation).
+##   F_k = F x c_k / b_k                   (the F of the whole model is F = sum C / sum B)
+## F_k much above F: that country's catch is high for the biomass the survey
+## sees there (catch too high, assigned to this FG, or biomass too low
+## there). "survey sees none" = catch in a country whose GSAs have zero
+## MEDITS density for the FG. Biomass from stock assessments or literature
+## has no survey split; such FGs only show the catch shares.
+if (!exists("REGIONAL_F_MIN")) REGIONAL_F_MIN <- 0.5
+GSA_COUNTRY <- c(`1` = "Spain", `2` = "Spain", `3` = "Morocco", `4` = "Algeria", `5` = "Spain", `6` = "Spain",
+                 `7` = "France", `8` = "France", `9` = "Italy", `10` = "Italy", `11` = "Italy", `12` = "Tunisia")
+validation_plots[["12b_F_by_country"]] <- tryCatch({
+  fp <- file.path(out_dir, "fisheries", "F_by_fg.csv")
+  cp <- file.path(out_dir, "fisheries", "catches_by_country_fleet_sector_year.csv")
+  sp <- file.path(out_dir, "biomass", "survey_fg_annual_index.csv")
+  ap <- file.path(out_dir, "biomass", "model_area_by_gsa.csv")
+  for (f in c(fp, cp, sp, ap)) if (!file.exists(f)) stop(basename(f), " not found")
+  yrs <- if (exists("YEAR_ECOPATH")) YEAR_ECOPATH else 1994:1996
+  fdt <- fread(fp)[is.finite(F) & F >= REGIONAL_F_MIN, .(FG_num, FG_name, F)]
+  if (!nrow(fdt)) stop("no FG with F >= ", REGIONAL_F_MIN)
+  cat_k <- fread(cp, select = c("Country", "FG_num", "Year", "Catch_t"))[Year %in% yrs & FG_num %in% fdt$FG_num,
+             .(C_t = sum(Catch_t, na.rm = TRUE) / length(yrs)), by = .(FG_num, Country)]
+  area <- fread(ap)[, .(GSA = as.integer(GSA), A = area_km2)]
+  area[, Country := GSA_COUNTRY[as.character(GSA)]]
+  dens <- fread(sp)[Year %in% yrs & FG_num %in% fdt$FG_num, .(D = mean(mean_density, na.rm = TRUE)), by = .(FG_num, GSA)]
+  surveyed <- unique(fread(sp, select = "GSA")$GSA)
+  bio <- rbindlist(lapply(fdt$FG_num, function(fg) {
+    g <- copy(area)[, FG_num := fg]
+    g <- merge(g, dens[FG_num == fg, .(GSA, D)], by = "GSA", all.x = TRUE)
+    g[GSA %in% surveyed & is.na(D), D := 0]                                  # surveyed, FG never caught there
+    d_imp <- if (any(g$GSA %in% surveyed)) g[GSA %in% surveyed, sum(D * A) / sum(A)] else NA_real_
+    g[!GSA %in% surveyed, `:=`(D = d_imp, imputed = TRUE)]
+    g[is.na(imputed), imputed := FALSE]
+    g[, .(B_t = sum(D * A), imputed = all(imputed)), by = .(FG_num, Country)]
+  }))
+  has_survey <- dens[, .(n = .N), by = FG_num][n > 0, FG_num]
+  r <- merge(bio, cat_k, by = c("FG_num", "Country"), all = TRUE)
+  r[is.na(C_t), C_t := 0]
+  r[!FG_num %in% has_survey, `:=`(B_t = NA_real_, imputed = NA)]
+  r[, `:=`(catch_share = C_t / sum(C_t), B_share = B_t / sum(B_t, na.rm = TRUE)), by = FG_num]
+  r <- merge(r, fdt, by = "FG_num")
+  ## where the model's B comes from (Ecopath_B Reference): the MEDITS split
+  ## is exact for MEDITS-based B, only indicative for B from stock
+  ## assessments or acoustic surveys
+  bref <- tryCatch(as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, "Ecopath_B"))[, .(FG_num, ref = as.character(Reference))],
+                   error = function(e) data.table(FG_num = integer(), ref = character()))
+  bref[, B_source := fifelse(grepl("^MEDITS", ref), "MEDITS", fifelse(grepl("acoustic|MEDIAS", ref, ignore.case = TRUE), "acoustic",
+                      fifelse(grepl("stock assessment|ICCAT|SSB", ref, ignore.case = TRUE), "stock assessment", "other")))]
+  r <- merge(r, bref[, .(FG_num, B_source)], by = "FG_num", all.x = TRUE)
+  r[, F_country := F * catch_share / B_share]
+  r[, note := fifelse(is.na(B_share), "no survey biomass for this FG (catch share only)",
+              fifelse(C_t > 0 & B_share == 0, "survey sees none here",
+              fifelse(imputed %in% TRUE, "no MEDITS in this country: biomass imputed", "")))]
+  r[!B_source %in% c("MEDITS", NA), note := trimws(paste0(note, fifelse(nzchar(note), "; ", ""), "model B from ", B_source,
+                                                         ": MEDITS split only indicative"))]
+  setorder(r, -F, FG_num, -catch_share)
+  fwrite(r[, .(FG_num, FG_name, B_source, Country, F_model = F, catch_t = C_t, catch_share, B_share, F_country, note)],
+         file.path(csv_out_dir, "F_by_country_REVIEW.csv"))
+  top <- r[is.finite(F_country) & catch_share >= 0.05][order(-F_country)][1:min(.N, 8)]
+  message("[05_validation.R] F by country (F_by_country_REVIEW.csv): highest - ",
+          paste(sprintf("%s in %s %.2g (model F %.2g; %.0f%% of catch, %.0f%% of biomass)", top$FG_name, top$Country, top$F_country, top$F,
+                        100 * top$catch_share, 100 * top$B_share), collapse = "; "))
+  d <- copy(r)
+  d[, fg_txt := sprintf("%d %s (F %.2g%s)", FG_num, FG_name, F, fifelse(B_source %in% c("MEDITS", NA), "", paste0("; B ", B_source)))]
+  d[, fg_lab := factor(fg_txt, levels = rev(unique(fg_txt)))]
+  d[, lab := fifelse(C_t <= 0, "", fifelse(is.na(B_share), sprintf("c %.0f%%", 100 * catch_share),
+             fifelse(B_share == 0, "B = 0", sprintf("%.2g", F_country))))]
+  d[, Ffill := pmin(pmax(F_country, 0.01), 100)]
+  d[C_t <= 0 | !is.finite(F_country), Ffill := NA]
+  d[, Country := factor(Country, levels = c("Spain", "France", "Italy", "Tunisia", "Algeria", "Morocco"))]
+  ggplot(d, aes(x = Country, y = fg_lab, fill = Ffill)) +
+    geom_tile(colour = "white") +
+    geom_text(aes(label = lab, fontface = ifelse(is.finite(F_country) & F_country > 1, "bold", "plain")), size = 2.6) +
+    scale_fill_gradient2(low = "#2166ac", mid = "#f7f7f7", high = "#b2182b", midpoint = 0, trans = "log10", na.value = "grey92",
+                         limits = c(0.01, 100), oob = scales::squish, name = "F in the country") +
+    labs(title = "Where the high fishing mortality comes from: F by country",
+         subtitle = paste0("FGs with model F >= ", REGIONAL_F_MIN, " (", paste(range(yrs), collapse = "-"),
+                           "). F_country = F x (country's share of the catch) / (its share of the MEDITS biomass).\n",
+                           "Red = catch high for the biomass the survey sees there. 'B = 0': catch where the survey finds none.\n",
+                           "'c %': no survey split (catch share only); grey: no catch. Morocco, Algeria, Tunisia have no MEDITS:\n",
+                           "their biomass share is imputed from the surveyed GSAs. Table: validation/F_by_country_REVIEW.csv"),
+         x = NULL, y = NULL) +
+    theme_minimal(base_size = 9) + theme(panel.grid = element_blank(), legend.position = "right")
+}, error = function(e) { message("[05_validation.R plot] F by country skipped - ", conditionMessage(e)); NULL })
 
 ## (b) Time series assessment: every Ecosim_ts series (biomass B_, catch L_,
 ## effort...) described by years with data, first/last year, longest gap,
@@ -1168,7 +1375,11 @@ validation_plots[["13_ecosim_ts_assessment"]] <- tryCatch({
   ggplot(d, aes(Year, series, fill = flag != "ok")) + geom_tile() +
     scale_fill_manual(values = c(`FALSE` = "grey55", `TRUE` = "firebrick"), labels = c("ok", "flagged")) +
     labs(title = "Ecosim time series: years with data", subtitle = "Red = flagged (few years, gap > 5 years, CV > 1 or jump > 5x) - see ecosim_ts_assessment_REVIEW.csv",
-         x = NULL, y = NULL, fill = NULL) + theme_minimal(base_size = 6) + theme(legend.position = "bottom")
+         x = NULL, y = NULL, fill = NULL) + theme_minimal(base_size = 9) +
+    ## one row per series (often 60+): small y labels on the fixed-size PDF
+    ## page; the PNG is drawn taller with larger labels (STEP C below)
+    theme(legend.position = "bottom", axis.text.y = element_text(size = 5), plot.title = element_text(size = 12),
+          plot.subtitle = element_text(size = 8))
 }, error = function(e) { message("[05_validation.R plot] Time series assessment skipped - ", conditionMessage(e)); NULL })
 
 ## (c) Unsurveyed FGs vs other models: this model's Ecopath_B (t WW/km2 of
@@ -1231,6 +1442,24 @@ prebal <- tryCatch({
   tl_dt <- data.table(FG_num = as.integer(names(TL)), TL = as.numeric(TL))
   bb <- read_sheet_safe("Ecopath_B", c("FG_num", "FG_name", "Biomass"))
   pq <- read_sheet_safe("Ecopath_PBQB", c("FG_num", "PB_FG", "QB_FG"))
+  ## A group with an empty diet column gets TL = 1. That is right for
+  ## primary producers (Q/B = 0, or a plant/phytoplankton name), detritus
+  ## and discards, but not for a consumer whose diet is still missing
+  ## (corals and gorgonians, meso- and microzooplankton, suprabenthos
+  ## until their literature diets are filled): those would sit at TL 1
+  ## and pull the PREBAL fit, so they are left out, with a message.
+  .no_diet <- pred_num[colSums(DC) <= 0]
+  if (length(.no_diet)) {
+    .qb0 <- if (!is.null(pq)) pq[is.finite(as.numeric(QB_FG)) & as.numeric(QB_FG) == 0, FG_num] else integer(0)
+    .prod <- bb[grepl("phytoplankton|posidonia|cymodocea|seagrass|macroalgae|algae|detritus|discard", FG_name, ignore.case = TRUE), FG_num]
+    .cons <- setdiff(.no_diet, c(.qb0, .prod))
+    if (length(.cons)) {
+      tl_dt[FG_num %in% .cons, TL := NA_real_]
+      message("[05_validation.R] PREBAL: ", length(.cons), " consumer FG(s) with an empty diet left out (their TL would be 1): ",
+              paste(bb[FG_num %in% .cons, paste(FG_num, FG_name)], collapse = ", "))
+    }
+  }
+  tl_dt <- tl_dt[!is.na(TL)]
   d <- merge(tl_dt, bb[, .(FG_num, FG_name, B = as.numeric(Biomass))], by = "FG_num")
   if (!is.null(pq)) d <- merge(d, pq[, .(FG_num, PB = as.numeric(PB_FG), QB = as.numeric(QB_FG))], by = "FG_num", all.x = TRUE)
   d <- d[!grepl("detritus|discard", FG_name, ignore.case = TRUE)]
@@ -1557,7 +1786,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
       scale_color_manual(values = c(`TRUE` = "firebrick", `FALSE` = "grey50"),
                          labels = c(`TRUE` = "Chosen for FG average", `FALSE` = "Other method"), name = NULL) +
       scale_size_manual(values = c(`TRUE` = 4, `FALSE` = 2.5), guide = "none") +
-      facet_wrap(~ FG_label, scales = "free_y") +
+      facet_wrap(~ FG_label, scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
       theme_bw(base_size = 11) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
       labs(title = "P/B method comparison - fish, by functional group",
@@ -1580,7 +1809,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
       scale_color_manual(values = c(`TRUE` = "firebrick", `FALSE` = "grey50"),
                          labels = c(`TRUE` = "Chosen for FG average", `FALSE` = "Other method"), name = NULL) +
       scale_size_manual(values = c(`TRUE` = 4, `FALSE` = 2.5), guide = "none") +
-      facet_wrap(~ FG_label, scales = "free_y") +
+      facet_wrap(~ FG_label, scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
       theme_bw(base_size = 11) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom") +
       labs(title = "Q/B method comparison - fish, by functional group",
@@ -1752,6 +1981,8 @@ if (length(validation_plots) == 0) {
   n_fg_biomass_plot <- tryCatch(
     comparison_dt[metric == "Biomass" & !is.na(ratio) & is.finite(ratio) & ratio > 0, uniqueN(FG_name)],
     error = function(e) 0)
+  .own_png <- c("01_old_vs_new_comparison", "01b_biomass_vs_old_model_by_fg", "01c_biomass_vs_old_model_as_published")
+  unlink(file.path(plot_dir, paste0(.own_png, ".png")))   # remove the copies older runs wrote
   for (nm in names(validation_plots)) {
     ## embedded_png_pages' names are basename(png_path) - already-existing
     ## PNGs produced by an earlier pipeline script, keyed WITH their ".png"
@@ -1760,8 +1991,21 @@ if (length(validation_plots) == 0) {
     ## file named "<name>.png.png" for no reason - the real PNG already
     ## exists at its own original path, so just skip it.
     if (nm %in% names(embedded_png_pages)) next
+    ## these three already have their own PNG (saved above under a
+    ## descriptive name); a second copy here was the same figure twice
+    if (nm %in% .own_png) next
     ht <- if (nm %in% c("01b_biomass_vs_old_model_by_fg", "01c_biomass_vs_old_model_as_published", "16_pedigree")) 14 else if (nm == "15_prebal") 5 else 7
-    tryCatch(ggsave(file.path(plot_dir, paste0(nm, ".png")), validation_plots[[nm]], width = 10, height = ht, dpi = PLOT_DPI, bg = "white", limitsize = FALSE),
+    p_save <- validation_plots[[nm]]; readable <- TRUE
+    if (identical(nm, "13_ecosim_ts_assessment")) {
+      ## height grows with the number of series so every y label fits at a
+      ## readable size (the general minimum text size made 60+ labels overlap)
+      n_series <- tryCatch(length(unique(p_save$data$series)), error = function(e) 60L)
+      ht <- max(7, 0.16 * n_series + 2)
+      p_save <- p_save + theme(axis.text.y = element_text(size = 8), axis.text.x = element_text(size = 9))
+      readable <- FALSE
+    }
+    tryCatch(ggsave(file.path(plot_dir, paste0(nm, ".png")), p_save, width = 10, height = ht, dpi = PLOT_DPI, bg = "white",
+                    limitsize = FALSE, readable = readable),
              error = function(e) NULL)
   }
   message("\n[05_validation.R] STEP C - ", length(validation_plots), " page(s) written to '", VALIDATION_PLOTS_PDF,

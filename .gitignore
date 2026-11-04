@@ -72,3 +72,17 @@ scripts/qmd_out_dir.txt
 config.local.R
 scripts/config.local.R
 scripts/medbs_pipeline_methodology.html
+scripts/medbs_pipeline_methodology_files/
+## the page (WMed-EwEbuilder.qmd) is rendered on each laptop - its HTML and _files are not committed
+scripts/WMed-EwEbuilder.html
+scripts/WMed-EwEbuilder_files/
+
+# dated backup copies of scripts (kept out of GitHub; the git history is the backup)
+*_backup_*
+
+# each computer's own folders (wmed_paths.R reads config.local.R, then config.R)
+config.R
+
+# data lives in the shared pCloud folder, not in the repo (old GFCM copy, 2025.1.0;
+# 02_fisheries.R reads data/fisheries/GFCM/<version> from pCloud)
+data/

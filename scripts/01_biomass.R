@@ -26,8 +26,15 @@
   }
   p
 }
-ggsave <- function(filename, plot = ggplot2::last_plot(), ..., bg = "white", readable = TRUE)
-  ggplot2::ggsave(filename, if (isTRUE(readable)) .readable(plot) else plot, ..., bg = bg)
+## PNGs are drawn with ragg when installed: several times faster than the
+## default png() device, above all on Windows (where the 30-panel
+## coverage map took ~3 min instead of ~20 s on a Mac), same look.
+ggsave <- function(filename, plot = ggplot2::last_plot(), ..., bg = "white", readable = TRUE) {
+  dots <- list(...)
+  if (is.null(dots$device) && grepl("\\.png$", filename, ignore.case = TRUE) && requireNamespace("ragg", quietly = TRUE))
+    dots$device <- ragg::agg_png
+  do.call(ggplot2::ggsave, c(list(filename, if (isTRUE(readable)) .readable(plot) else plot), dots, list(bg = bg)))
+}
 if (!exists("PLOT_DPI", envir = .GlobalEnv, inherits = FALSE)) PLOT_DPI <- 300
 
 ## --- Folders on any laptop (wmed_paths.R) ----------------------------------
@@ -121,8 +128,10 @@ while (sink.number() > 0) sink()
 ##     "far out").
 ## (5) Stratified mean per GSA (Cochran 1977, Sampling Techniques):
 ##     D_s,g,y = sum_h A_g,h dbar_s,g,h,y / sum_h A_g,h,
-##     A_g,h = stratum area from bathymetry (GEBCO/NOAA ETOPO via marmap;
-##     Pante & Simon-Bouhet 2013, PLoS ONE 8:e73051).
+##     A_g,h = stratum area from bathymetry (BATHY_SOURCE: EMODnet
+##     Bathymetry DTM tiles in pCloud by default, EMODnet Bathymetry
+##     Consortium 2022; or NOAA ETOPO via marmap, Pante & Simon-Bouhet
+##     2013, PLoS ONE 8:e73051).
 ## (6) Region (model area): D_s,y = sum_g A_g D_s,g,y / sum_g A_g.
 ## (7) FG density: D_f,y = sum_{s in f} D_s,y (FG_WMed_2026.csv).
 ## (8) MEDIAS acoustic (Leonori et al. 2021, Medit. Mar. Sci. 22:
@@ -185,9 +194,7 @@ if (AREA_MODE == "custom") {
   ## original developer machine, hardcoded otherwise - EDIT this to your actual study area
   ## name (e.g. "cap_de_creus_mpa") rather than leaving the placeholder.
   if (!exists("AREA_NAME", envir = .GlobalEnv, inherits = FALSE)) {
-    if (tolower(Sys.info()[["user"]]) == "daniel") {
-      AREA_NAME <- "custom_region"
-    } else if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    if (interactive() && requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
       AREA_NAME <- rstudioapi::showPrompt(
         title = "Custom study area name",
         message = "Short label for this custom study area (used in output folder/file names):",
@@ -229,18 +236,20 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
     stop("[01_biomass.R] out_dir was pre-set by the calling script but doesn't exist on this machine: \"",
          out_dir, "\". Fix it in the driver script (e.g. run_pipeline_demo.R) before sourcing this file.")
   }
-} else if (tolower(Sys.info()[["user"]]) == "daniel" && .Platform$OS.type == "unix") {
-  ## AREA_MODE == "custom" nests the default out_dir under AREA_NAME, so
-  ## different custom-region runs never collide or overwrite each
-  ## other's outputs - AREA_MODE == "westmed" keeps the plain path
-  ## exactly as before.
-  out_dir <- if (AREA_MODE == "custom") {
-    file.path("/Users/daniel/Work/iMARES/WMed EwE Model/output", AREA_NAME)
-  } else {
-    "/Users/daniel/Work/iMARES/WMed EwE Model/output/"
+} else if (isTRUE(local({   # run on its own: folders from wmed_paths.R (config.local.R, config.R, or the standard pCloud place)
+  .d <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+  if (!file.exists(file.path(.d, "wmed_paths.R"))) .d <- getwd()
+  file.exists(file.path(.d, "wmed_paths.R")) && {
+    source(file.path(.d, "wmed_paths.R"), local = TRUE)
+    isTRUE(wmed_set_paths(dirname(.d))$ok)
   }
-  pcloud_dir   <- "/Users/daniel/pCloud Drive/EwE Western Med 2026/"
-  git_dir <-"/Users/daniel/Documents/GitHub/WMed_EwE/"
+}))) {
+  ## AREA_MODE == "custom" nests out_dir under AREA_NAME, so different
+  ## custom-region runs never overwrite each other's outputs
+  if (AREA_MODE == "custom" && !exists("RUN_DIR", envir = .GlobalEnv, inherits = FALSE)) {   # run_pipeline_demo.R already set the run folder
+    out_dir <- file.path(out_dir, AREA_NAME)
+    dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  }
 } else {
   ## Falls back to an interactive directory picker in RStudio, rather
   ## than just stopping with "set it manually" - so this script works
@@ -302,7 +311,7 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
 ## A custom region writes to its own subfolder out_dir/AREA_NAME, so it
 ## never overwrites the Western Med outputs (also when out_dir was found
 ## by wmed_paths.R or set by a driver script).
-if (AREA_MODE == "custom" && basename(sub("/+$", "", out_dir)) != AREA_NAME) {
+if (AREA_MODE == "custom" && basename(sub("/+$", "", out_dir)) != AREA_NAME && !exists("RUN_DIR", envir = .GlobalEnv, inherits = FALSE)) {
   out_dir <- file.path(sub("/+$", "", out_dir), AREA_NAME)
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   message("[01_biomass.R] Custom region '", AREA_NAME, "': outputs in ", out_dir)
@@ -342,6 +351,9 @@ assign("message", function(..., domain = NULL, appendLF = TRUE) {
   .orig_message(..., domain = domain, appendLF = appendLF)
 }, envir = .GlobalEnv)
 message("[Log] This run's console output is also being written to: ", .run_log_path)
+## Elapsed time at each step, to see where a slow laptop spends its time
+.wm_t0 <- Sys.time()
+.wm_tick <- function(label) message(sprintf("[time] %s: %.1f min since the start of 01", label, as.numeric(difftime(Sys.time(), .wm_t0, units = "mins"))))
 
 ## MEDITS_REFERENCE_DIR: hand-typed reference/lookup tables for this
 ## script, externalized to CSV so they're editable without touching code.
@@ -374,7 +386,7 @@ source(paste0(git_dir,"/scripts/lib_worms_taxonomy_lookup.R"))
 ## reviewed from), not the old FG_WMed.xlsx sheet 4. Point this at wherever the
 ## current reviewed CSV lives; the code below (STEP 2) reads it with fread(),
 ## not readxl::read_excel().
-## FG_SPECIES_FILE (full path, e.g. set by medbs_pipeline_methodology.qmd)
+## FG_SPECIES_FILE (full path, e.g. set by WMed-EwEbuilder.qmd)
 ## overrides the default FG_WMed_2026.csv for every script (01-04).
 fg_species_file  <- if (exists("FG_SPECIES_FILE", envir = .GlobalEnv, inherits = FALSE)) FG_SPECIES_FILE else
   resolve_pcloud_file(paste0(pcloud_dir,"/data/FG_WMed_2026.csv"), pcloud_dir)
@@ -436,6 +448,11 @@ message("This script will write its outputs to:\n  out_dir  = ", out_dir, "\n  p
 if (exists("MODEL_GSAS", envir = .GlobalEnv, inherits = FALSE) && length(MODEL_GSAS)) FILTER_AREAS <- MODEL_GSAS
 if (!exists("FILTER_AREAS",  envir = .GlobalEnv, inherits = FALSE)) FILTER_AREAS  <- if (AREA_MODE == "custom") NULL else 1:12        # GSA (1-11 Western Med + 12 Northern Tunisia)
 if (!exists("STRATA",        envir = .GlobalEnv, inherits = FALSE)) STRATA        <- TRUE         # function attribute: strata
+## Bathymetry for the depth-stratum areas (and the depth cuts in 01b):
+## "emodnet" = EMODnet tiles in pCloud data/Bathymetry (no download),
+## "noaa" = NOAA ETOPO downloaded with marmap. Each is the other's
+## fallback (lib_survey_fg_density_functions.R, wmed_get_bathy()).
+if (!exists("BATHY_SOURCE",  envir = .GlobalEnv, inherits = FALSE)) assign("BATHY_SOURCE", "emodnet", envir = .GlobalEnv)
 if (!exists("YEAR_ECOPATH",  envir = .GlobalEnv, inherits = FALSE)) YEAR_ECOPATH  <- 1994:1996     # function attribute: year_ecopath
 ## TS_YEARS' default last year used to be the hardcoded literal 2023,
 ## which silently went stale as soon as a newer MEDITS year was added to
@@ -588,7 +605,7 @@ if (!exists("SPECIES_PRESENCE_CHECK", envir = .GlobalEnv, inherits = FALSE)) SPE
 ## independent authority - taxonomy_source = "worms" is still supported
 ## below (lib_worms_taxonomy_lookup.R is still sourced above) for a
 ## species FishBase/SeaLifeBase genuinely lacks.
-FISHBASE_TAXONOMY_CACHE_PATH <- file.path(out_dir, "fishbase_taxonomy_cache.rds")
+FISHBASE_TAXONOMY_CACHE_PATH <- file.path(get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = out_dir), "fishbase_taxonomy_cache.rds")   # shared by every run folder
 
 ## taxonomy_source = "both": FishBase/SeaLifeBase is fish/aquatic-
 ## organism-focused and doesn't carry every algae/sponge/bryozoan/
@@ -599,7 +616,20 @@ FISHBASE_TAXONOMY_CACHE_PATH <- file.path(out_dir, "fishbase_taxonomy_cache.rds"
 ## itself a valid WoRMS phylum-rank record), so it's a SECOND-PASS
 ## fallback for whatever FishBase/SeaLifeBase left with no rank filled
 ## in; FishBase/SeaLifeBase stays the first authority wherever it resolves a name.
-WORMS_TAXONOMY_CACHE_PATH <- file.path(out_dir, "worms_taxonomy_cache.rds")
+WORMS_TAXONOMY_CACHE_PATH <- file.path(get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = out_dir), "worms_taxonomy_cache.rds")   # shared by every run folder
+
+## Shared copy of both taxonomy caches in pCloud (data/taxonomy_cache), so
+## a laptop with a new output folder does not download all of FishBase,
+## SeaLifeBase and WoRMS again (slow, and the step where a Windows run
+## with R 4.2 stopped without an error on 2026-10-27). Read from pCloud
+## when out_dir has no cache; written back below after the taxonomy
+## fallback whenever out_dir's cache is newer.
+TAXONOMY_CACHE_SHARED_DIR <- file.path(pcloud_dir, "data", "taxonomy_cache")
+for (.f in c(FISHBASE_TAXONOMY_CACHE_PATH, WORMS_TAXONOMY_CACHE_PATH)) {
+  .sh <- file.path(TAXONOMY_CACHE_SHARED_DIR, basename(.f))
+  if (!file.exists(.f) && file.exists(.sh) && file.copy(.sh, .f))
+    message("[taxonomy cache] ", basename(.f), " copied from pCloud (", TAXONOMY_CACHE_SHARED_DIR, ").")
+}
 
 ## OPT-IN, default FALSE - see lib_aquamaps_depth_extension.R's own header
 ## for the full rationale/assumption/caveats. MEDITS_STRATA below only
@@ -690,8 +720,10 @@ download_gfcm_gsa_shapefile <- function() {
   gsa_zip_url  <- "https://gfcmsitestorage.blob.core.windows.net/website/5.Data/ArcGIS/GFCM_GSA.zip"
   ## A custom region (out_dir = <output>/<AREA_NAME>) reuses the GSA
   ## shapefile already in the main output folder instead of downloading it again.
-  .shp_base <- out_dir
-  if (identical(get0("AREA_MODE", ifnotfound = "westmed"), "custom") &&
+  ## OUT_BASE_DIR (run_pipeline_demo.R): the main output folder, shared by
+  ## every run folder (out_dir/runs/<name>); else the old custom layout.
+  .shp_base <- get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = out_dir)
+  if (!exists("OUT_BASE_DIR", envir = .GlobalEnv) && identical(get0("AREA_MODE", ifnotfound = "westmed"), "custom") &&
       length(list.files(file.path(dirname(sub("/+$", "", out_dir)), "shapefiles", "GFCM_GSA_shp"), "\\.shp$", recursive = TRUE)))
     .shp_base <- dirname(sub("/+$", "", out_dir))
   gsa_shp_dir  <- file.path(.shp_base, "shapefiles", "GFCM_GSA_shp")
@@ -747,6 +779,7 @@ if (AREA_MODE == "westmed") {
   if (is.null(FILTER_AREAS)) FILTER_AREAS <- sort(unique(area_shp[[AREA_ID_COL]]))
 }
 
+.wm_tick("before STEP 2")
 ## =================================================================
 ## STEP 2: Input data - MEDITS-specific loading, reshaped into the
 ## standardized dataframe1/dataframe2 format
@@ -928,6 +961,7 @@ ggsave(file.path(plot_dir, "survey_sample_coverage_map_by_year.png"), p_sample_m
        width = 16, height = 12, dpi = PLOT_DPI, bg = "white")
 .trim_png_rows(file.path(plot_dir, "survey_sample_coverage_map_by_year.png"))
 
+.wm_tick("before STEP 3")
 ## =================================================================
 ## STEP 3: Scientific name -> FG (direct match)
 ## =================================================================
@@ -980,6 +1014,7 @@ dt[, c("FG_num_override", "FG_name_override", "override_ScientificName") := NULL
 
 message("After manual overrides: ", dt[!is.na(FG_num), uniqueN(ScientificName)], " species matched.")
 
+.wm_tick("before STEP 4")
 ## =================================================================
 ## STEP 4: Maximize FG assignment via taxonomy fallback
 ## =================================================================
@@ -1031,6 +1066,15 @@ message(sum(non_taxon, na.rm = TRUE), " non-taxon row(s) (egg-capsule, or a lite
         " name - Sea ball/Leaves of Posidonia oceanica, shell debris) excluded from the taxonomy fallback attempt.")
 
 dt <- fallback_match_fg_by_taxonomy(dt, fg_lookup_safe, taxonomy_source = "both", cache_path = FISHBASE_TAXONOMY_CACHE_PATH, worms_cache_path = WORMS_TAXONOMY_CACHE_PATH)
+## Taxonomy caches -> pCloud (see TAXONOMY_CACHE_SHARED_DIR above)
+tryCatch({
+  dir.create(TAXONOMY_CACHE_SHARED_DIR, recursive = TRUE, showWarnings = FALSE)
+  for (.f in c(FISHBASE_TAXONOMY_CACHE_PATH, WORMS_TAXONOMY_CACHE_PATH)) {
+    .sh <- file.path(TAXONOMY_CACHE_SHARED_DIR, basename(.f))
+    if (file.exists(.f) && (!file.exists(.sh) || file.mtime(.f) > file.mtime(.sh)) && file.copy(.f, .sh, overwrite = TRUE))
+      message("[taxonomy cache] ", basename(.f), " saved to pCloud for the other laptops.")
+  }
+}, error = function(e) message("[taxonomy cache] could not copy to pCloud: ", conditionMessage(e)))
 
 ## --- Seed FG rules: REMOVED ENTIRELY ------------------------
 ## The 4 rules that survived the previous re-audit (Holothuroidea ->
@@ -1175,6 +1219,7 @@ if (length(still_missing_taxonomy) > 0) {
 ## loaded, not just whatever GSAs FILTER_AREAS happens to be set to.
 snapshot_full_extent_species(dt, species_taxonomy, "MEDITS", csv_out_dir)
 
+.wm_tick("before STEP 5")
 ## =================================================================
 ## STEP 5: densities (biomass/effort), mean/sum across species within
 ## FG, by year/strata/area
@@ -1340,7 +1385,7 @@ if (!is.null(flagged_outliers) && nrow(flagged_outliers) > 0) {
     .pl <- melt(.eff[FG_name %in% .top], id.vars = c("FG_name", "Year"), measure.vars = c("before", "after"),
                 variable.name = "series", value.name = "density")
     p_out_eff <- ggplot(.pl, aes(Year, density, colour = series, linetype = series)) + geom_line() +
-      facet_wrap(~ FG_name, scales = "free_y") +
+      facet_wrap(~ FG_name, scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
       scale_colour_manual(values = c(before = "grey55", after = "#1b7f9e"),
                           labels = c(before = "all hauls", after = "outliers removed")) +
       scale_linetype_manual(values = c(before = "dashed", after = "solid"), labels = c(before = "all hauls", after = "outliers removed")) +
@@ -1411,6 +1456,7 @@ n_samples_by_area <- dt[
   AreaID %in% FILTER_AREAS,
   .(n_samples = uniqueN(SampleID)), by = .(AreaID, Year)]
 
+.wm_tick("before STEP 6")
 ## =================================================================
 ## STEP 6: weight densities per stratum -> FG, year, area
 ## =================================================================
@@ -1461,6 +1507,7 @@ medits_replicate_dt <- dt[!is.na(Stratum)][
 fg_cv_log_medits <- compute_cv_log_by_fg(medits_replicate_dt, "fg_density")
 fg_cv_log_medits[, Survey := "MEDITS"]
 
+.wm_tick("before STEP 7")
 ## =================================================================
 ## STEP 7: weight densities per area -> FG, year (region-wide)
 ## =================================================================
@@ -1476,6 +1523,7 @@ species_density_regional <- weight_species_by_area(per_group_sp, n_samples_by_st
                                                    impute_unsampled = SURVEY_IMPUTE_UNSAMPLED_CELLS,
                                                    denominator_cells = MODEL_SURVEY_CELLS)
 
+.wm_tick("before STEP 7b")
 ## =================================================================
 ## STEP 7b: AquaMaps shallow/deep depth adjustment (OPT-IN - see
 ## APPLY_AQUAMAPS_DEPTH_ADJUSTMENT above and lib_aquamaps_depth_
@@ -1738,6 +1786,7 @@ if (isTRUE(STRATA) && (!is.na(ECOSIM_HAUL_CAP_Q) || ECOSIM_MIN_AREA_COVERAGE > 0
   rm(.raw, .cov, .ts_regional)
 }
 
+.wm_tick("before STEP 8")
 ## =================================================================
 ## STEP 8: plots (MEDITS)
 ## =================================================================
@@ -1746,8 +1795,32 @@ p_by_area <- plot_fg_timeseries_by_area(
 ggsave(file.path(plot_dir, "survey_fg_density_timeseries.png"), p_by_area, width = 14, height = 10, dpi = PLOT_DPI, bg = "white")
 
 regional_title_area <- if (AREA_MODE == "westmed") "Western Med" else AREA_NAME
+## Sampling uncertainty of the index (lib: compute_survey_index_cv()),
+## drawn as a band in the two regional plots and saved for review
+fg_index_cv <- tryCatch(compute_survey_index_cv(dt, n_samples_by_stratum, strata_area_by_area),
+                        error = function(e) { message("[Uncertainty] survey index CV not computed: ", conditionMessage(e)); NULL })
+if (!is.null(fg_index_cv)) {
+  fwrite(merge(fg_index_cv, unique(fg_index_regional[, .(FG_num, FG_name)]), by = "FG_num", all.x = TRUE)[order(FG_num, Year)],
+         file.path(csv_out_dir, "survey_index_cv_by_fg_year.csv"))
+  message("[Uncertainty] MEDITS index CV by FG and year (stratified variance): median ",
+          round(stats::median(fg_index_cv$cv_index, na.rm = TRUE), 2), " -> survey_index_cv_by_fg_year.csv")
+  ## Weight of each FG's survey series when Ecosim is fitted (the "weight"
+  ## of a time series in EwE): w = 1 / CV^2, CV = mean index CV over
+  ## TS_YEARS, rescaled so the median series has w = 1 and kept within
+  ## 0.1-10. A precise series (small CV) counts more in the fit.
+  .cvw <- fg_index_cv[Year %in% TS_YEARS & is.finite(cv_index) & cv_index > 0,
+                      .(mean_CV = mean(cv_index), n_years = .N), by = FG_num]
+  if (nrow(.cvw)) {
+    .cvw[, weight := 1 / mean_CV^2][, weight := pmin(pmax(weight / stats::median(weight), 0.1), 10)]
+    .cvw <- merge(.cvw, unique(fg_index_regional[, .(FG_num, FG_name)]), by = "FG_num", all.x = TRUE)[order(FG_num)]
+    fwrite(.cvw[, .(FG_num, FG_name, mean_CV = round(mean_CV, 3), n_years, ecosim_weight = round(weight, 2))],
+           file.path(csv_out_dir, "ecosim_ts_weights_from_survey_cv.csv"))
+    message("[Uncertainty] Ecosim series weights (1/CV^2, median = 1): ecosim_ts_weights_from_survey_cv.csv")
+  }
+}
 p_regional <- plot_fg_timeseries_regional(fg_index_regional,
-                                          title = paste0("MEDITS trawl survey by FG, ", regional_title_area, " (area-weighted)"), y_lab = "Area-weighted density (t/km^2)")
+                                          title = paste0("MEDITS trawl survey by FG, ", regional_title_area, " (area-weighted)"), y_lab = "Area-weighted density (t/km^2)",
+                                          cv_dt = fg_index_cv)
 ggsave(file.path(plot_dir, "survey_fg_density_timeseries_regional.png"), p_regional, width = 14, height = 10, dpi = PLOT_DPI, bg = "white")
 
 ## Same data as above, normalized so each FG's own series starts at 1
@@ -1756,7 +1829,7 @@ ggsave(file.path(plot_dir, "survey_fg_density_timeseries_regional.png"), p_regio
 ## absolute densities are.
 p_regional_normalized <- plot_fg_timeseries_regional(
   fg_index_regional, title = paste0("MEDITS trawl survey by FG, ", regional_title_area, " (normalized)"),
-  y_lab = "Area-weighted density (t/km^2)", normalize = TRUE)
+  y_lab = "Area-weighted density (t/km^2)", normalize = TRUE, cv_dt = fg_index_cv)
 ggsave(file.path(plot_dir, "survey_fg_density_timeseries_regional_normalized.png"), p_regional_normalized,
        width = 14, height = 10, dpi = PLOT_DPI, bg = "white")
 
@@ -1768,8 +1841,12 @@ if (STRATA) {
   ## fg_index's own per_stratum attribute already reflects whichever set
   ## was actually used to build it, so this just keeps the plot's stratum
   ## labels in sync with it instead of merging against the wrong table.
-  p_profile <- plot_strata_profile(fg_index, strata_def_for_plotting)
-  ggsave(file.path(plot_dir, "survey_fg_depth_strata_profile.png"), p_profile, width = 16, height = 12, dpi = PLOT_DPI, bg = "white")
+  ## Every FG with survey density (until 2026-11-03 only the 40 densest,
+  ## so rare groups such as groupers were missing); taller with more FGs.
+  .n_prof <- tryCatch(data.table::uniqueN(attr(fg_index, "per_stratum_raw")$FG_num), error = function(e) 40)
+  p_profile <- plot_strata_profile(fg_index, strata_def_for_plotting, top_n_fg = Inf)
+  ggsave(file.path(plot_dir, "survey_fg_depth_strata_profile.png"), p_profile, width = 18,
+         height = max(12, 2.3 * ceiling(.n_prof / 7)), dpi = PLOT_DPI, bg = "white", limitsize = FALSE)
   
   ## Same "density by depth stratum" information as the plot above, but
   ## as an Excel sheet: one row per FG, one column per stratum (region-
@@ -1802,6 +1879,7 @@ if (STRATA) {
          width = 14, height = 10, dpi = PLOT_DPI, bg = "white")
 }
 
+.wm_tick("before STEP 9")
 ## =================================================================
 ## STEP 9: MEDIAS acoustic survey + GFCM stock-assessment biomass +
 ## the MEDITS/MEDIAS/stock-assessment priority combine. Every data
@@ -3129,6 +3207,7 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
   fg_cv_log_combined <- copy(fg_cv_log_medits)[, .(FG_num, cv_log)]
 }
 
+.wm_tick("before STEP 10")
 ## =================================================================
 ## STEP 10: Excel export - fg_index_regional_combined/species_density_
 ## regional_combined/fg_cv_log_combined feed the SAME FG_spp_Ecopath/
@@ -3233,6 +3312,7 @@ if (!is.null(ecobase_sheet_dt) && nrow(ecobase_sheet_dt) > 0) {
   upsert_workbook_sheets(list(Ecobase = ecobase_sheet_dt), file.path(out_dir, "ecopath_ecosim_inputs.xlsx"))
 }
 
+.wm_tick("before STEP 11")
 ## =================================================================
 ## STEP 11: Complete FG_spp_Ecopath / FG_lookup sheets.
 ##
@@ -3955,6 +4035,7 @@ build_fg_references_sheet(file.path(out_dir, "ecopath_ecosim_inputs.xlsx"),
                           diet_csv_dir      = file.path(out_dir, "diet"))
 append_reference_columns_to_final_sheets(file.path(out_dir, "ecopath_ecosim_inputs.xlsx"))
 
+.wm_tick("before STEP 13")
 ## =================================================================
 ## STEP 13: trim ecopath_ecosim_inputs.xlsx down to EXACTLY the 9 final
 ## target sheets (info, FG_spp, Ecopath_B, Ecopath_L, Ecopath_Di,
@@ -3984,6 +4065,7 @@ trim_workbook_to_final_sheets(file.path(out_dir, "ecopath_ecosim_inputs.xlsx"))
 ## =================================================================
 build_full_fg_species_catalog(csv_out_dir)
 
+.wm_tick("before STEP 15")
 ## =================================================================
 ## STEP 15: completeness check - which FGs have NO Ecopath_B biomass
 ## at all (per project decision: "print the FGs at the end of the
@@ -4214,7 +4296,7 @@ if (!exists("HABITAT_MAP_SHP")) HABITAT_MAP_SHP <- file.path(pcloud_dir, "data/C
   out[is.na(area_region_km2), area_region_km2 := 0][, share := area_region_km2 / area_westmed_km2][]
 }
 if (AREA_MODE == "custom" && CUSTOM_AREA_TYPE %in% c("bbox", "shapefile")) tryCatch({
-  .main_dir <- dirname(sub("/+$", "", out_dir))
+  .main_dir <- get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = dirname(sub("/+$", "", out_dir)))   # the Western Med run (default inputs)
   .wb_reg  <- file.path(out_dir, "ecopath_ecosim_inputs.xlsx")
   .wb_main <- file.path(.main_dir, "ecopath_ecosim_inputs.xlsx")
   if (!file.exists(.wb_main)) stop("no Western Med workbook at ", .wb_main, " - run the Western Med pipeline first")

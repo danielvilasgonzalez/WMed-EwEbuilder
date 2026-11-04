@@ -231,7 +231,14 @@ gfcm_saf_parse_words <- function(words, ref_year) {
        data = dt[is.finite(biomass) & biomass > 0], page = best$page, label = label, type = best$type)
 }
 gfcm_saf_parse_pdf <- function(pdf, ref_year) {
-  pg <- tryCatch(pdftools::pdf_data(pdf), error = function(e) NULL)
+  ## poppler prints harmless "PDF error: Bad annotation destination" lines
+  ## for broken links inside many SAF PDFs (the text is read fine): they are
+  ## captured and dropped here so they don't flood the console and the log
+  pg <- NULL
+  ## (pdftools relays them with message(); suppressMessages() drops them
+  ## before the page's or the log's own message handlers see them)
+  invisible(utils::capture.output(pg <- suppressMessages(tryCatch(pdftools::pdf_data(pdf), error = function(e) NULL)),
+                                  type = "output"))
   if (is.null(pg)) return(list(status = "PDF could not be read", data = NULL))
   words <- rbindlist(lapply(seq_along(pg), function(i) if (nrow(pg[[i]])) data.table(page = i, x = pg[[i]]$x, y = pg[[i]]$y, width = pg[[i]]$width, text = pg[[i]]$text)))
   if (!nrow(words)) return(list(status = "no text in PDF (scanned?)", data = NULL))
@@ -257,8 +264,35 @@ update_gfcm_saf_assessments <- function(pcloud_dir, review_dir, model_gsas, asfi
     message("[GFCM SAF] offline - ", if (file.exists(all_path)) "using the last downloaded table." else "falling back to RAM Legacy.")
     return(if (file.exists(all_path)) all_path else NULL)
   }
+  ## Which kinds of files GFCM publishes next to the SAF PDFs (e.g. the STAR
+  ## Excel tables, which could be read directly instead of the PDFs):
+  ## counted by file type and listed in gfcm_saf_online_file_types_REVIEW.csv
+  tryCatch({
+    ## the whole public data folder, not only SAFs/ (STAR tables may sit elsewhere)
+    lst_all <- tryCatch(gfcm_saf_list_online(prefix = "5.Data/"), error = function(e) lst)
+    if (is.null(lst_all) || !nrow(lst_all)) lst_all <- lst
+    ext <- tolower(tools::file_ext(lst_all$name))
+    ft <- data.table(name = lst_all$name, type = ifelse(nzchar(ext), ext, "(none)"))
+    ftc <- ft[, .N, by = type][order(-N)]
+    message("[GFCM SAF] files in the GFCM public data folder by type: ", paste0(ftc$type, " ", ftc$N, collapse = ", "),
+            " (gfcm_saf_online_file_types_REVIEW.csv)")
+    dir.create(review_dir, recursive = TRUE, showWarnings = FALSE)
+    fwrite(ft[order(type, name)], file.path(review_dir, "gfcm_saf_online_file_types_REVIEW.csv"))
+  }, error = function(e) NULL)
   saf <- gfcm_saf_parse_names(lst)
   saf <- saf[vapply(gsa, function(g) { v <- .saf_gsa_int(g); length(v) > 0 && !anyNA(v) && all(v %in% model_gsas) }, logical(1))]
+  ## Nothing new on the GFCM website for these GSAs since the last read
+  ## (same SAF files, same model GSAs, same hand-transcribed table): the
+  ## table written then is reused instead of reading every PDF again
+  ## (minutes on a slow laptop). Delete gfcm_saf_listing_read.txt to force it.
+  list_path <- file.path(saf_dir, "gfcm_saf_listing_read.txt")
+  sig <- c(paste("GSAs:", paste(sort(model_gsas), collapse = ",")),
+           paste("hand:", if (file.exists(hand_path)) unname(tools::md5sum(hand_path)) else "none"),
+           paste("ram:", if (file.exists(ram_path)) unname(tools::md5sum(ram_path)) else "none"), sort(saf$name))
+  if (file.exists(all_path) && file.exists(list_path) && identical(readLines(list_path, warn = FALSE), sig)) {
+    message("[GFCM SAF] no new SAF on the GFCM website for these GSAs since the last read - using ", all_path)
+    return(all_path)
+  }
   message("[GFCM SAF] ", nrow(lst), " files online; ", nrow(saf), " SAF(s) of ", uniqueN(saf$stock_key), " stock(s) inside GSAs ",
           paste(model_gsas, collapse = ","), ".")
   setorder(saf, stock_key, -ref_year, -folder_year)
@@ -354,9 +388,109 @@ update_gfcm_saf_assessments <- function(pcloud_dir, review_dir, model_gsas, asfi
   dir.create(review_dir, recursive = TRUE, showWarnings = FALSE)
   fwrite(review[order(stock_key, -ref_year)], file.path(review_dir, "gfcm_saf_parse_REVIEW.csv"))
   fwrite(out, all_path)
+  tryCatch(writeLines(sig, list_path), error = function(e) NULL)
   message("[GFCM SAF] ", out[parse_status == "ok", uniqueN(stock_key)], " stock(s) read from the GFCM PDFs (",
           out[parse_status == "ok" & use_for_biomass == TRUE, uniqueN(stock_key)], " used for biomass, the rest overlap a newer or larger stock); ",
           review[, uniqueN(stock_key)] - out[parse_status == "ok", uniqueN(stock_key)], " stock(s) without a readable table (",
           "see gfcm_saf_parse_REVIEW.csv). Written to ", all_path)
   all_path
+}
+
+## =================================================================
+## Other stock assessments of FG species (review only, not used in the model)
+## =================================================================
+## Every stock assessment of a species listed in the FG table that the
+## model does NOT use: GFCM SAFs whose stock area is outside the model GSAs
+## (e.g. hake in the Adriatic, the whole-Med stocks), SAFs inside the model
+## GSAs that overlap a newer or larger stock of the same species, and RAM
+## Legacy stocks of the same species. Each is read the same way as the
+## stocks in use (newest SAF with a readable table, PDFs cached in
+## data/fisheries/GFCM_SAF/pdf, so only new PDFs are downloaded) and written
+## to one CSV, one row per stock x year, with why_not_used. Nothing from it
+## enters the model; it is there to compare with, or to borrow from by hand.
+## fg_species: data.table with ScientificName, FG_num, FG_name.
+gfcm_saf_other_stocks <- function(pcloud_dir, out_csv, model_gsas, fg_species, asfis_file = NULL,
+                                  ram_path = file.path(pcloud_dir, "data/fisheries/STAR_RAMLegacy/combined_medbs_star_ramlegacy.csv")) {
+  saf_dir <- file.path(pcloud_dir, "data/fisheries/GFCM_SAF")
+  all_path <- file.path(saf_dir, "gfcm_saf_stock_assessments_ALL.csv")
+  fg <- unique(as.data.table(fg_species)[!is.na(ScientificName) & nzchar(ScientificName), .(species = trimws(ScientificName), FG_num, FG_name)])
+  used <- if (file.exists(all_path)) fread(all_path, encoding = "UTF-8")[use_for_biomass %in% TRUE, unique(stock_key)] else character(0)
+  in_model <- function(g) { v <- floor(suppressWarnings(as.numeric(trimws(unlist(strsplit(as.character(g), "[,;]")))))); length(v) > 0 && !anyNA(v) && all(v %in% model_gsas) }
+  why <- function(inside) fifelse(inside, "inside the model GSAs but overlaps a newer or larger stock of the same species that is used",
+                                  "stock area outside the model GSAs")
+  rows <- list()
+  ## --- GFCM SAFs
+  if (requireNamespace("pdftools", quietly = TRUE) && requireNamespace("xml2", quietly = TRUE)) {
+    lst <- tryCatch(gfcm_saf_list_online(), error = function(e) NULL)
+    if (is.null(asfis_file) || !file.exists(asfis_file))
+      asfis_file <- head(list.files(file.path(pcloud_dir, "data"), pattern = "^ASFIS_sp_.*\\.csv$", recursive = TRUE, full.names = TRUE), 1)
+    if (!is.null(lst) && nrow(lst) && length(asfis_file) && file.exists(asfis_file)) {
+      sp <- unique(fread(asfis_file, encoding = "UTF-8")[, .(code = Alpha3_Code, species = Scientific_Name, common_name = English_name)])
+      saf <- merge(gfcm_saf_parse_names(lst), sp[!duplicated(code)], by = "code")
+      saf <- saf[species %in% fg$species & !stock_key %in% used]
+      saf[, inside := vapply(gsa, in_model, logical(1))]
+      setorder(saf, stock_key, -ref_year, -folder_year)
+      message("[GFCM SAF other stocks] ", uniqueN(saf$stock_key), " other stock(s) of ", uniqueN(saf$species),
+              " FG species - reading their newest SAF (only new PDFs are downloaded)...")
+      ## To save pCloud space these PDFs are NOT kept: each is read from a
+      ## temporary file and only what was read is cached (by file name) in
+      ## data/fisheries/GFCM_SAF/other_stocks_read_cache.rds, so a PDF is
+      ## downloaded again only when GFCM publishes a new one.
+      cache_f <- file.path(saf_dir, "other_stocks_read_cache.rds")
+      rcache <- if (file.exists(cache_f)) tryCatch(readRDS(cache_f), error = function(e) list()) else list()
+      pdf_dir <- file.path(saf_dir, "pdf")
+      for (k in unique(saf$stock_key)) {
+        tries <- head(saf[stock_key == k], 1 + GFCM_SAF_MAX_BACK)
+        got <- NULL; last_status <- NA_character_
+        for (i in seq_len(nrow(tries))) {
+          s <- tries[i]
+          fname <- basename(s$name)
+          r <- rcache[[fname]]
+          if (is.null(r)) {
+            kept <- file.path(pdf_dir, fname)   # a PDF already kept for the stocks in use is read in place
+            tmp <- if (file.exists(kept)) kept else tempfile(fileext = ".pdf")
+            r <- tryCatch(if (file.exists(kept) || gfcm_saf_download(s$url, tmp)) gfcm_saf_parse_pdf(tmp, s$ref_year)
+                          else list(status = "download failed", data = NULL), error = function(e) list(status = conditionMessage(e), data = NULL))
+            if (!identical(tmp, kept)) unlink(tmp)
+            if (!identical(r$status, "download failed")) rcache[[fname]] <- r
+          }
+          last_status <- r$status
+          if (identical(r$status, "ok")) {
+            got <- r$data[, `:=`(stock_key = k, species = s$species, common_name = s$common_name, gsa = s$gsa, ref_year = s$ref_year,
+                                 biomass_type = r$type, column = r$label, page = r$page, url = s$url, parse_status = "ok", inside = s$inside)]
+            break
+          }
+        }
+        rows[[k]] <- if (!is.null(got)) got[, source := "GFCM SAF (online)"] else
+          tries[1, .(source = "GFCM SAF (online)", stock_key = k, species, common_name, gsa, ref_year, url,
+                     parse_status = paste0("no value read: ", last_status), inside)]
+      }
+      tryCatch(saveRDS(rcache, cache_f, compress = "xz"), error = function(e) NULL)
+    } else message("[GFCM SAF other stocks] GFCM website or ASFIS species list not available - GFCM SAFs skipped.")
+  }
+  ## --- RAM Legacy
+  if (file.exists(ram_path)) {
+    ram <- fread(ram_path, encoding = "UTF-8")
+    if (all(c("stock_key", "species", "gsa") %in% names(ram))) {
+      ram <- ram[species %in% fg$species & !stock_key %in% used]
+      if (nrow(ram)) {
+        ram[, inside := vapply(as.character(gsa), in_model, logical(1))]
+        ram[, `:=`(source = paste0("RAM Legacy: ", source), parse_status = "RAM Legacy table")]
+        rows[["RAM"]] <- ram
+      }
+    }
+  }
+  out <- rbindlist(rows, fill = TRUE)
+  if (!nrow(out)) { message("[GFCM SAF other stocks] none found."); return(invisible(NULL)) }
+  out[, why_not_used := why(inside)][, inside := NULL]
+  out <- merge(out, fg, by = "species", all.x = TRUE, allow.cartesian = TRUE)
+  first <- intersect(c("FG_num", "FG_name", "species", "common_name", "stock_key", "gsa", "source", "ref_year", "year",
+                       "biomass", "biomass_type", "catches", "why_not_used", "parse_status"), names(out))
+  setcolorder(out, first)
+  setorderv(out, intersect(c("FG_num", "species", "stock_key", "year"), names(out)))
+  dir.create(dirname(out_csv), recursive = TRUE, showWarnings = FALSE)
+  fwrite(out, out_csv)
+  message("[GFCM SAF other stocks] ", uniqueN(out$stock_key), " stock(s) of ", uniqueN(out$species), " FG species not used by the model (",
+          out[parse_status == "ok", uniqueN(stock_key)], " with a biomass series read from the SAF) -> ", out_csv)
+  invisible(out_csv)
 }

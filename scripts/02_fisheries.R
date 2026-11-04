@@ -26,8 +26,15 @@
   }
   p
 }
-ggsave <- function(filename, plot = ggplot2::last_plot(), ..., bg = "white", readable = TRUE)
-  ggplot2::ggsave(filename, if (isTRUE(readable)) .readable(plot) else plot, ..., bg = bg)
+## PNGs are drawn with ragg when installed: several times faster than the
+## default png() device, above all on Windows (where the 30-panel
+## coverage map took ~3 min instead of ~20 s on a Mac), same look.
+ggsave <- function(filename, plot = ggplot2::last_plot(), ..., bg = "white", readable = TRUE) {
+  dots <- list(...)
+  if (is.null(dots$device) && grepl("\\.png$", filename, ignore.case = TRUE) && requireNamespace("ragg", quietly = TRUE))
+    dots$device <- ragg::agg_png
+  do.call(ggplot2::ggsave, c(list(filename, if (isTRUE(readable)) .readable(plot) else plot), dots, list(bg = bg)))
+}
 if (!exists("PLOT_DPI", envir = .GlobalEnv, inherits = FALSE)) PLOT_DPI <- 300
 
 ## --- Folders on any laptop (wmed_paths.R) ----------------------------------
@@ -191,7 +198,14 @@ resolve_config_dir <- function(var_name, hardcoded_value, prompt_title, prompt_m
     }
     message("[02_fisheries.R] ", var_name, " was already set but to something invalid - re-resolving.")
   }
-  if (tolower(Sys.info()[["user"]]) == "daniel" && .Platform$OS.type == "unix") return(hardcoded_value)  # Daniel's machine: skip prompting, use hardcoded path
+  ## Folders found by wmed_paths.R (config.local.R, config.R, or the standard pCloud place)
+  wp <- tryCatch({
+    d <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())
+    if (!file.exists(file.path(d, "wmed_paths.R"))) d <- getwd()
+    source(file.path(d, "wmed_paths.R"), local = TRUE); wmed_find_paths(dirname(d))
+  }, error = function(e) NULL)
+  if (!is.null(wp) && isTRUE(wp$ok) && !is.na(wp[[var_name]])) return(wp[[var_name]])
+  if (!is.na(hardcoded_value) && dir.exists(hardcoded_value)) return(hardcoded_value)
   if (!requireNamespace("rstudioapi", quietly = TRUE) || !rstudioapi::isAvailable()) {
     stop("This script requires RStudio, or ", var_name, " set manually before running this script - ", prompt_message)
   }
@@ -201,7 +215,7 @@ resolve_config_dir <- function(var_name, hardcoded_value, prompt_title, prompt_m
   val
 }
 
-out_dir <- resolve_config_dir("out_dir", "/Users/daniel/Work/iMARES/WMed EwE Model/output/",
+out_dir <- resolve_config_dir("out_dir", NA_character_,
                               "Select Output Directory", "Please select the directory where output files and intermediate results are saved.")  # resolve the output directory
 
 ## --- Run log (plain text, for sharing/debugging) ------------------------
@@ -236,9 +250,9 @@ assign("message", function(..., domain = NULL, appendLF = TRUE) {
 }, envir = .GlobalEnv)
 message("[Log] This run's console output is also being written to: ", .run_log_path)
 
-pcloud_dir <- resolve_config_dir("pcloud_dir", "/Users/daniel/pCloud Drive/EwE Western Med 2026/",
+pcloud_dir <- resolve_config_dir("pcloud_dir", NA_character_,
                                  "Select pCloud EwE West Med Directory", "Please select the pCloud Drive/EwE Western Med 2026 folder.")  # resolve the pCloud data directory
-git_dir <- resolve_config_dir("git_dir", "/Users/daniel/Documents/GitHub/WMed_EwE/",
+git_dir <- resolve_config_dir("git_dir", NA_character_,
                               "Select Github WMed_EwE Directory", "Please select the directory where you cloned the WMed_EwE repository.")  # resolve the local git repo directory
 
 ECOPATH_WORKBOOK_PATH <- file.path(out_dir, "ecopath_ecosim_inputs.xlsx")  # path to the EwE Ecopath/Ecosim workbook to write into - stays at the shared top-level out_dir since every block reads/writes it
@@ -516,8 +530,10 @@ download_gfcm_gsa_shapefile <- function() {
   gsa_zip_url  <- "https://gfcmsitestorage.blob.core.windows.net/website/5.Data/ArcGIS/GFCM_GSA.zip"
   ## A custom region (out_dir = <output>/<AREA_NAME>) reuses the GSA
   ## shapefile already in the main output folder instead of downloading it again.
-  .shp_base <- out_dir
-  if (identical(get0("AREA_MODE", ifnotfound = "westmed"), "custom") &&
+  ## OUT_BASE_DIR (run_pipeline_demo.R): the main output folder, shared by
+  ## every run folder (out_dir/runs/<name>); else the old custom layout.
+  .shp_base <- get0("OUT_BASE_DIR", envir = .GlobalEnv, ifnotfound = out_dir)
+  if (!exists("OUT_BASE_DIR", envir = .GlobalEnv) && identical(get0("AREA_MODE", ifnotfound = "westmed"), "custom") &&
       length(list.files(file.path(dirname(sub("/+$", "", out_dir)), "shapefiles", "GFCM_GSA_shp"), "\\.shp$", recursive = TRUE)))
     .shp_base <- dirname(sub("/+$", "", out_dir))
   gsa_shp_dir  <- file.path(.shp_base, "shapefiles", "GFCM_GSA_shp")
@@ -2983,7 +2999,7 @@ if (!dir.exists(stecf_catches_dir)) {
                                                 by = .(Country, FG_num, FleetType, Year = year)]  # sum landed/discarded tonnes by country x FG x fleet x year
       stecf_discard_ratio_by_fleet[, discard_ratio := Discarded_t / (Landed_t + Discarded_t)]  # compute the fleet-level discard ratio
       stecf_discard_ratio_by_fleet <- stecf_discard_ratio_by_fleet[is.finite(discard_ratio),
-                                                                   .(Country, FG_num, FleetType, Year, discard_ratio)]  # drop non-finite ratios
+                                                                   .(Country, FG_num, FleetType, Year, discard_ratio, Landed_t, Discarded_t)]  # drop non-finite ratios; tonnes kept for the pooled per-fleet rate
       message("[STECF FDI] stecf_discard_ratio_by_fleet: ", nrow(stecf_discard_ratio_by_fleet),
               " Country x FG x FleetType x Year row(s) - used to give each fleet its own discard rate",
               " instead of distributing the country-level total by catch share.")
@@ -4308,6 +4324,31 @@ if (nrow(discard_by_fg) > 0) {
 } else {
   catches_discards_fg[, `:=`(Catch_t = Landings_t, Discard_t = NA_real_, discard_ratio = NA_real_)]  # no discard data at all - Catch_t equals Landings_t
 }
+## FG discards from the country discards. Until 2026-11-02 the FG series
+## (Catches_Discards_FG_ts -> Ecosim_ts, plots 01/08) took only FishMIP's
+## Med-wide FG ratio, which matches 24 of the 80 FGs, while the country
+## and fleet tables (Ecopath_Di) use FishMIP, then SAU, then STECF FDI
+## (2014+) and the nearest-year fallback. So FGs like sardine, hake or
+## small-spotted catshark had discards per fleet but none in the FG
+## series. Now, per FG x Year:
+##   r = sum_c D_c / sum_c L_c   over the countries with a discard estimate
+##   Discard_t = Landings_t x r,  Catch_t = Landings_t + Discard_t
+## (assumption: countries without an estimate - mainly Morocco, Algeria,
+## Tunisia - discard at the same rate as those with one). FishMIP's FG
+## ratio is kept only where no country has an estimate.
+.cty_r <- catch_with_discards[!is.na(Discard_t) & Landings_t > 0,
+                              .(D_c = sum(Discard_t, na.rm = TRUE), L_c = sum(Landings_t, na.rm = TRUE),
+                                src = paste(sort(unique(sub(" \\(.*$", "", discard_source))), collapse = " + ")), by = .(FG_num, Year)]
+.cty_r <- .cty_r[L_c > 0, .(FG_num, Year, r_cty = D_c / L_c, src)]
+catches_discards_fg <- merge(catches_discards_fg, .cty_r, by = c("FG_num", "Year"), all.x = TRUE)
+.n_new <- catches_discards_fg[!is.na(r_cty) & is.na(Discard_t) & Landings_t > 0, uniqueN(FG_num)]
+catches_discards_fg[!is.na(r_cty), `:=`(Discard_t = Landings_t * r_cty, Catch_t = Landings_t * (1 + r_cty),
+                                        discard_ratio = r_cty / (1 + r_cty),
+                                        discard_ratio_source = paste0("sum of the country discard estimates (", src, ")"))]
+catches_discards_fg[, c("r_cty", "src") := NULL]
+message("\n[Discards] FG series now from the country discard estimates (FishMIP/SAU/STECF FDI, as in Ecopath_Di): ",
+        catches_discards_fg[Discard_t > 0, uniqueN(FG_num)], " FG(s) with discards (", .n_new,
+        " that had none from FishMIP's FG ratio alone).")
 setcolorder(catches_discards_fg, c("Year", "FG_num", "FG_name", "Landings_t", "Catch_t", "Discard_t"))  # standardize column order
 message("\n[Catches] fg_catch_timeseries: ", nrow(fg_catch_timeseries), " FG x Year row(s), full West Med series.")
 
@@ -6233,26 +6274,55 @@ fleet_split[, `:=`(
   Landings_t_by_fleet = Landings_t * prop_fleet  # this fleet's share of country-level landings
 )]
 
-## Prefer a real per-fleet discard rate wherever STECF FDI actually
-## gives one (stecf_discard_ratio_by_fleet, built above): a trawl
-## fleet and a longline fleet do not discard at the same rate, so this
-## replaces the uniform assumption above for exactly the Country x FG x
-## FleetType x Year cells FDI covers - everywhere else (SAU-covered
-## fleets, pre-2014, Morocco/Algeria/Tunisia) still falls back to the
-## country-level ratio distributed by catch share, flagged as such.
+## Discards split by fleet, the same way in every year:
+##   D_f = D_country x (L_f x r_f) / sum_g (L_g x r_g)
+## D_country: the country's discards of the FG in that year (FDI from
+##   2014, FishMIP ratio before; unchanged, so the FG and country totals
+##   stay those of Catches_Discards_FG_ts);
+## L_f: fleet f's landings of the FG in that year (fleet split above);
+## r_f = k_f / K: fleet f's discards per tonne landed in STECF FDI (k_f),
+##   relative to the whole country's in FDI (K), both pooled over all FDI
+##   years (sum D / sum L) so a single noisy year does not drive them.
+##   Fleets not in FDI get r = 1 (the country's rate).
+## Used only where FDI records discards of the FG for that country
+## (K >= DISCARD_FLEET_MIN_K, and >= DISCARD_FLEET_MIN_T t in FDI);
+## otherwise the uniform split (every fleet the country's rate).
+## Before (until 2026-11-02): the uniform split before 2014, and from
+## 2014 each fleet's single-year FDI rate applied to its landings. That
+## moved discards from one fleet to another in 2014 (e.g. sardine
+## discards from purse seiners to trawlers) and changed the country
+## totals. Assumption: a fleet's discard rate relative to the other
+## fleets of its country is constant over time (FDI 2014+ also applied
+## to earlier years). Fleets can still have discards > landings where
+## FDI says so (e.g. Italian trawlers and horse mackerel: 6915 t
+## discarded vs 425 t landed in 2018; small-spotted catshark).
+if (!exists("DISCARD_FLEET_MIN_T", envir = .GlobalEnv, inherits = FALSE)) DISCARD_FLEET_MIN_T <- 5
+if (!exists("DISCARD_FLEET_MIN_K", envir = .GlobalEnv, inherits = FALSE)) DISCARD_FLEET_MIN_K <- 0.01
 fleet_split[, discard_split_source := "country-level discard ratio distributed by catch share (uniform across fleets - not a per-fleet rate)"]  # default assumption, may be overwritten below
-if (nrow(stecf_discard_ratio_by_fleet) > 0) {
-  fleet_split <- merge(fleet_split, stecf_discard_ratio_by_fleet[, .(Country, FG_num, FleetType, Year, discard_ratio_fleet = discard_ratio)],
-                       by = c("Country", "FG_num", "FleetType", "Year"), all.x = TRUE)  # attach FDI's own per-fleet discard rate, where available
-  n_fleet_discard <- sum(!is.na(fleet_split$discard_ratio_fleet))  # cells where the per-fleet rate applies
-  fleet_split[!is.na(discard_ratio_fleet), `:=`(
-    Catch_t_by_fleet   = Landings_t_by_fleet / (1 - discard_ratio_fleet),  # recompute this fleet's gross catch using its own discard rate
-    Discard_t_by_fleet = Landings_t_by_fleet / (1 - discard_ratio_fleet) - Landings_t_by_fleet,
-    discard_split_source = "STECF FDI's own per-fleet discard rate (Country x FG x FleetType x Year)"
-  )]  # overwrite the uniform assumption wherever a real per-fleet rate exists
-  fleet_split[, discard_ratio_fleet := NULL]  # drop the now-unneeded helper column
-  message("\n[Discards by fleet] ", n_fleet_discard, " Country x FG x FleetType x Year cell(s) now use",
-          " STECF FDI's own per-fleet discard rate instead of the country-level ratio distributed by catch share.")
+if (nrow(stecf_discard_ratio_by_fleet) > 0 && all(c("Landed_t", "Discarded_t") %in% names(stecf_discard_ratio_by_fleet))) {
+  fdi_k <- stecf_discard_ratio_by_fleet[, .(L_fdi = sum(Landed_t, na.rm = TRUE), D_fdi = sum(Discarded_t, na.rm = TRUE)),
+                                        by = .(Country, FG_num, FleetType)]
+  fdi_k[, `:=`(K_cty = sum(D_fdi) / pmax(sum(L_fdi), 1e-9), T_cty = sum(L_fdi + D_fdi)), by = .(Country, FG_num)]
+  fdi_k <- fdi_k[K_cty >= DISCARD_FLEET_MIN_K & T_cty >= DISCARD_FLEET_MIN_T & L_fdi + D_fdi > 0]
+  fdi_k[, r_fdi := (D_fdi / pmax(L_fdi, 1e-9)) / K_cty]
+  fdi_k[L_fdi <= 0, r_fdi := NA_real_]                      # discards only, no landings in FDI: no rate, gets the country's
+  fleet_split <- merge(fleet_split, fdi_k[, .(Country, FG_num, FleetType, r_fdi)], by = c("Country", "FG_num", "FleetType"), all.x = TRUE)
+  fleet_split[, in_fdi := Country %in% fdi_k$Country & paste(Country, FG_num) %in% fdi_k[, paste(Country, FG_num)]]
+  .grp <- c("Country", "FG_num", "Year")
+  fleet_split[, w := fifelse(is.na(Landings_t_by_fleet), 0, Landings_t_by_fleet * fifelse(is.na(r_fdi), 1, r_fdi))]
+  fleet_split[, `:=`(D_cty = sum(Discard_t_by_fleet, na.rm = TRUE), w_sum = sum(w)), by = .grp]
+  fleet_split[, use_k := in_fdi & D_cty > 0 & w_sum > 0]
+  fleet_split[use_k == TRUE, `:=`(
+    Discard_t_by_fleet = D_cty * w / w_sum,
+    discard_split_source = fifelse(!is.na(r_fdi), "STECF FDI per-fleet discard rate (pooled over FDI years) splitting the country discards",
+                                   "country discard rate (fleet not in STECF FDI), within a split by FDI per-fleet rates"))]
+  fleet_split[use_k == TRUE, Catch_t_by_fleet := Landings_t_by_fleet + Discard_t_by_fleet]
+  n_fleet_discard <- fleet_split[use_k == TRUE, uniqueN(paste(Country, FG_num, Year))]
+  fleet_split[, c("r_fdi", "in_fdi", "D_cty", "w", "w_sum", "use_k") := NULL]
+  fwrite(fdi_k[order(Country, FG_num, -r_fdi)], file.path(csv_out_dir, "discard_rate_by_fleet_fdi_pooled.csv"))
+  message("\n[Discards by fleet] ", n_fleet_discard, " Country x FG x Year cell(s): country discards split among fleets by",
+          " STECF FDI's per-fleet discard rates relative to the country's, pooled over the FDI years (all years, so no",
+          " jump in 2014; country totals unchanged). Rates: discard_rate_by_fleet_fdi_pooled.csv.")
 }
 
 ## --- Recreational: GFCM/FDI have no recreational catch at all. Where
@@ -7118,6 +7188,50 @@ if (!file.exists(SPECIES_DENSITY_PATH)) {
           " years - includes both never-fished FGs like primary producers/benthic habitat and any fishable",
           " FG that genuinely had zero recorded catch) or Biomass_density_avg is 0/NA (FG not observed in",
           " the survey).")
+
+  ## --- FGs with F above F_MAX: optional fix of Ecopath_B ---------------
+  ## A high F usually means the survey cannot see the group (coastal,
+  ## rocky-bottom or pelagic species; see 05's F by country). HIGH_F_B_FIX:
+  ##   "none" (default)    - report only (high_F_REVIEW.csv)
+  ##   "min_from_catch"    - B = C / F_MAX for those FGs (the smallest B
+  ##                         that keeps F at F_MAX; C = mean catch density)
+  ##   "ecopath_estimate"  - B left blank and EE_input = HIGH_F_EE (0.95),
+  ##                         so Ecopath estimates B from the catch and the
+  ##                         predation
+  ## Ecopath_B (Biomass, Reference) is updated in the workbook; F_by_fg.csv
+  ## then shows the F with the new B. The choice is kept in the run record.
+  if (!exists("HIGH_F_B_FIX", envir = .GlobalEnv, inherits = FALSE)) HIGH_F_B_FIX <- "none"
+  if (!exists("F_MAX", envir = .GlobalEnv, inherits = FALSE)) F_MAX <- 1
+  if (!exists("HIGH_F_EE", envir = .GlobalEnv, inherits = FALSE)) HIGH_F_EE <- 0.95
+  hi <- f_by_fg[is.finite(F) & F > F_MAX]
+  if (nrow(hi)) {
+    hi_out <- hi[, .(FG_num, FG_name, B_before = Biomass_density_avg, Catch_density_avg, F_before = F,
+                     action = HIGH_F_B_FIX,
+                     B_after = switch(HIGH_F_B_FIX, min_from_catch = Catch_density_avg / F_MAX, ecopath_estimate = NA_real_, Biomass_density_avg))]
+    fwrite(hi_out, file.path(csv_out_dir, "high_F_REVIEW.csv"))
+    message("[F] ", nrow(hi), " FG(s) with F > ", F_MAX, ": ", paste(sprintf("%s (%.2g)", hi$FG_name, hi$F), collapse = ", "),
+            " - HIGH_F_B_FIX = \"", HIGH_F_B_FIX, "\" (high_F_REVIEW.csv).")
+    if (HIGH_F_B_FIX %in% c("min_from_catch", "ecopath_estimate") && file.exists(ECOPATH_WORKBOOK_PATH)) tryCatch({
+      eb <- as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, "Ecopath_B", check.names = FALSE, sep.names = " "))
+      k <- eb$FG_num %in% hi$FG_num
+      note <- if (HIGH_F_B_FIX == "min_from_catch") sprintf("B set to catch / F_MAX (F_MAX = %s; survey B gave F > %s) - HIGH_F_B_FIX", F_MAX, F_MAX) else
+        sprintf("B left to Ecopath (EE = %s; survey B gave F > %s) - HIGH_F_B_FIX", HIGH_F_EE, F_MAX)
+      if (HIGH_F_B_FIX == "min_from_catch") {
+        eb[k, Biomass := hi_out$B_after[match(FG_num, hi_out$FG_num)]]
+      } else {
+        eb[k, Biomass := NA_real_]
+        if (!"EE_input" %in% names(eb)) eb[, EE_input := NA_real_]
+        eb[, EE_input := as.numeric(EE_input)]               # an all-blank column is read as logical
+        eb[k, EE_input := HIGH_F_EE]
+      }
+      if ("Reference" %in% names(eb)) eb[k, Reference := fifelse(is.na(Reference) | !nzchar(Reference), note, paste0(note, " | before: ", Reference))]
+      upsert_workbook_sheets(list(Ecopath_B = eb), ECOPATH_WORKBOOK_PATH)
+      f_by_fg[FG_num %in% hi$FG_num, `:=`(Biomass_density_avg = hi_out$B_after[match(FG_num, hi_out$FG_num)],
+                                          B_source = paste0("HIGH_F_B_FIX = ", HIGH_F_B_FIX))]
+      f_by_fg[FG_num %in% hi$FG_num, F := if (HIGH_F_B_FIX == "min_from_catch") Catch_density_avg / Biomass_density_avg else NA_real_]
+      message("[F] Ecopath_B updated for ", sum(k), " FG(s) (", HIGH_F_B_FIX, ").")
+    }, error = function(e) message("[F] HIGH_F_B_FIX not applied: ", conditionMessage(e)))
+  }
   fwrite(f_by_fg, file.path(csv_out_dir, "F_by_fg.csv"))
   
   ## Species-resolved view of the same F. GFCM catch (catches_discards_fg)
@@ -7586,7 +7700,13 @@ if (nrow(star_catch_by_fg) > 0) sheets_to_write$STAR_RAM_Catch_CrossCheck <- cat
 ## sheets - kept as a plain FG x Year table (not the Ecopath/Ecosim-
 ## specific meta-row format) since it's meant to be read back
 ## programmatically, not opened as an Ecopath forcing function itself.
-sheets_to_write$Catches_Discards_FG_ts <- catches_discards_fg[, .(Year, FG_num, FG_name, Landings_t, Catch_t, Discard_t, catch_source)]  # catch_source kept here too (not just in the DATASET_VERSION-suffixed CSV) so build_fg_references_sheet() can read it back under this fixed filename
+## Discard_t_km2: discards per km2 of the model area (same units and the
+## same custom-region weighting .kc() as the catches in Catches_Ecosim),
+## read by Ecosim_ts's Discards block. Until 2026-11-02 that block took
+## Discard_t (tonnes), so in Ecosim_ts the discards were ~10^5 times the
+## catches (t/km2).
+sheets_to_write$Catches_Discards_FG_ts <- catches_discards_fg[, .(Year, FG_num, FG_name, Landings_t, Catch_t, Discard_t,
+                                                                  Discard_t_km2 = Discard_t * .kc(FG_num) / Total_Area_km2, catch_source)]  # catch_source kept here too (not just in the DATASET_VERSION-suffixed CSV) so build_fg_references_sheet() can read it back under this fixed filename
 
 ## The excel ecopath_ecosim file must have exactly
 ## the intended sheets, trimmed script by script; other sheets should
@@ -7690,17 +7810,24 @@ classify_source <- function(x) {
 validation_plots <- list()  # collect each figure by name, for the PDF/PNG export below
 
 ## 1. Catches per FG over time - landings vs. catch-incl-discards,
-## small multiples so every FG (including the zero-catch ones from the
-## completed grid above) is visible in one figure.
+## small multiples. Only FGs with catch (or landings) above zero in at
+## least one year of the series are drawn; the FGs with no catch at all
+## are listed in the log (they are still in the tables with 0).
 validation_plots[["01_catches_per_FG"]] <- tryCatch({
-  d <- melt(catches_discards_fg[, .(Year, FG_num, FG_name, Landings_t, Catch_t)],
+  has_catch <- catches_discards_fg[, .(any_catch = any(pmax(Catch_t, Landings_t, na.rm = TRUE) > 0, na.rm = TRUE)), by = .(FG_num, FG_name)]
+  no_catch <- has_catch[any_catch == FALSE]
+  if (nrow(no_catch)) message("[Validation plot 1] ", nrow(no_catch), " FG(s) with no catch in any year left out of 01_catches_per_FG: ",
+                              paste(paste0(no_catch$FG_num, " ", no_catch$FG_name), collapse = ", "))
+  d <- melt(catches_discards_fg[FG_num %in% has_catch[any_catch == TRUE, FG_num], .(Year, FG_num, FG_name, Landings_t, Catch_t)],
             id.vars = c("Year", "FG_num", "FG_name"), variable.name = "Measure", value.name = "t")  # reshape landings/catch into long format for plotting
+  if (!nrow(d)) stop("no FG with catch")
   ggplot(d, aes(x = Year, y = t, color = Measure)) +
     geom_line(linewidth = 0.4) +
-    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y") +
+    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
     scale_color_manual(values = c(Landings_t = "#4C6FE7", Catch_t = "#D9534F"),
                        labels = c(Landings_t = "Landings", Catch_t = "Catch (incl. discards)")) +
-    labs(title = "Catches per functional group over time", subtitle = "GFCM landings vs. landings+discards, full West Med series",
+    labs(title = "Catches per functional group over time", subtitle = paste0("GFCM landings vs. landings+discards, full West Med series; ", uniqueN(d$FG_num),
+                                                                        " FGs with catch (", nrow(no_catch), " without any catch not shown)"),
          x = NULL, y = "t/year", color = NULL) +
     theme_minimal(base_size = 7) + theme(legend.position = "bottom")
 }, error = function(e) { message("[Validation plot 1] skipped - ", conditionMessage(e)); NULL })
@@ -7818,17 +7945,16 @@ validation_plots[["05_effort_by_country_fleet"]] <- tryCatch({
     base_val <- Effort[which(!is.na(Effort) & Effort != 0)[1]]  # first non-NA, non-zero value for this Country x Fleet series
     if (is.na(base_val) || length(base_val) == 0) NA_real_ else Effort / base_val
   }, by = .(Country, Fleet)]
-  ## Readable version: log scale (an index is a ratio: x2 and /2 sit at
-  ## the same distance from 1), one colour per gear shared by all panels,
+  ## Readable version: linear scale (index, first year = 1), one colour per gear shared by all panels,
   ## each line labelled at its last year (no long legend to decode), and
   ## the two dates where the effort source changes marked.
-  d <- d[is.finite(Effort_idx) & Effort_idx > 0]
+  d <- d[is.finite(Effort_idx)]
+  d <- d[, if (any(Effort_idx > 0)) .SD, by = .(Country, Fleet)]   # fleets with zero effort in every year are not drawn
   d[, Fleet := gsub("_", " ", Fleet)]
   lab <- d[, .SD[which.max(Year)], by = .(Country, Fleet)]
   lab[, Fleet_lab := ifelse(nchar(Fleet) > 22, paste0(substr(Fleet, 1, 21), "\u2026"), Fleet)]
   fleets <- sort(unique(d$Fleet))
   pal <- setNames(grDevices::hcl.colors(length(fleets), "Dark 3"), fleets)
-  brk <- c(0.01, 0.03, 0.1, 0.25, 0.5, 1, 2, 4, 10)
   yr_max <- max(d$Year)
   ggplot(d, aes(x = Year, y = Effort_idx, colour = Fleet)) +
     geom_vline(xintercept = 2014, linetype = "longdash", colour = "grey55", linewidth = 0.3) +
@@ -7841,17 +7967,17 @@ validation_plots[["05_effort_by_country_fleet"]] <- tryCatch({
                                 nudge_x = 1, segment.size = 0.2, segment.colour = "grey70", min.segment.length = 0,
                                 xlim = c(yr_max + 0.5, NA), show.legend = FALSE)
      else geom_text(data = lab, aes(label = Fleet_lab), size = 3.7, hjust = -0.1, check_overlap = TRUE, show.legend = FALSE)) +
-    scale_y_log10(breaks = brk, labels = function(x) format(x, drop0trailing = TRUE)) +
+    scale_y_continuous(limits = c(0, NA), labels = function(x) format(x, drop0trailing = TRUE)) +
     scale_x_continuous(breaks = function(l) { b <- pretty(c(min(d$Year), yr_max), n = 3); b[b <= yr_max] }, expand = expansion(mult = c(0.02, 0.5))) +
     scale_colour_manual(values = pal, guide = "none") +
     coord_cartesian(clip = "off") +
     facet_wrap(~ Country, scales = "free_y", ncol = 3) +
     labs(title = "Fishing effort by country and fleet (index, first year = 1)",
-         subtitle = paste0("Log scale: 2 = double, 0.5 = half the first-year effort. Technology creep included.\n",
+         subtitle = paste0("Linear scale: 2 = double, 0.5 = half the first-year effort. Technology creep included.\n",
                            "Long-dashed line = 2014 (EU-3: hindcast before, STECF FDI days from 2014). ",
                            "\nDotted line = 2017 (Morocco/Algeria/Tunisia FishMIP effort held flat after, creep still applied). ",
                            "Fleets with zero effort are not drawn."),
-         x = NULL, y = "Effort index (log scale)") +
+         x = NULL, y = "Effort index (first year = 1)") +
     theme_minimal(base_size = 9) +
     theme(plot.background = element_rect(fill = "white", colour = NA),
           panel.grid.minor = element_blank(), panel.grid.major.x = element_line(colour = "grey92"),
@@ -7864,17 +7990,40 @@ validation_plots[["05_effort_by_country_fleet"]] <- tryCatch({
 ## glance at what's real (STECF FDI) vs. inferred (SAU, calibrated or
 ## not) vs. last-resort (flat fallback), per country and year.
 validation_plots[["06_data_source_coverage"]] <- tryCatch({
-  d <- unique(fleet_prop_final[, .(Country, Year, fleet_split_source)])  # one row per country x year x source
-  d[, Tier := classify_source(fleet_split_source)]  # classify each row's data tier for coloring
-  d <- unique(d[, .(Country, Year, Tier)])  # collapse to one row per country x year x tier
-  ggplot(d, aes(x = Year, y = Country, fill = Tier)) +
-    geom_tile(color = "white", linewidth = 0.2) +
-    scale_fill_manual(values = c("STECF FDI" = "#2E7D32", "SAU (calibrated hindcast)" = "#F9A825",
-                                 "SAU (uncalibrated)" = "#EF6C00", "Flat fallback (all-years average)" = "#B71C1C",
-                                 "SAU" = "#F9A825", "not available" = "grey85", "other" = "grey60")) +
-    labs(title = "Fleet-split data source, by country and year", subtitle = "What actually supplied each cell's fleet proportions",
-         x = NULL, y = NULL, fill = NULL) +
-    theme_minimal(base_size = 8) + theme(legend.position = "bottom", panel.grid = element_blank())
+  ## Share of each country's catch (t) by the source of its fleet split, per
+  ## year. Weighted by catch: until 2026-11-03 this was one tile per country
+  ## x year with every source drawn on top of each other, so the last one
+  ## drawn showed (e.g. Spain looked all 'other' while 90 % of its pre-2014
+  ## catch is split with SAU, as for Italy and France).
+  d <- fleet_split_out[is.finite(Catch_t) & Catch_t > 0, .(Catch_t = sum(Catch_t)), by = .(Country, Year, fleet_split_source)]
+  d[, Source := fcase(
+    grepl("^STECF FDI \\(real gear", fleet_split_source), "STECF FDI, that year",
+    grepl("^STECF FDI", fleet_split_source), "STECF FDI, multi-year average",
+    grepl("bias-corrected", fleet_split_source), "SAU, calibrated to FDI",
+    grepl("^SAU \\(own year", fleet_split_source), "SAU, that year",
+    grepl("^SAU \\(country x FG x gear", fleet_split_source), "SAU, all years pooled",
+    grepl("SAU country-level|SAU country-level fleet mix", fleet_split_source), "SAU, country's fleet mix (FG not in SAU)",
+    grepl("GFCM Fleet Register|vessel", fleet_split_source, ignore.case = TRUE), "GFCM fleet register (vessels)",
+    grepl("^ICCAT", fleet_split_source), "ICCAT (tuna, swordfish)",
+    grepl("equal share", fleet_split_source), "Equal shares (no data)",
+    default = "Other fallback")]
+  d <- d[, .(Catch_t = sum(Catch_t)), by = .(Country, Year, Source)]
+  d[, share := Catch_t / sum(Catch_t), by = .(Country, Year)]
+  cols <- c("STECF FDI, that year" = "#1B5E20", "STECF FDI, multi-year average" = "#66BB6A",
+            "SAU, calibrated to FDI" = "#F9A825", "SAU, that year" = "#FFD54F", "SAU, all years pooled" = "#FFE9A6",
+            "SAU, country's fleet mix (FG not in SAU)" = "#EF6C00", "GFCM fleet register (vessels)" = "#6A1B9A",
+            "ICCAT (tuna, swordfish)" = "#1565C0", "Equal shares (no data)" = "#B71C1C", "Other fallback" = "grey60")
+  d[, Source := factor(Source, levels = names(cols))]
+  ggplot(d, aes(x = Year, y = share, fill = Source)) +
+    geom_col(width = 1, colour = NA) +
+    facet_wrap(~ Country, ncol = 2) +
+    scale_fill_manual(values = cols, drop = TRUE) +
+    scale_y_continuous(labels = scales::percent, expand = c(0, 0)) +
+    labs(title = "Fleet-split data source, by country and year",
+         subtitle = "Share of each country's catch whose split among fleets comes from each source. EU countries: STECF FDI from 2014, SAU before (calibrated to FDI). Morocco, Algeria, Tunisia: SAU",
+         x = NULL, y = "Share of catch", fill = NULL) +
+    theme_minimal(base_size = 8) + theme(legend.position = "bottom", panel.grid.minor = element_blank()) +
+    guides(fill = guide_legend(nrow = 3))
 }, error = function(e) { message("[Validation plot 6] skipped - ", conditionMessage(e)); NULL })
 
 ## =================================================================
@@ -7927,7 +8076,7 @@ validation_plots[["07_catch_by_fg_and_fleet"]] <- tryCatch({
                        .(Catch_t = sum(Catch_t, na.rm = TRUE)), by = .(FG_num, FG_name, FleetType, Year)]
   ggplot(d, aes(x = Year, y = Catch_t, fill = FleetType)) +
     geom_area(position = "stack") +
-    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y") +
+    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
     labs(title = "Catch by functional group AND fleet over time", subtitle = paste0("Top ", length(top_fg_ids), " FG(s) by total catch, all countries summed"),
          x = NULL, y = "t/year", fill = "Fleet") +
     theme_minimal(base_size = 7) + theme(legend.position = "bottom")
@@ -7939,7 +8088,7 @@ validation_plots[["08_discards_by_fg_and_fleet"]] <- tryCatch({
   if (nrow(d) == 0) stop("no non-NA Discard_t among the top FGs")
   ggplot(d, aes(x = Year, y = Discard_t, fill = FleetType)) +
     geom_area(position = "stack") +
-    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y") +
+    facet_wrap(~ paste0(FG_num, " - ", FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
     labs(title = "Discards by functional group AND fleet over time", subtitle = paste0("Top ", length(top_fg_ids), " FG(s) by total catch, all countries summed"),
          x = NULL, y = "t/year", fill = "Fleet") +
     theme_minimal(base_size = 7) + theme(legend.position = "bottom")
