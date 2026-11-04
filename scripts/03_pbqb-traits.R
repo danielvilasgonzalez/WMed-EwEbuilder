@@ -4029,11 +4029,42 @@ message("\nSaved: ecopath_ready_PB_QB.csv (", nrow(ecopath_final), " FG rows,",
         " formatted to match Ecopath's real Basic Input structure",
         " (comma-decimal, correct column set) - selection mode: '",
         PB_QB_SELECTION_MODE, "'.")
-message("NOTE: multi-stanza groups (e.g. 'European sardine juv'/'adult' pairs) need",
-        " their own header row above the stanza members in the real Ecopath format",
-        " (see row 20 'European sardine' in westernmed90s-Basic_input.csv for the",
-        " pattern) - this export doesn't build those automatically since this",
-        " pipeline doesn't currently model juvenile/adult stanza splits.")
+message("NOTE: multi-stanza groups need their own header row above the stanza members in",
+        " the real Ecopath format - this export does not build it; the stanza inputs",
+        " (leading B, Z, K, Wmat/Winf, BA/B) are in the Ecopath_multistanza sheet.")
+
+## =================================================================
+## Multistanza parameters: fill the gaps left by 01_biomass.R
+## =================================================================
+## 01 writes biomass/multistanza_parameters_REVIEW.csv (B from pipeline,
+## survey and stock assessment; BA over 1 and 3 years; K, Wmat/Winf and Z
+## from the multistanza reference tables). Here: FishBase/FishLife K and
+## Wmat/Winf for every species (Wmat = a*Lm^b, Winf from popgrowth or
+## a*Loo^b; else (Lm/Loo)^b), used where the reference table has none, and
+## Z = the stanza FG's P/B where no Z is given (EwE: Z per stanza = P/B).
+.ms_path <- file.path(BIOMASS_CSV_DIR, "multistanza_parameters_REVIEW.csv")
+if (file.exists(.ms_path)) {
+  ms_par <- fread(.ms_path)
+  for (.c in c("K_source", "Wmat_Winf_source", "Z_source")) if (.c %in% names(ms_par)) ms_par[, (.c) := as.character(get(.c))]
+  .tr <- unique(as.data.table(species_df)[, intersect(c("Species", "Loo", "K", "Winf", "Lm", "a_lw", "b_lw"), names(species_df)), with = FALSE], by = "Species")
+  for (.c in c("Loo", "K", "Winf", "Lm", "a_lw", "b_lw")) if (!.c %in% names(.tr)) .tr[, (.c) := NA_real_]
+  .tr[, Wmat_Winf_fb := fifelse(is.finite(a_lw * Lm^b_lw / Winf), a_lw * Lm^b_lw / Winf, (Lm / Loo)^b_lw)]
+  ms_par <- merge(ms_par, .tr[, .(Species, K_FishBase = K, Linf_FishBase = Loo, Lmat_FishBase = Lm, Wmat_Winf_FishBase = Wmat_Winf_fb)],
+                  by = "Species", all.x = TRUE, sort = FALSE)
+  .st <- !grepl("^total", ms_par$Stanza)
+  ms_par[.st & is.na(K_VBGF) & is.finite(K_FishBase), `:=`(K_VBGF = K_FishBase, K_source = "FishBase/FishLife (03_pbqb-traits.R)")]
+  ms_par[.st & is.na(Wmat_Winf) & is.finite(Wmat_Winf_FishBase), `:=`(Wmat_Winf = Wmat_Winf_FishBase, Wmat_Winf_source = "FishBase/FishLife Lm, a, b (03_pbqb-traits.R)")]
+  ms_par <- merge(ms_par, ecopath_ready[, .(FG_num, PB_stanza_FG = PB_FG, QB_stanza_FG = QB_FG)], by = "FG_num", all.x = TRUE, sort = FALSE)
+  ms_par[.st & is.na(Z) & is.finite(PB_stanza_FG), `:=`(Z = PB_stanza_FG, Z_source = "P/B of the stanza FG (03_pbqb-traits.R)")]
+  setorder(ms_par, Species, -Leading_stanza, Stanza)
+  fwrite(ms_par, file.path(csv_out_dir, "multistanza_parameters.csv"))
+  upsert_workbook_sheets(list(Ecopath_multistanza = ms_par), ECOPATH_WORKBOOK_PATH)
+  message("[Multistanza parameters] ", uniqueN(ms_par$Species), " species - K, Wmat/Winf and Z completed -> multistanza_parameters.csv",
+          " and workbook sheet Ecopath_multistanza. Enter in EwE: leading stanza B, Z per stanza, Q/B of the leading stanza,",
+          " K, Wmat/Winf, age at the stanza start and BA/B (survey or assessment column).")
+} else {
+  message("[Multistanza parameters] ", basename(.ms_path), " not found (no juvenile/adult FG pair, or 01_biomass.R not rerun) - skipped.")
+}
 
 ## =================================================================
 ## Total pipeline runtime

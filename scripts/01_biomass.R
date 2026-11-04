@@ -2922,6 +2922,11 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
   ##     0.445) - EwE recomputes the juvenile stanza from K, Z and BA/B
   ##     anyway; this value is the cross-check;
   ##   juvenile Ecosim: B_juv,y = I_MEDITS,y x B_juv / I_MEDITS(YEAR_ECOPATH).
+  ## Survey (MEDITS/MEDIAS, maturity-split) stanza series kept before the
+  ## stock-assessment step below replaces it - the alternative biomass
+  ## source in the multistanza parameters table further down.
+  ms_survey_series <- if (exists("multistanza_fg_pairs") && nrow(multistanza_fg_pairs) > 0)
+    copy(fg_index_regional_combined[FG_num %in% c(multistanza_fg_pairs$FG_num_juv, multistanza_fg_pairs$FG_num_adult)]) else NULL
   if (!exists("HAKE_STANZA_FROM_ASSESSMENT")) HAKE_STANZA_FROM_ASSESSMENT <- TRUE
   ## Source follows STOCK_ASSESSMENT_SOURCE ("GFCM" = the newest GFCM SAFs
   ## read from the GFCM website by 01b, gfcm_saf_stock_assessments_ALL.csv;
@@ -3012,6 +3017,35 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
               "); juvenile Ecosim: MEDITS index. Written to hake_stanza_stock_assessment_REVIEW.csv.")
     } else {
       message("[Hake stanzas] No usable assessment series or MEDITS back-cast ratio - previous stanza split kept.")
+    }
+  }
+
+  ## ---- Multistanza parameters (EwE stanza inputs) ---------------------
+  ## For every juvenile/adult FG pair: Ecopath B from the pipeline, the
+  ## MEDITS/MEDIAS survey and the stock assessment side by side, biomass
+  ## accumulation (BA, BA/B) over the previous 1 and 3 years for each
+  ## source, and VBGF K, Wmat/Winf and Z per stanza from
+  ## multistanza_reference_tables/<name>_multistanza_parameters.csv.
+  ## 03_pbqb-traits.R fills K and Wmat/Winf from FishBase/FishLife and Z
+  ## from the stanza P/B where the reference table has none. See
+  ## build_multistanza_parameter_table() in lib_survey_fg_density_functions.R.
+  if (!is.null(ms_survey_series) && nrow(ms_survey_series) > 0) {
+    ms_out <- tryCatch({
+      .sam <- copy(MODEL_AREA_CELLS); .gcm <- intersect(c("AreaID", "GSA"), names(.sam))[1]
+      .area_g <- .sam[as.numeric(get(.gcm)) %in% FILTER_AREAS, .(A = sum(area_km2, na.rm = TRUE)), by = .(GSA = as.numeric(get(.gcm)))]
+      .sa_ms <- if (identical(STOCK_ASSESSMENT_SOURCE, "GFCM")) file.path(pcloud_dir, "data/fisheries/GFCM_SAF/gfcm_saf_stock_assessments_ALL.csv") else
+        file.path(pcloud_dir, "data/fisheries/STAR_RAMLegacy/combined_medbs_star_ramlegacy.csv")
+      build_multistanza_parameter_table(multistanza_fg_pairs, ms_survey_series, fg_index_regional_combined,
+                                        sa_path = .sa_ms, area_g = .area_g, years = YEAR_ECOPATH,
+                                        ref_dir = file.path(pcloud_dir, "data/Complementary data/multistanza_reference_tables"))
+    }, error = function(e) { message("[Multistanza parameters] not built: ", conditionMessage(e)); NULL })
+    if (!is.null(ms_out) && nrow(ms_out$table) > 0) {
+      fwrite(ms_out$table, file.path(csv_out_dir, "multistanza_parameters_REVIEW.csv"))
+      fwrite(ms_out$series, file.path(csv_out_dir, "multistanza_biomass_series_REVIEW.csv"))
+      upsert_workbook_sheets(list(Ecopath_multistanza = ms_out$table), file.path(out_dir, "ecopath_ecosim_inputs.xlsx"))
+      message("[Multistanza parameters] ", uniqueN(ms_out$table$Species), " species: B (pipeline / survey / assessment), BA over the previous 1 and 3 years",
+              " (to ", max(YEAR_ECOPATH), "), K, Wmat/Winf, Z per stanza -> multistanza_parameters_REVIEW.csv, multistanza_biomass_series_REVIEW.csv",
+              " and workbook sheet Ecopath_multistanza (03_pbqb-traits.R fills missing K, Wmat/Winf and Z).")
     }
   }
 

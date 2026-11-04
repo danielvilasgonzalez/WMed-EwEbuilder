@@ -5881,6 +5881,149 @@ detect_multistanza_fg_pairs <- function(species_fg_dt) {
   merge(juv_part, adult_part, by = "ScientificName")
 }
 
+## build_multistanza_parameter_table(): the EwE multistanza inputs for
+## every juvenile/adult FG pair (detect_multistanza_fg_pairs()), one row
+## per stanza, side by side from each biomass source so the user can pick:
+##   B_pipeline   - the Ecopath_B the pipeline uses (after the stock-
+##                  assessment stanza step, e.g. hake);
+##   B_survey     - MEDITS/MEDIAS survey density split by maturity (the
+##                  alternative source; captured before any assessment
+##                  override);
+##   B_assessment - GFCM SAF (or RAM Legacy) biomass, t/km2 over the model
+##                  area of the GSAs the stocks cover (non-overlapping
+##                  stocks, newest first; a year counts when the stocks
+##                  reporting it cover >= 50% of that area); SSB goes on the adult stanza,
+##                  total biomass (TB) on both stanzas as the species total.
+## Biomass accumulation (EwE "BA", t/km2/yr) at y0 = last Ecopath year:
+##   BA_1y = B(y0) - B(y0 - 1);  BA_3y = linear slope of B over y0-3..y0
+##   (>= 2 years); BA_B = BA / mean B over the Ecopath years (EwE BA rate).
+## Growth parameters (VBGF K, Wmat/Winf, Z per stanza, age at the stanza
+## start) come from <ref_dir>/<name>_multistanza_parameters.csv when a file
+## matches the species or FG name (e.g. hake_...); 03_pbqb-traits.R fills
+## the gaps from FishBase/FishLife and the stanza FG's P/B.
+## Returns list(table = one row per stanza, series = per-year biomass).
+build_multistanza_parameter_table <- function(pairs, survey, final, sa_path = NA_character_,
+                                              area_g = NULL, years, ref_dir = NA_character_) {
+  pairs <- as.data.table(pairs); survey <- as.data.table(survey); final <- as.data.table(final)
+  yrs <- sort(unique(years)); y0 <- max(yrs)
+  ba_fun <- function(yr, b) {
+    ok <- is.finite(b) & is.finite(yr); yr <- yr[ok]; b <- b[ok]
+    b0 <- b[yr == y0]; b1 <- b[yr == y0 - 1]
+    ba1 <- if (length(b0) && length(b1)) b0[1] - b1[1] else NA_real_
+    w <- yr >= y0 - 3 & yr <= y0
+    ba3 <- if (sum(w) >= 2 && length(unique(yr[w])) >= 2) unname(coef(lm(b[w] ~ yr[w]))[2]) else NA_real_
+    bm <- mean(b[yr %in% yrs])
+    c(BA_1y = ba1, BA_3y = ba3, BA_B_1y = ba1 / bm, BA_B_3y = ba3 / bm)
+  }
+  mean_b <- function(d, fg) d[FG_num == fg & Year %in% yrs & is.finite(mean_density), if (.N) mean(mean_density) else NA_real_]
+  src_b  <- function(d, fg) { s <- d[FG_num == fg & Year %in% yrs, biomass_source]; s <- s[!is.na(s) & nzchar(s)]; if (length(s)) s[1] else NA_character_ }
+
+  ## stock-assessment table (GFCM SAF, or RAM Legacy if that is the source)
+  sa <- if (!is.na(sa_path) && file.exists(sa_path)) fread(sa_path) else data.table()
+  if (nrow(sa) && !all(c("species", "stock_key", "gsa", "year", "biomass") %in% names(sa))) sa <- data.table()
+  if (nrow(sa)) {
+    if (!"biomass_type" %in% names(sa)) sa[, biomass_type := NA_character_]
+    if (!"ref_year" %in% names(sa)) sa[, ref_year := NA_integer_]
+    if (!"use_for_biomass" %in% names(sa)) sa[, use_for_biomass := TRUE]
+    sa <- sa[is.finite(biomass)]
+  }
+  sa_series <- function(sp) {
+    s <- sa[species == sp]
+    if (!nrow(s) || is.null(area_g) || !nrow(area_g)) return(NULL)
+    st <- unique(s[, .(stock_key, gsa = as.character(gsa), ref_year, use_for_biomass, biomass_type)], by = "stock_key")
+    st[, g := lapply(gsa, function(z) floor(suppressWarnings(as.numeric(strsplit(z, "[,;/ ]+")[[1]]))))]
+    st[, g := lapply(g, function(v) intersect(v[is.finite(v)], area_g$GSA))]
+    st <- st[lengths(g) > 0]
+    if (!nrow(st)) return(NULL)
+    st <- st[order(-(use_for_biomass %in% TRUE), -fifelse(is.na(ref_year), 0, ref_year), -lengths(g))]
+    taken <- numeric(); keep <- character()
+    for (i in seq_len(nrow(st))) if (!length(intersect(st$g[[i]], taken))) { keep <- c(keep, st$stock_key[i]); taken <- c(taken, st$g[[i]]) }
+    st <- st[stock_key %in% keep]
+    st[, A := vapply(g, function(v) area_g[GSA %in% v, sum(A)], numeric(1))]
+    s <- merge(s[stock_key %in% keep, .(stock_key, Year = year, biomass)], st[, .(stock_key, A)], by = "stock_key")
+    A_tot <- sum(st$A)
+    s <- s[, .(B = sum(biomass) / sum(A), n_stocks = .N, area_share = sum(A) / A_tot), by = Year]
+    s <- s[area_share >= 0.5]   # years whose reporting stocks cover at least half the assessed area
+    if (!nrow(s)) return(NULL)
+    btype <- paste(sort(unique(na.omit(st$biomass_type))), collapse = "/")
+    list(series = s[order(Year)], type = if (nzchar(btype)) btype else "biomass",
+         info = paste0(paste(st$stock_key, collapse = " + "), " (GSAs ", paste(sort(taken), collapse = ","), ", ",
+                       paste(range(s$Year), collapse = "-"), "; years with >= 50% of the assessed area reporting, B = sum SSB / sum area of the reporting stocks)"))
+  }
+
+  ## growth/mortality reference tables
+  ref_files <- if (!is.na(ref_dir) && dir.exists(ref_dir)) list.files(ref_dir, "_multistanza_parameters\\.csv$", full.names = TRUE) else character()
+  ref_for <- function(sp, txt) {
+    for (f in ref_files) {
+      r <- tryCatch(fread(f, colClasses = "character"), error = function(e) NULL)
+      if (is.null(r) || !"parameter" %in% names(r)) next
+      key <- sub("_multistanza_parameters\\.csv$", "", basename(f))
+      hit <- if ("species" %in% names(r)) any(r$species == sp) else grepl(gsub("_", " ", key), tolower(txt), fixed = TRUE)
+      if (hit) return(list(tab = r, file = basename(f)))
+    }
+    NULL
+  }
+  par_get <- function(r, pattern) {
+    if (is.null(r)) return(list(v = NA_real_, s = NA_character_, name = NA_character_))
+    i <- grep(pattern, r$tab$parameter, ignore.case = TRUE)[1]
+    if (is.na(i)) return(list(v = NA_real_, s = NA_character_, name = NA_character_))
+    list(v = suppressWarnings(as.numeric(r$tab$value[i])),
+         s = paste0(if ("source" %in% names(r$tab)) r$tab$source[i] else "", " [", r$file, "]"), name = r$tab$parameter[i])
+  }
+
+  rows <- list(); series <- list()
+  for (p in seq_len(nrow(pairs))) {
+    sp <- pairs$ScientificName[p]
+    fgs <- c(juvenile = pairs$FG_num_juv[p], adult = pairs$FG_num_adult[p])
+    nms <- c(juvenile = pairs$FG_name_juv[p], adult = pairs$FG_name_adult[p])
+    cn <- if (nrow(sa) && "common_name" %in% names(sa)) sa[species == sp, common_name][1] else ""
+    ref <- ref_for(sp, paste(sp, nms[1], nms[2], cn))
+    K  <- par_get(ref, "^K($|_)"); WW <- par_get(ref, "^Wmat_?Winf"); BAr <- par_get(ref, "^BA_?B")
+    sas <- sa_series(sp)
+    tot_srv <- survey[FG_num %in% fgs, .(B = sum(mean_density, na.rm = TRUE)), by = Year]
+    for (stz in names(fgs)) {
+      fg <- fgs[[stz]]
+      Z <- par_get(ref, paste0("^Z_", stz))
+      age <- if (!is.na(Z$name) && grepl("_(\\d+)_(\\d+)m", Z$name)) as.numeric(sub(".*_(\\d+)_(\\d+)m.*", "\\1", Z$name)) else
+             if (!is.na(Z$name) && grepl("_(\\d+)m_plus", Z$name)) as.numeric(sub(".*_(\\d+)m_plus.*", "\\1", Z$name)) else NA_real_
+      srv <- survey[FG_num == fg]; fin <- final[FG_num == fg]
+      ba_s <- ba_fun(srv$Year, srv$mean_density)
+      sa_on <- !is.null(sas) && (stz == "adult" || !grepl("SSB", sas$type))
+      ba_a <- if (sa_on) ba_fun(sas$series$Year, sas$series$B) else c(BA_1y = NA, BA_3y = NA, BA_B_1y = NA, BA_B_3y = NA)
+      B_a <- if (sa_on) sas$series[Year %in% yrs, if (.N) mean(B) else NA_real_] else NA_real_
+      rows[[length(rows) + 1]] <- data.table(
+        Species = sp, Stanza = stz, Leading_stanza = stz == "adult", FG_num = fg, FG_name = nms[[stz]],
+        Age_start_months = if (stz == "juvenile") 0 else age,
+        B_pipeline_t_km2 = mean_b(final, fg), B_pipeline_source = src_b(final, fg),
+        B_survey_t_km2 = mean_b(survey, fg), B_survey_source = src_b(survey, fg),
+        B_assessment_t_km2 = B_a,
+        Assessment = if (sa_on) paste0(sas$type, if (grepl("SSB", sas$type)) " (adult stanza)" else " (species total, both stanzas)", ": ", sas$info) else
+                     if (!is.null(sas)) "SSB applies to the adult stanza" else "no assessment covering the model GSAs",
+        BA_1y_survey = ba_s[["BA_1y"]], BA_3y_survey = ba_s[["BA_3y"]], BA_B_1y_survey = ba_s[["BA_B_1y"]], BA_B_3y_survey = ba_s[["BA_B_3y"]],
+        BA_1y_assessment = ba_a[["BA_1y"]], BA_3y_assessment = ba_a[["BA_3y"]], BA_B_1y_assessment = ba_a[["BA_B_1y"]], BA_B_3y_assessment = ba_a[["BA_B_3y"]],
+        BA_B_reference = BAr$v, BA_B_reference_source = BAr$s,
+        K_VBGF = K$v, K_source = K$s, Wmat_Winf = WW$v, Wmat_Winf_source = WW$s,
+        Z = Z$v, Z_source = Z$s)
+      series[[length(series) + 1]] <- merge(
+        merge(srv[, .(Year, B_survey = mean_density)], fin[, .(Year, B_pipeline = mean_density)], by = "Year", all = TRUE),
+        if (sa_on) sas$series[, .(Year, B_assessment = B)] else data.table(Year = integer(), B_assessment = numeric()), by = "Year", all = TRUE)[
+          , `:=`(Species = sp, Stanza = stz, FG_num = fg, FG_name = nms[[stz]])]
+    }
+    if (nrow(tot_srv)) {
+      bt <- ba_fun(tot_srv$Year, tot_srv$B)
+      rows[[length(rows) + 1]] <- data.table(Species = sp, Stanza = "total (juvenile + adult)", Leading_stanza = FALSE,
+        B_survey_t_km2 = tot_srv[Year %in% yrs, mean(B)], B_survey_source = "sum of the two stanzas",
+        B_pipeline_t_km2 = final[FG_num %in% fgs & Year %in% yrs, sum(mean_density, na.rm = TRUE) / max(1, uniqueN(Year))],
+        BA_1y_survey = bt[["BA_1y"]], BA_3y_survey = bt[["BA_3y"]], BA_B_1y_survey = bt[["BA_B_1y"]], BA_B_3y_survey = bt[["BA_B_3y"]])
+    }
+  }
+  tab <- rbindlist(rows, use.names = TRUE, fill = TRUE)
+  tab[, BA_reference_year := y0]
+  ser <- rbindlist(series, use.names = TRUE, fill = TRUE)
+  if (nrow(ser)) setcolorder(ser, c("Species", "Stanza", "FG_num", "FG_name", "Year"))
+  list(table = tab, series = ser)
+}
+
 ## resolve_fao_species_reference(): finds (or downloads) FAO's
 ## CL_FI_SPECIES_GROUPS.csv reference and standardizes its English-name/
 ## scientific-name columns - the same source 02_fisheries.R already uses
