@@ -1917,6 +1917,82 @@ validation_plots[["15b_prebal_outliers_vs_other_models"]] <- tryCatch({
     theme_minimal(base_size = 8) + theme(legend.position = "bottom")
 }, error = function(e) { message("[05_validation.R plot] PREBAL outliers vs other models skipped - ", conditionMessage(e)); NULL })
 
+## 21) Multistanza groups next to the other models: for every stanza FG
+## (pbqb-traits/multistanza_parameters.csv, from 01 and 03), this
+## model's B, P/B and Q/B, the alternative biomass sources (MEDITS/MEDIAS
+## survey and stock assessment) and Z per stanza (EwE: Z = P/B), next to
+## the 1995 Western Med model (comparison_dt), each reference model
+## (reference_model_*_comparison_REVIEW.csv, e.g. the NW Med model) and
+## EcoBase (mean P/B, Q/B). Output: multistanza_vs_other_models_REVIEW.csv.
+validation_plots[["15c_multistanza_vs_other_models"]] <- tryCatch({
+  msf <- c(file.path(out_dir, "pbqb-traits", "multistanza_parameters.csv"), file.path(out_dir, "biomass", "multistanza_parameters_REVIEW.csv"))
+  msf <- msf[file.exists(msf)][1]
+  if (is.na(msf)) stop("no multistanza_parameters.csv (no juvenile/adult FG pair, or 01/03 not rerun)")
+  ms <- fread(msf)[is.finite(FG_num)]
+  if (!nrow(ms)) stop("no stanza FG in ", basename(msf))
+  fgs <- ms[, .(FG_num = as.integer(FG_num), FG_name, Species, Stanza)]
+  nb <- read_sheet_safe("Ecopath_B", c("FG_num", "Biomass"))
+  npq <- read_sheet_safe("Ecopath_PBQB", c("FG_num", "PB_FG", "QB_FG"))
+  this <- rbindlist(list(
+    if (!is.null(nb)) nb[, .(FG_num = as.integer(FG_num), metric = "B", value = suppressWarnings(as.numeric(Biomass)))],
+    if (!is.null(npq)) npq[, .(FG_num = as.integer(FG_num), metric = "PB", value = suppressWarnings(as.numeric(PB_FG)))],
+    if (!is.null(npq)) npq[, .(FG_num = as.integer(FG_num), metric = "QB", value = suppressWarnings(as.numeric(QB_FG)))]))
+  src <- list(this[FG_num %in% fgs$FG_num][, `:=`(source = "This model", note = NA_character_)])
+  alt <- function(col, metric, lab, note_col = NULL) if (col %in% names(ms))
+    ms[is.finite(get(col)) & get(col) > 0, .(FG_num = as.integer(FG_num), metric = metric, value = get(col), source = lab,
+                                             note = if (!is.null(note_col) && note_col %in% names(ms)) as.character(get(note_col)) else NA_character_)]
+  src <- c(src, list(alt("B_survey_t_km2", "B", "This model: survey (MEDITS/MEDIAS)", "B_survey_source"),
+                     alt("B_assessment_t_km2", "B", "This model: stock assessment", "Assessment"),
+                     alt("Z", "PB", "This model: Z per stanza", "Z_source")))
+  if (exists("comparison_dt") && nrow(comparison_dt))
+    src[[length(src) + 1]] <- comparison_dt[FG_num %in% fgs$FG_num & metric %in% c("Biomass", "PB", "QB") & is.finite(old_value) & old_value > 0,
+      .(FG_num = as.integer(FG_num), metric = fifelse(metric == "Biomass", "B", metric), value = old_value, source = "WMed 1995 model", note = Old_FG_name)]
+  for (f in list.files(csv_out_dir, "^reference_model_.*_comparison_REVIEW\\.csv$", full.names = TRUE)) {
+    r <- fread(f); mdl <- sub("^reference_model_(.*)_comparison_REVIEW\\.csv$", "\\1", basename(f))
+    r[, metric := fcase(grepl("^Biomass", metric), "B", grepl("^P/B", metric), "PB", grepl("^Q/B", metric), "QB")]
+    src[[length(src) + 1]] <- r[FG_num %in% fgs$FG_num & is.finite(ref) & ref > 0, .(FG_num = as.integer(FG_num), metric, value = ref, source = mdl, note = ref_groups)]
+  }
+  ef <- file.path(out_dir, "pbqb-traits", "Ecobase.csv")
+  if (file.exists(ef)) {
+    e <- fread(ef)
+    if (all(c("FG_num", "PB_ecobase", "QB_ecobase") %in% names(e)))
+      src[[length(src) + 1]] <- rbindlist(list(
+        e[FG_num %in% fgs$FG_num & is.finite(PB_ecobase) & PB_ecobase > 0, .(FG_num = as.integer(FG_num), metric = "PB", value = PB_ecobase)],
+        e[FG_num %in% fgs$FG_num & is.finite(QB_ecobase) & QB_ecobase > 0, .(FG_num = as.integer(FG_num), metric = "QB", value = QB_ecobase)]))[
+          , `:=`(source = "EcoBase (mean)", note = NA_character_)]
+  }
+  all_src <- merge(rbindlist(src, use.names = TRUE, fill = TRUE)[is.finite(value)], fgs, by = "FG_num")
+  all_src <- merge(all_src, this[, .(FG_num, metric, this = value)], by = c("FG_num", "metric"), all.x = TRUE)
+  all_src[, ratio_this_to_source := fifelse(source == "This model", NA_real_, this / value)]
+  all_src[, flag := source != "This model" & !grepl("^This model:", source) & is.finite(ratio_this_to_source) &
+                    (ratio_this_to_source > 2 | ratio_this_to_source < 0.5)]
+  setcolorder(all_src, c("Species", "Stanza", "FG_num", "FG_name", "metric", "source", "value", "this", "ratio_this_to_source", "flag", "note"))
+  fwrite(all_src[order(Species, FG_num, metric, source != "This model", source)], file.path(csv_out_dir, "multistanza_vs_other_models_REVIEW.csv"))
+  .add_summary_row("Multistanza groups: B, P/B, Q/B outside 0.5-2x of another model",
+                   file.path(csv_out_dir, "multistanza_vs_other_models_REVIEW.csv"), all_src[flag == TRUE, .N])
+  message("[05_validation.R] Multistanza groups vs other models: ", uniqueN(fgs$FG_num), " stanza FG(s), ",
+          all_src[!grepl("^This model", source), uniqueN(source)], " other model(s); ", all_src[flag == TRUE, .N],
+          " value(s) outside 0.5-2x (multistanza_vs_other_models_REVIEW.csv).")
+  labs_map <- c(B = "Biomass (t/km2)", PB = "P/B or Z (1/year)", QB = "Q/B (1/year)")
+  pd <- copy(all_src)[, panel := factor(labs_map[metric], levels = labs_map)]
+  pd[, row := factor(paste(FG_num, FG_name), levels = rev(unique(paste(FG_num, FG_name)[order(FG_num)])))]
+  pal <- c("This model" = "firebrick", "This model: survey (MEDITS/MEDIAS)" = "#F4A582", "This model: stock assessment" = "#762A83",
+           "This model: Z per stanza" = "#D6604D", "WMed 1995 model" = "grey30", "EcoBase (mean)" = "#1b7f9e")
+  other <- setdiff(unique(pd$source), names(pal))
+  pal <- c(pal, stats::setNames(c("#E69F00", "#009E73", "#CC79A7", "#56B4E9")[seq_along(other)], other))
+  pal <- pal[names(pal) %in% unique(pd$source)]
+  ggplot(pd, aes(value, row, colour = source, shape = grepl("^This model", source))) +
+    geom_line(aes(group = row), colour = "grey80") +
+    geom_point(size = 2.6, alpha = 0.9) +
+    scale_x_log10() + facet_wrap(~ panel, scales = "free_x", ncol = 3) +
+    scale_colour_manual(values = pal, name = NULL) + scale_shape_manual(values = c(`TRUE` = 17, `FALSE` = 16), guide = "none") +
+    guides(colour = guide_legend(nrow = 2)) +
+    labs(title = "Multistanza groups: this model next to the 1995 Western Med model, the reference models and EcoBase",
+         subtitle = "Triangles = this model (Ecopath input and the alternative sources: survey, stock assessment, Z per stanza); circles = other models (multistanza_vs_other_models_REVIEW.csv)",
+         x = NULL, y = NULL) +
+    theme_minimal(base_size = 8) + theme(legend.position = "bottom")
+}, error = function(e) { message("[05_validation.R plot] Multistanza groups vs other models skipped - ", conditionMessage(e)); NULL })
+
 validation_plots[["01b_biomass_vs_old_model_by_fg"]] <- p_bio          # values side by side, same total tonnes (see .bio_pair_plot above)
 validation_plots[["01c_biomass_vs_old_model_as_published"]] <- p_bio_pub
 
