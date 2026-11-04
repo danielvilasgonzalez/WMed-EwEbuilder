@@ -285,7 +285,9 @@ resolve_col <- function(dt_names, aliases) {
   dt_names[norm_colname(dt_names) == norm_colname(hit[1])][1]
 }
 
-normalize_name <- function(x) tolower(trimws(gsub("[[:space:]]+", " ", gsub("[._-]+", " ", x))))
+## "+" counts as punctuation too: an FG renamed "Sparidae+" -> "Sparidae"
+## (or the reverse) still matches the crosswalks and the other models
+normalize_name <- function(x) tolower(trimws(gsub("[[:space:]]+", " ", gsub("[._+-]+", " ", x))))
 
 ## VALIDATION_REFERENCE_DIR: hand-typed reference/lookup tables for
 ## this script, externalized to CSV so they're editable without
@@ -521,9 +523,12 @@ crosswalk_path <- file.path(VALIDATION_REFERENCE_DIR, "old_to_new_fg_crosswalk.c
 if (file.exists(crosswalk_path)) {
   xw <- unique(fread(crosswalk_path)[, .(norm_name = normalize_name(Old_FG_name), New_FG_name = trimws(New_FG_name))])
   ## one -> several: synthetic combined new FGs
-  split_targets <- unique(xw[grepl("+", New_FG_name, fixed = TRUE), New_FG_name])
+  ## " + " (spaced) joins several new FGs; a "+" inside an FG's own name
+  ## (e.g. "Sparidae+") is part of the name, not a split
+  .new_names <- normalize_name(unique(unlist(lapply(new_metrics, function(d) d$FG_name))))
+  split_targets <- unique(xw[grepl("\\s\\+\\s", New_FG_name) & !normalize_name(New_FG_name) %in% .new_names, New_FG_name])
   for (k in seq_along(split_targets)) {
-    parts <- normalize_name(trimws(strsplit(split_targets[k], "+", fixed = TRUE)[[1]]))
+    parts <- normalize_name(trimws(strsplit(split_targets[k], "\\s\\+\\s")[[1]]))
     bw <- if (!is.null(new_metrics$Biomass)) new_metrics$Biomass[normalize_name(FG_name) %in% parts, .(FG_name, w = new_value)] else NULL
     for (m in names(new_metrics)) {
       d <- new_metrics[[m]][normalize_name(FG_name) %in% parts]
@@ -1992,6 +1997,89 @@ validation_plots[["15c_multistanza_vs_other_models"]] <- tryCatch({
          x = NULL, y = NULL) +
     theme_minimal(base_size = 8) + theme(legend.position = "bottom")
 }, error = function(e) { message("[05_validation.R plot] Multistanza groups vs other models skipped - ", conditionMessage(e)); NULL })
+
+## 22) All models side by side: every FG with a value in at least one
+## other model - this model, the 1995 Western Med model (comparison_dt;
+## old groups split in 2026, e.g. European hake -> juv. + adult, are
+## compared as the sum of the new FGs), each reference model
+## (reference_model_*_comparison_REVIEW.csv, e.g. the NW Med model) and
+## EcoBase (P/B, Q/B). Biomass is t/km2 of each model's own area (as
+## published). Output: all_models_comparison_REVIEW.csv (one row per FG x
+## metric, one column per model) and one page per metric.
+all_models_cmp <- tryCatch({
+  labs_map <- c(B = "Biomass (t/km2)", PB = "P/B (1/year)", QB = "Q/B (1/year)")
+  src <- list()
+  if (exists("comparison_dt") && nrow(comparison_dt)) {
+    cd <- comparison_dt[metric %in% c("Biomass", "PB", "QB")][, metric := fifelse(metric == "Biomass", "B", metric)]
+    src[[1]] <- cd[is.finite(new_value), .(FG_num, FG_name, metric, source = "This model", value = new_value, note = NA_character_)]
+    src[[2]] <- cd[is.finite(old_value) & old_value > 0, .(FG_num, FG_name, metric, source = "WMed 1995 model", value = old_value, note = Old_FG_name)]
+  }
+  for (f in list.files(csv_out_dir, "^reference_model_.*_comparison_REVIEW\\.csv$", full.names = TRUE)) {
+    r <- fread(f); mdl <- sub("^reference_model_(.*)_comparison_REVIEW\\.csv$", "\\1", basename(f))
+    r[, metric := fcase(grepl("^Biomass", metric), "B", grepl("^P/B", metric), "PB", grepl("^Q/B", metric), "QB")]
+    src[[length(src) + 1]] <- r[is.finite(this), .(FG_num, FG_name, metric, source = "This model", value = this, note = NA_character_)]
+    src[[length(src) + 1]] <- r[is.finite(ref) & ref > 0, .(FG_num, FG_name, metric, source = mdl, value = ref, note = ref_groups)]
+  }
+  ef <- file.path(out_dir, "pbqb-traits", "Ecobase.csv")
+  if (file.exists(ef)) {
+    e <- fread(ef)
+    if (all(c("FG_num", "PB_ecobase", "QB_ecobase") %in% names(e)))
+      src[[length(src) + 1]] <- rbindlist(list(
+        e[is.finite(PB_ecobase) & PB_ecobase > 0, .(FG_num, metric = "PB", value = PB_ecobase)],
+        e[is.finite(QB_ecobase) & QB_ecobase > 0, .(FG_num, metric = "QB", value = QB_ecobase)]))[
+          , `:=`(source = "EcoBase (mean)", note = NA_character_)]
+  }
+  if (!length(src)) stop("no 1995 model comparison, reference model or EcoBase table")
+  al <- rbindlist(src, use.names = TRUE, fill = TRUE)
+  al <- unique(al, by = c("FG_num", "metric", "source"))
+  nm <- unique(al[!is.na(FG_name), .(FG_num, FG_name)], by = "FG_num")
+  al <- merge(al[, !"FG_name"], nm, by = "FG_num", all.x = TRUE)
+  this <- al[source == "This model", .(FG_num, metric, this = value)]
+  oth <- al[source != "This model" & is.finite(value) & value > 0]
+  oth <- merge(oth, this, by = c("FG_num", "metric"), all.x = TRUE)
+  if (!nrow(oth)) stop("no FG with a value in another model")
+  oth[, ratio := fifelse(is.finite(this) & this > 0, this / value, NA_real_)]
+  keyf <- unique(oth[, .(FG_num, metric)])
+  pd <- merge(al, keyf, by = c("FG_num", "metric"))
+  st <- oth[, .(n_other_models = .N, other_min = min(value), other_max = max(value),
+                ratio_to_other_median = this[1] / stats::median(value)), by = .(FG_num, metric)]
+  st[, flag := is.finite(ratio_to_other_median) & (ratio_to_other_median > 2 | ratio_to_other_median < 0.5)]
+  wide <- dcast(pd, FG_num + FG_name + metric ~ source, value.var = "value")
+  wide <- merge(wide, st, by = c("FG_num", "metric"), all.x = TRUE)
+  notes <- dcast(oth[!is.na(note) & nzchar(note)], FG_num + metric ~ paste0(source, " groups"), value.var = "note")
+  if (nrow(notes)) wide <- merge(wide, notes, by = c("FG_num", "metric"), all.x = TRUE)
+  setorder(wide, metric, FG_num)
+  fwrite(wide, file.path(csv_out_dir, "all_models_comparison_REVIEW.csv"))
+  .add_summary_row("All models: B, P/B, Q/B outside 0.5-2x of the other models' median",
+                   file.path(csv_out_dir, "all_models_comparison_REVIEW.csv"), st[flag == TRUE, .N])
+  message("[05_validation.R] All models side by side: ", uniqueN(keyf$FG_num), " FG(s) with a value in at least one other model (",
+          paste(setdiff(unique(pd$source), "This model"), collapse = ", "), "); ", st[flag == TRUE, .N],
+          " FG x metric outside 0.5-2x of the other models' median (all_models_comparison_REVIEW.csv).")
+  list(pd = merge(pd, st[, .(FG_num, metric, flag)], by = c("FG_num", "metric"), all.x = TRUE), labs_map = labs_map)
+}, error = function(e) { message("[05_validation.R plot] All models side by side skipped - ", conditionMessage(e)); NULL })
+if (!is.null(all_models_cmp)) for (.m in c("B", "PB", "QB")) local({
+  m <- .m; pd <- all_models_cmp$pd[metric == m]
+  if (!nrow(pd)) return(invisible())
+  pd[, row := paste0(fifelse(FG_num < 0, "(sum) ", paste0(FG_num, " ")), FG_name, fifelse(flag %in% TRUE, "  *", ""))]
+  pd[, row := factor(row, levels = rev(unique(row[order(FG_num < 0, abs(FG_num))])))]
+  pal <- c("This model" = "firebrick", "WMed 1995 model" = "grey30", "EcoBase (mean)" = "#1b7f9e")
+  other <- setdiff(unique(pd$source), names(pal))
+  pal <- c(pal, stats::setNames(c("#E69F00", "#009E73", "#CC79A7", "#56B4E9")[seq_along(other)], other))
+  pal <- pal[names(pal) %in% unique(pd$source)]
+  p <- ggplot(pd, aes(value, row, colour = source, shape = source == "This model")) +
+    geom_line(aes(group = row), colour = "grey85") +
+    geom_point(size = 2, alpha = 0.9) +
+    scale_x_log10() +
+    scale_colour_manual(values = pal, name = NULL) + scale_shape_manual(values = c(`TRUE` = 17, `FALSE` = 16), guide = "none") +
+    labs(title = paste0(all_models_cmp$labs_map[[m]], ": this model next to the other Western Med models and EcoBase"),
+         subtitle = paste0("* = this model outside 0.5-2x of the other models' median. (sum) = an old group split in 2026, compared with the sum of the new FGs.\n",
+                           if (m == "B") " Biomass in t/km2 of each model's own area." else "", " (all_models_comparison_REVIEW.csv)"),
+         x = NULL, y = NULL) +
+    theme_minimal(base_size = 7) + theme(legend.position = "bottom")
+  ggsave(file.path(plot_dir, paste0("all_models_comparison_", m, ".png")), p, width = 9,
+         height = max(4, 1.2 + 0.16 * uniqueN(pd$row)), dpi = PLOT_DPI, bg = "white", limitsize = FALSE)
+  validation_plots[[paste0("15d_all_models_", m)]] <<- p
+})
 
 validation_plots[["01b_biomass_vs_old_model_by_fg"]] <- p_bio          # values side by side, same total tonnes (see .bio_pair_plot above)
 validation_plots[["01c_biomass_vs_old_model_as_published"]] <- p_bio_pub
