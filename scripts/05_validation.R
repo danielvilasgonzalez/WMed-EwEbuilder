@@ -1726,7 +1726,13 @@ if (!length(.ref_files)) message("[05_validation.R] Reference models: none (put 
 for (.rf in .ref_files) local({
   mdl <- sub("\\.csv$", "", basename(.rf), ignore.case = TRUE)
   res <- tryCatch({
-    r <- fread(.rf, encoding = "UTF-8")
+    ## header = TRUE: the EwE export starts with an empty header cell, and
+    ## some data.table versions then guess "no header" (columns V1, V2, ...)
+    r <- fread(.rf, encoding = "UTF-8", header = TRUE)
+    if (all(grepl("^V[0-9]+$", names(r)))) {                       # still no header: take the row that holds the column names
+      hr <- which(apply(r, 1, function(z) any(grepl("group|name|biomass", z, ignore.case = TRUE))))[1]
+      if (!is.na(hr)) { setnames(r, make.unique(ifelse(is.na(unlist(r[hr])) | unlist(r[hr]) == "", paste0("V", seq_along(r)), unlist(r[hr])))); r <- r[-(1:hr)] }
+    }
     col <- function(al) resolve_col(names(r), al)
     c_nm <- col(c("FG_name", "Group", "Group_name", "Name", "FG"))
     c_b <- col(c("Biomass", "B", "Biomass_t_km2", "Biomass in habitat area (t/km^2)", "Biomass (t/km^2)"))
@@ -2084,40 +2090,49 @@ all_models_cmp <- tryCatch({
   lv <- rev(unique(pd[order(FG_num < 0, abs(FG_num)), row]))
   pd[, row := factor(row, levels = lv)]
   own <- unique(pd[is.finite(this) & this > 0, .(row, this)], by = "row")
-  .fv <- function(x) ifelse(is.na(x), "", ifelse(x >= 100, sprintf("%.0f", x), ifelse(x >= 1, sprintf("%.2f", x), sprintf("%.2g", x))))
+  .fv <- function(x) ifelse(is.na(x), "", ifelse(x >= 100, sprintf("%.0f", x), ifelse(x >= 1, sprintf("%.2f", x), ifelse(x >= 0.001, sprintf("%.2g", x), sprintf("%.1e", x)))))
   pd[, r := this / value]
-  pd[, pct_lab := ifelse(!is.finite(r), "", ifelse(abs(r - 1) >= 10, paste0("x", signif(r, 2)), paste0(ifelse(r > 1, "+", ""), round(100 * (r - 1)), "%")))]
+  pd[, pct_lab := ifelse(!is.finite(r), "", ifelse(r >= 10, paste0("x", signif(r, 2)), ifelse(r <= 0.1, paste0("1/", signif(1 / r, 2)),   # 10x or more either way: as a factor
+                                                    paste0(ifelse(r > 1, "+", ""), round(100 * (r - 1)), "%"))))]
   pd[, dir := ifelse(!is.finite(r), "none", ifelse(r > 1, "higher", "lower"))]
   pd[, out := is.finite(r) & (r > VALIDATION_RATIO_HIGH | r < VALIDATION_RATIO_LOW)]
-  allv <- c(pd$value, own$this); rng <- range(allv[is.finite(allv) & allv > 0])
-  k <- length(srcs); step <- 10                                       # text columns to the right, one decade apart (log axis)
-  x_cols <- rng[2] * step^(seq_len(1 + 2 * k) + 0.5)
-  hdr <- c("new", short(srcs), paste0("vs ", short(srcs)))
+  k <- length(srcs)
+  hdr <- c("New", short(srcs), paste0("vs ", short(srcs)))
   pal_pts <- c("New pipeline" = "firebrick", stats::setNames(c("grey35", "#E69F00", "#009E73", "#CC79A7")[seq_len(k)], short(srcs)))
   pts <- rbindlist(list(own[, .(row, v = this, who = "New pipeline")], pd[, .(row, v = value, who = as.character(src))]))
   seg <- merge(pd[, .(row, value, src)], own, by = "row")
-  vals <- rbindlist(list(own[, .(row, x = x_cols[1], lab = .fv(this), colr = "New pipeline")],
-                         pd[, .(row, x = x_cols[1 + as.integer(src)], lab = .fv(value), colr = as.character(src))]))
-  pcts <- pd[, .(row, x = x_cols[1 + k + as.integer(src)], lab = pct_lab, dir, out)]
+  vals <- rbindlist(list(own[, .(row, col = hdr[1], lab = .fv(this), colr = "New pipeline", ff = "plain")],
+                         pd[, .(row, col = hdr[1 + as.integer(src)], lab = .fv(value), colr = as.character(src), ff = "plain")],
+                         pd[, .(row, col = hdr[1 + k + as.integer(src)], lab = pct_lab, colr = dir, ff = ifelse(out, "bold", "plain"))]))
+  vals[, col := factor(col, levels = hdr)]
   n_out <- pd[out == TRUE, .N]
-  ggplot() +
-    scale_y_discrete(limits = lv) +
+  cols <- c(pal_pts, higher = "#b2182b", lower = "#2166ac", none = "grey50")
+  ## left: the points (log axis); right: a table with the values and the
+  ## changes - separate panels so the text columns never squeeze the axis
+  p_pts <- ggplot() +
+    scale_y_discrete(limits = lv, labels = function(x) ifelse(nchar(x) > 48, paste0(substr(x, 1, 46), "..."), x)) +
     geom_segment(data = seg, aes(x = value, xend = this, y = row, yend = row), colour = "grey80", linewidth = 0.4) +
-    geom_point(data = pts, aes(v, row, colour = who, shape = who == "New pipeline"), size = 1.7) +
-    geom_text(data = vals, aes(x, row, label = lab, colour = colr), size = 2, hjust = 1, show.legend = FALSE) +
-    geom_text(data = pcts, aes(x, row, label = lab, colour = dir, fontface = ifelse(out, "bold", "plain")), size = 2.1, hjust = 1, show.legend = FALSE) +
-    annotate("text", x = x_cols, y = Inf, label = hdr, vjust = -0.4, hjust = 1, size = 2.4, fontface = "bold") +
-    scale_x_log10(breaks = scales::breaks_log(6), labels = function(x) ifelse(x <= rng[2] * 1.01, format(x, digits = 2, scientific = FALSE, drop0trailing = TRUE), "")) +
-    coord_cartesian(clip = "off") +
-    scale_colour_manual(values = c(pal_pts, higher = "#b2182b", lower = "#2166ac", none = "grey50"), breaks = names(pal_pts), name = NULL) +
+    geom_point(data = pts, aes(v, row, colour = who, shape = who == "New pipeline"), size = 1.6) +
+    scale_x_log10(labels = function(x) format(x, scientific = FALSE, drop0trailing = TRUE, trim = TRUE)) +
+    scale_colour_manual(values = cols, breaks = names(pal_pts), name = NULL) +
     scale_shape_manual(values = c(`TRUE` = 17, `FALSE` = 16), guide = "none") +
-    labs(title = title,
-         subtitle = paste0("Right: values, then the change of the new pipeline against each model, (new - other) / other: red = new pipeline higher, blue = lower;",
-                           "\nbold = outside ", VALIDATION_RATIO_LOW, "-", VALIDATION_RATIO_HIGH, "x (", n_out, ").",
-                           if (m == "B") "\nBiomass in t/km2: the 1995 model on the new model area (same total tonnes), the other models as published." else "",
-                           "\n(sum) = an old group split in 2026, compared with the sum of the new FGs. Table: all_models_comparison_REVIEW.csv"),
-         x = xlab, y = NULL) +
-    theme_minimal(base_size = 8) + theme(legend.position = "top", plot.margin = margin(18, 8, 5, 5))
+    labs(x = xlab, y = NULL) +
+    theme_minimal(base_size = 8) + theme(legend.position = "top", panel.grid.minor = element_blank(), axis.text.y = element_text(size = 7))
+  p_tab <- ggplot(vals, aes(col, row)) +
+    geom_text(aes(label = lab, colour = colr, fontface = ff), size = 2.2) +
+    scale_y_discrete(limits = lv) + scale_x_discrete(position = "top", drop = FALSE) +
+    scale_colour_manual(values = cols, guide = "none") +
+    labs(x = NULL, y = NULL) +
+    theme_minimal(base_size = 8) +
+    theme(axis.text.y = element_blank(), panel.grid = element_blank(), axis.text.x.top = element_text(face = "bold", size = 7.5),
+          plot.margin = margin(t = 22, r = 4, b = 5, l = 0))
+  patchwork::wrap_plots(p_pts, p_tab, nrow = 1, widths = c(1.15, 0.45 * (1 + 2 * k) / 3)) +
+    patchwork::plot_annotation(title = title,
+      subtitle = paste0("Table: the values, then the change of the new pipeline against each model, (new - other) / other (x10 or 1/10 and beyond as a factor); red = new pipeline higher,",
+                        " blue = lower, bold = outside ", VALIDATION_RATIO_LOW, "-", VALIDATION_RATIO_HIGH, "x (", n_out, ").",
+                        if (m == "B") "\nBiomass in t/km2: the 1995 model on the new model area (same total tonnes), the other models as published." else "",
+                        "\n(sum) = an old group split in 2026, compared with the sum of the new FGs. Table: all_models_comparison_REVIEW.csv"),
+      theme = theme(plot.title = element_text(size = 11, face = "bold"), plot.subtitle = element_text(size = 8)))
 }
 if (!is.null(all_models_cmp)) for (.m in c("B", "PB", "QB")) {
   .ttl <- c(B = "Biomass", PB = "P/B", QB = "Q/B")[[.m]]
@@ -2477,6 +2492,11 @@ if (length(validation_plots) == 0) {
     if (nm %in% .own_png) next
     ht <- if (nm %in% c("01b_biomass_vs_old_model_by_fg", "01c_biomass_vs_old_model_as_published", "16_pedigree", "15d_all_models_B", "15d_all_models_PB", "15d_all_models_QB")) 14 else if (nm == "15_prebal") 5 else 7
     p_save <- validation_plots[[nm]]; readable <- TRUE
+    wd <- 10
+    if (nm %in% c("15d_all_models_B", "15d_all_models_PB", "15d_all_models_QB")) {   # patchwork point plot + table: own sizes
+      n_rows <- tryCatch(length(p_save[[1]]$scales$get_scales("y")$limits), error = function(e) 70L)
+      ht <- max(6, 0.17 * n_rows + 2.2); wd <- 12; readable <- FALSE
+    }
     if (identical(nm, "13_ecosim_ts_assessment")) {
       ## height grows with the number of series so every y label fits at a
       ## readable size (the general minimum text size made 60+ labels overlap)
@@ -2485,7 +2505,7 @@ if (length(validation_plots) == 0) {
       p_save <- p_save + theme(axis.text.y = element_text(size = 8), axis.text.x = element_text(size = 9))
       readable <- FALSE
     }
-    tryCatch(ggsave(file.path(plot_dir, paste0(nm, ".png")), p_save, width = 10, height = ht, dpi = PLOT_DPI, bg = "white",
+    tryCatch(ggsave(file.path(plot_dir, paste0(nm, ".png")), p_save, width = wd, height = ht, dpi = PLOT_DPI, bg = "white",
                     limitsize = FALSE, readable = readable),
              error = function(e) NULL)
   }
