@@ -751,17 +751,25 @@ message("\n[05_validation.R] comparison_with_old_westmed_estimates_REVIEW.csv wr
 p_comparison <- tryCatch({
   d <- comparison_dt[!is.na(old_value) & !is.na(new_value) & old_value > 0 & new_value > 0]
   if (nrow(d) == 0) stop("no FG x metric row has both a real old and new value to plot")
+  d[, out := flag != "Within review range"]
+  d[, lab := paste0(fifelse(FG_num < 0, "", paste0(FG_num, " ")), FG_name)]
+  lab_layer <- if (requireNamespace("ggrepel", quietly = TRUE))
+    ggrepel::geom_text_repel(aes(label = lab), size = 2, max.overlaps = 25, min.segment.length = 0, segment.size = 0.2, show.legend = FALSE, seed = 1)
+    else geom_text(aes(label = lab), size = 2, vjust = -0.6, show.legend = FALSE)
   ggplot(d, aes(x = old_value, y = new_value, color = flag)) +
-    geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey50") +
-    geom_point(alpha = 0.7) +
+    geom_abline(slope = 1, intercept = 0, colour = "grey40") +
+    geom_abline(slope = 1, intercept = log10(VALIDATION_RATIO_HIGH), linetype = "dashed", colour = "grey70") +
+    geom_abline(slope = 1, intercept = log10(VALIDATION_RATIO_LOW), linetype = "dashed", colour = "grey70") +
+    geom_point(size = 1.8, alpha = 0.85) + lab_layer +
     scale_x_log10() + scale_y_log10() +
     facet_wrap(~metric, scales = "free") +
     scale_color_manual(values = c("Within review range" = "grey30", "Large deviation - review" = "firebrick",
                                   "Old was zero, new is nonzero" = "darkorange")) +
-    labs(title = "New pipeline vs. old West Med 'estimates' sheet",
-         subtitle = "Dashed line = perfect agreement (log-log axes) - points far from it are flagged, not necessarily wrong",
-         x = "Old workbook value", y = "New pipeline value", color = NULL) +
-    theme_minimal(base_size = 9) + theme(legend.position = "bottom")
+    labs(title = "This model vs the 1995 Western Med model: values by FG",
+         subtitle = paste0("Log scales. Line = equal values, dashed = ", VALIDATION_RATIO_HIGH, "x and ", VALIDATION_RATIO_LOW,
+                           "x. Biomass is t/km2 of each model's own area (comparison_with_old_westmed_estimates_REVIEW.csv)"),
+         x = "WMed 1995 model", y = "This model", color = NULL) +
+    theme_minimal(base_size = 8) + theme(legend.position = "bottom")
 }, error = function(e) { message("[05_validation.R] comparison plot skipped - ", conditionMessage(e)); NULL })
 if (!is.null(p_comparison)) {
   ggsave(file.path(plot_dir, "comparison_with_old_westmed_estimates.png"), p_comparison,
@@ -2005,7 +2013,7 @@ validation_plots[["15c_multistanza_vs_other_models"]] <- tryCatch({
 ## (reference_model_*_comparison_REVIEW.csv, e.g. the NW Med model) and
 ## EcoBase (P/B, Q/B). Biomass is t/km2 of each model's own area (as
 ## published). Output: all_models_comparison_REVIEW.csv (one row per FG x
-## metric, one column per model) and one page per metric.
+## metric, one column per model) and all_models_comparison.png.
 all_models_cmp <- tryCatch({
   labs_map <- c(B = "Biomass (t/km2)", PB = "P/B (1/year)", QB = "Q/B (1/year)")
   src <- list()
@@ -2055,31 +2063,38 @@ all_models_cmp <- tryCatch({
   message("[05_validation.R] All models side by side: ", uniqueN(keyf$FG_num), " FG(s) with a value in at least one other model (",
           paste(setdiff(unique(pd$source), "This model"), collapse = ", "), "); ", st[flag == TRUE, .N],
           " FG x metric outside 0.5-2x of the other models' median (all_models_comparison_REVIEW.csv).")
-  list(pd = merge(pd, st[, .(FG_num, metric, flag)], by = c("FG_num", "metric"), all.x = TRUE), labs_map = labs_map)
+  list(oth = oth, labs_map = labs_map)
 }, error = function(e) { message("[05_validation.R plot] All models side by side skipped - ", conditionMessage(e)); NULL })
-if (!is.null(all_models_cmp)) for (.m in c("B", "PB", "QB")) local({
-  m <- .m; pd <- all_models_cmp$pd[metric == m]
-  if (!nrow(pd)) return(invisible())
-  pd[, row := paste0(fifelse(FG_num < 0, "(sum) ", paste0(FG_num, " ")), FG_name, fifelse(flag %in% TRUE, "  *", ""))]
-  pd[, row := factor(row, levels = rev(unique(row[order(FG_num < 0, abs(FG_num))])))]
-  pal <- c("This model" = "firebrick", "WMed 1995 model" = "grey30", "EcoBase (mean)" = "#1b7f9e")
+if (!is.null(all_models_cmp)) validation_plots[["15d_all_models_comparison"]] <- tryCatch({
+  pd <- all_models_cmp$oth[source != "EcoBase (mean)" & is.finite(this) & this > 0 & is.finite(value) & value > 0]   # the three models; EcoBase stays in the CSV
+  if (!nrow(pd)) stop("no FG with values in this model and another model")
+  pd[, panel := factor(all_models_cmp$labs_map[metric], levels = all_models_cmp$labs_map)]
+  pd[, out := ratio > 2 | ratio < 0.5]
+  pd[, lab := paste0(fifelse(FG_num < 0, "", paste0(FG_num, " ")), FG_name)]
+  pal <- c("WMed 1995 model" = "grey25", "EcoBase (mean)" = "#1b7f9e")
   other <- setdiff(unique(pd$source), names(pal))
   pal <- c(pal, stats::setNames(c("#E69F00", "#009E73", "#CC79A7", "#56B4E9")[seq_along(other)], other))
   pal <- pal[names(pal) %in% unique(pd$source)]
-  p <- ggplot(pd, aes(value, row, colour = source, shape = source == "This model")) +
-    geom_line(aes(group = row), colour = "grey85") +
-    geom_point(size = 2, alpha = 0.9) +
-    scale_x_log10() +
-    scale_colour_manual(values = pal, name = NULL) + scale_shape_manual(values = c(`TRUE` = 17, `FALSE` = 16), guide = "none") +
-    labs(title = paste0(all_models_cmp$labs_map[[m]], ": this model next to the other Western Med models and EcoBase"),
-         subtitle = paste0("* = this model outside 0.5-2x of the other models' median. (sum) = an old group split in 2026, compared with the sum of the new FGs.\n",
-                           if (m == "B") " Biomass in t/km2 of each model's own area." else "", " (all_models_comparison_REVIEW.csv)"),
-         x = NULL, y = NULL) +
-    theme_minimal(base_size = 7) + theme(legend.position = "bottom")
-  ggsave(file.path(plot_dir, paste0("all_models_comparison_", m, ".png")), p, width = 9,
-         height = max(4, 1.2 + 0.16 * uniqueN(pd$row)), dpi = PLOT_DPI, bg = "white", limitsize = FALSE)
-  validation_plots[[paste0("15d_all_models_", m)]] <<- p
-})
+  lab_layer <- if (requireNamespace("ggrepel", quietly = TRUE))
+    ggrepel::geom_text_repel(data = pd[out == TRUE], aes(label = lab), size = 1.9, max.overlaps = 30, min.segment.length = 0,
+                             segment.size = 0.2, show.legend = FALSE, seed = 1)
+    else geom_text(data = pd[out == TRUE], aes(label = lab), size = 1.9, vjust = -0.6, show.legend = FALSE)
+  p <- ggplot(pd, aes(value, this, colour = source, shape = source)) +
+    geom_abline(slope = 1, intercept = 0, colour = "grey40") +
+    geom_abline(slope = 1, intercept = log10(2), linetype = "dashed", colour = "grey70") +
+    geom_abline(slope = 1, intercept = log10(0.5), linetype = "dashed", colour = "grey70") +
+    geom_point(aes(alpha = out), size = 1.9) + lab_layer +
+    scale_x_log10() + scale_y_log10() + facet_wrap(~ panel, scales = "free") +
+    scale_colour_manual(values = pal, name = NULL) + scale_shape_manual(values = c(16, 17, 15, 18, 3, 4)[seq_along(pal)] |> stats::setNames(names(pal)), name = NULL) +
+    scale_alpha_manual(values = c(`FALSE` = 0.45, `TRUE` = 0.95), guide = "none") +
+    labs(title = "This model vs the 1995 Western Med model and the NW Med model: biomass, P/B and Q/B by FG",
+         subtitle = paste0("Log scales. Line = equal values, dashed = 2x and 0.5x; labelled = outside 0.5-2x. One point per FG and model.",
+                           "\nBiomass is t/km2 of each model's own area (all_models_comparison_REVIEW.csv)"),
+         x = "Other model", y = "This model") +
+    theme_minimal(base_size = 8) + theme(legend.position = "bottom")
+  ggsave(file.path(plot_dir, "all_models_comparison.png"), p, width = 13, height = 5.5, dpi = PLOT_DPI, bg = "white")
+  p
+}, error = function(e) { message("[05_validation.R plot] All models comparison figure skipped - ", conditionMessage(e)); NULL })
 
 validation_plots[["01b_biomass_vs_old_model_by_fg"]] <- p_bio          # values side by side, same total tonnes (see .bio_pair_plot above)
 validation_plots[["01c_biomass_vs_old_model_as_published"]] <- p_bio_pub
