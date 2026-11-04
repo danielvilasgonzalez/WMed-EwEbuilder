@@ -3514,10 +3514,13 @@ plot_strata_profile <- function(fg_index_stratified, strata_def, top_n_fg = 40) 
   top_fg <- profile[, .(tot = sum(mean_density_per_sample, na.rm = TRUE)), by = FG_name][
     order(-tot)][seq_len(min(top_n_fg, .N)), FG_name]
   
-  ggplot(profile[FG_name %in% top_fg], aes(x = stratum_label, y = mean_density_per_sample, fill = Stratum)) +
+  pd <- profile[FG_name %in% top_fg]
+  pd[, FG_label := paste(FG_num, FG_name)]                                      # panels in FG order, numbered
+  pd[, FG_label := factor(FG_label, levels = unique(FG_label[order(FG_num)]))]
+  ggplot(pd, aes(x = stratum_label, y = mean_density_per_sample, fill = Stratum)) +
     geom_col() +
     scale_fill_gradient(low = "lightblue", high = "navy", guide = "none") +
-    facet_wrap(vars(FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
+    facet_wrap(vars(FG_label), scales = "free_y", ncol = 7, labeller = ggplot2::label_wrap_gen(width = 28)) +
     labs(title = "Depth-strata density profile by FG", x = "Depth stratum", y = "Mean density per sample") +
     theme_minimal(base_size = 10) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))

@@ -543,9 +543,10 @@ if (nrow(env_ts)) tryCatch({
 ## =================================================================
 pft_share <- NULL
 .pft_file <- file.path(diag_dir, "phytoplankton_size_classes_chl.csv")
-if (file.exists(.pft_file)) {   # downloaded on an earlier run: reuse when it covers the same years
+if (file.exists(.pft_file)) {   # downloaded on an earlier run: reuse when it covers the same years and has values
   pft_share <- fread(.pft_file)
-  if (!setequal(pft_share$year, ENV_PFT_YEARS[ENV_PFT_YEARS >= 1997])) pft_share <- NULL
+  if (!setequal(pft_share$year, ENV_PFT_YEARS[ENV_PFT_YEARS >= 1997]) ||
+      !all(is.finite(as.matrix(pft_share[, .(MICRO, NANO, PICO)])))) pft_share <- NULL
 }
 for (id in if (is.null(pft_share)) ENV_PFT_DATASETS else character(0)) {
   rows <- list()
@@ -557,12 +558,20 @@ for (id in if (is.null(pft_share)) ENV_PFT_DATASETS else character(0)) {
       lon <- nc$dim[[grep("^lon", names(nc$dim))]]$vals; lat <- nc$dim[[grep("^lat", names(nc$dim))]]$vals
       vapply(c("MICRO", "NANO", "PICO"), function(v) {
         a <- ncdf4::ncvar_get(nc, v, collapse_degen = FALSE); dm <- dim(a)
-        mean(vapply(seq_len(dm[length(dm)]), function(k) {
-          mm <- a[, , k]; .env_domain_mean(.env_mat2rast(mm, lon, lat)) }, numeric(1)), na.rm = TRUE)
+        if (length(dm) == 4) a <- a[, , 1, , drop = TRUE]              # a depth level of 1: drop it
+        dm <- dim(a); if (length(dm) == 2) { a <- array(a, c(dm, 1)); dm <- dim(a) }
+        vals <- vapply(seq_len(dm[3]), function(k) {
+          mm <- a[, , k]
+          x <- tryCatch(.env_domain_mean(.env_mat2rast(mm, lon, lat)), error = function(e) NA_real_)
+          if (!is.finite(x) && any(is.finite(mm))) x <- mean(mm, na.rm = TRUE)   # model-area mask found no cells: mean of the box
+          x }, numeric(1))
+        if (!any(is.finite(vals))) .env_msg("  [PFT] ", basename(f), " ", v, ": no values (dims ", paste(dim(a), collapse = "x"),
+                                             ", finite cells ", sum(is.finite(a)), ")")
+        mean(vals, na.rm = TRUE)
       }, numeric(1))
     }), error = function(e) { .env_msg("  [PFT] ", basename(f), ": ", conditionMessage(e)); NULL })
     if (!ENV_KEEP_NETCDF) unlink(f)
-    if (!is.null(rr)) rows[[as.character(y)]] <- data.table(dataset = id, year = y, MICRO = rr[["MICRO"]], NANO = rr[["NANO"]], PICO = rr[["PICO"]])
+    if (!is.null(rr) && all(is.finite(rr))) rows[[as.character(y)]] <- data.table(dataset = id, year = y, MICRO = rr[["MICRO"]], NANO = rr[["NANO"]], PICO = rr[["PICO"]])
   }
   if (length(rows)) { pft_share <- rbindlist(rows); break }
 }

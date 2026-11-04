@@ -1841,8 +1841,12 @@ if (STRATA) {
   ## fg_index's own per_stratum attribute already reflects whichever set
   ## was actually used to build it, so this just keeps the plot's stratum
   ## labels in sync with it instead of merging against the wrong table.
-  p_profile <- plot_strata_profile(fg_index, strata_def_for_plotting)
-  ggsave(file.path(plot_dir, "survey_fg_depth_strata_profile.png"), p_profile, width = 16, height = 12, dpi = PLOT_DPI, bg = "white")
+  ## Every FG with survey density (until 2026-11-03 only the 40 densest,
+  ## so rare groups such as groupers were missing); taller with more FGs.
+  .n_prof <- tryCatch(data.table::uniqueN(attr(fg_index, "per_stratum_raw")$FG_num), error = function(e) 40)
+  p_profile <- plot_strata_profile(fg_index, strata_def_for_plotting, top_n_fg = Inf)
+  ggsave(file.path(plot_dir, "survey_fg_depth_strata_profile.png"), p_profile, width = 18,
+         height = max(12, 2.3 * ceiling(.n_prof / 7)), dpi = PLOT_DPI, bg = "white", limitsize = FALSE)
   
   ## Same "density by depth stratum" information as the plot above, but
   ## as an Excel sheet: one row per FG, one column per stratum (region-

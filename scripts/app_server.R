@@ -15,6 +15,14 @@
 .git_dir <- normalizePath("..")   # this .qmd sits in <git_dir>/scripts
 source(file.path(.git_dir, "scripts", "wmed_paths.R"), local = TRUE)
 .paths <- wmed_find_paths(.git_dir)  # config.local.R > config.R > standard pCloud Drive place
+## Paths shown on the page: the home folder as "~", so no user name is
+## displayed (the page may be shown on a projector or shared as a screenshot).
+.show_path <- function(p) {
+  if (is.null(p) || !length(p) || is.na(p)) return(p)
+  h <- normalizePath(path.expand("~"), winslash = "/", mustWork = FALSE)
+  p2 <- gsub("\\\\", "/", p)
+  if (startsWith(p2, h)) paste0("~", substring(p2, nchar(h) + 1)) else p2
+}
 .base_out <- unname(.paths$out_dir)   # main output folder: default-input results, caches, the page's run files
 ## Results shown on the page: the folder of one run (wmed_paths.R:
 ## wmed_run_name). Default inputs -> .base_out; any other area, years or FG
@@ -709,9 +717,10 @@ output$run_status <- renderText({
   .tail30 <- function(f) if (file.exists(f)) tryCatch(paste(.utf8(tail(readLines(f, warn = FALSE), 30)), collapse = "\n"),
                                                     error = function(e) "") else ""
   tail_txt <- .tail30(.console)
+  tail_txt <- gsub(normalizePath(path.expand("~"), winslash = "/", mustWork = FALSE), "~", gsub("\\\\", "/", tail_txt), fixed = TRUE)   # no user name on screen
   ## Windows: R start-up errors land in console_raw.txt (see the Run button)
   if (!nzchar(tail_txt) && st == "error") tail_txt <- .tail30(file.path(.run_dir, "console_raw.txt"))
-  paste0("Status: ", st, "\nOutput folder: ", .out_dir,
+  paste0("Status: ", st, "\nOutput folder: ", .show_path(.out_dir),
          if (st == "error" && file.exists(.status_file)) paste0("\n", .utf8(readLines(.status_file, warn = FALSE)[1])) else "",
          if (nzchar(run_note())) paste0("\n", run_note()) else "",
          if (nzchar(tail_txt)) paste0("\n--- last lines ---\n", tail_txt) else "")
@@ -750,7 +759,7 @@ observe({   # tell the page where to load the figures from; again after every ru
 output$folders <- renderUI({
   row <- function(label, path, from, ok)
     tags$tr(tags$td(if (ok) "\u2705" else "\u274C"), tags$td(tags$strong(label)),
-            tags$td(tags$code(if (is.na(path)) "not found" else path)), tags$td(class = "text-muted", if (!is.na(from)) from))
+            tags$td(tags$code(if (is.na(path)) "not found" else .show_path(path))), tags$td(class = "text-muted", if (!is.na(from)) from))
   tagList(
     tags$table(class = "table table-sm mb-2", style = "font-size:.85rem;",
       row("Repo (git_dir)", .paths$git_dir, "this page's folder", dir.exists(file.path(.paths$git_dir, "scripts"))),
@@ -762,8 +771,8 @@ output$folders <- renderUI({
     tags$details(open = if (is.na(.paths$pcloud_dir)) NA else NULL,
       tags$summary(class = "small text-muted", "Change the folders for this computer"),
       fluidRow(
-        column(5, textInput("set_pcloud", "pCloud folder", value = if (is.na(.paths$pcloud_dir)) "" else .paths$pcloud_dir, width = "100%")),
-        column(5, textInput("set_out", "Output folder", value = .paths$out_dir, width = "100%")),
+        column(5, textInput("set_pcloud", "pCloud folder", value = if (is.na(.paths$pcloud_dir)) "" else .show_path(.paths$pcloud_dir), width = "100%")),
+        column(5, textInput("set_out", "Output folder", value = .show_path(.paths$out_dir), width = "100%")),
         column(2, tags$label(HTML("&nbsp;")), actionButton("save_folders", "Save", class = "btn-outline-primary w-100"))),
       tags$div(class = "wm-help", "Saved in config.local.R in the repo, for this computer only (not committed). Reopen the page after saving.")))
 })
@@ -814,15 +823,15 @@ output$dl_info <- renderUI({
 .setup_items <- function() {
   row <- function(item, ok, detail, fix = "") data.frame(item = item, ok = ok, detail = detail, fix = fix, stringsAsFactors = FALSE)
   out <- list()
-  out[[1]] <- row("Repository", !is.na(.git_dir) && file.exists(file.path(.git_dir, "scripts", "01_biomass.R")), .git_dir)
+  out[[1]] <- row("Repository", !is.na(.git_dir) && file.exists(file.path(.git_dir, "scripts", "01_biomass.R")), .show_path(.git_dir))
   pc <- .paths$pcloud_dir
-  out[[2]] <- row("Shared data (pCloud)", !is.na(pc) && dir.exists(pc), if (is.na(pc)) "not found" else pc,
+  out[[2]] <- row("Shared data (pCloud)", !is.na(pc) && dir.exists(pc), if (is.na(pc)) "not found" else .show_path(pc),
                   "Start pCloud Drive, or set the folder above (card 0).")
   out[[3]] <- row("FG table", !is.na(pc) && file.exists(file.path(pc, "data", "FG_WMed_2026.csv")),
-                  if (is.na(pc)) "-" else file.path(pc, "data", "FG_WMed_2026.csv"), "Check that pCloud has finished syncing the data folder.")
+                  if (is.na(pc)) "-" else .show_path(file.path(pc, "data", "FG_WMed_2026.csv")), "Check that pCloud has finished syncing the data folder.")
   wr <- !is.na(.base_out) && dir.exists(.base_out) && {
     tf <- file.path(.base_out, ".write_test"); ok <- tryCatch(file.create(tf), error = function(e) FALSE); unlink(tf); isTRUE(ok) }
-  out[[4]] <- row("Output folder writable", wr, if (is.na(.base_out)) "not set" else .base_out, "Choose another output folder above.")
+  out[[4]] <- row("Output folder writable", wr, if (is.na(.base_out)) "not set" else .show_path(.base_out), "Choose another output folder above.")
   need <- c("data.table", "ggplot2", "openxlsx", "readxl", "sf", "terra", "raster", "rfishbase", "duckdbfs", "worrms",
             "httr", "jsonlite", "ncdf4", "pdftools", "TropFishR", "ragg", "patchwork", "shiny", "rmarkdown")
   miss <- need[!vapply(need, requireNamespace, logical(1), quietly = TRUE)]
@@ -879,11 +888,20 @@ output$run_summary <- renderUI({
     err <- err[!grepl("error = function|0 error", err)]
     wrn <- grep("^Warning|^Aviso|Warning message|skipped -|could not|\\[download\\] nothing|FALLBACK", l, value = TRUE)
     wrn <- setdiff(wrn, err)
+    ## Click a row's message to see every error and warning of that script
+    ## (home folder shown as ~, so no user name on screen)
+    .hm <- normalizePath(path.expand("~"), winslash = "/", mustWork = FALSE)
+    all_msg <- gsub(.hm, "~", c(err, wrn), fixed = TRUE)
+    first <- if (length(err)) tags$code(substr(all_msg[1], 1, 160)) else if (length(wrn)) tags$small(substr(all_msg[1], 1, 160)) else "ok"
     tags$tr(tags$td(sub("_log\\.txt$", "", sub("^\\d{8}_", "", basename(f)))),
             tags$td(format(file.mtime(f), "%d %b %H:%M")),
             tags$td(class = if (length(err)) "text-danger fw-bold" else "", length(err)),
             tags$td(length(wrn)),
-            tags$td(if (length(err)) tags$code(substr(err[1], 1, 160)) else if (length(wrn)) tags$small(substr(wrn[1], 1, 160)) else "ok"))
+            tags$td(if (length(all_msg) > 1 || (length(all_msg) == 1 && nchar(all_msg[1]) > 160))
+              tags$details(tags$summary(style = "cursor: pointer;", first, tags$span(class = "text-primary ms-1", sprintf("(show all %d)", length(all_msg)))),
+                tags$ol(class = "small mb-1 mt-1 ps-3", style = "max-height: 260px; overflow-y: auto;",
+                  lapply(seq_along(all_msg), function(i) tags$li(class = if (i <= length(err)) "text-danger" else NULL, substr(all_msg[i], 1, 400)))))
+              else first))
   })
   rd <- function(p) { f <- file.path(.out_dir, p); if (file.exists(f)) tryCatch(data.table::fread(f), error = function(e) NULL) else NULL }
   fhi <- rd("validation/F_above_1_REVIEW.csv"); nob <- rd("biomass/fg_missing_ecopath_B_REVIEW.csv")
@@ -896,10 +914,16 @@ output$run_summary <- renderUI({
       tags$div(class = "small", tags$strong(sprintf("F > 1 (%d FG): ", nrow(fhi))),
                paste(sprintf("%s %.2g", fhi$FG_name, fhi$F), collapse = ", "),
                " - see the 'F by country' figure for where it comes from."),
-    if (!is.null(nob) && nrow(nob))
-      tags$div(class = "small", tags$strong(sprintf("No Ecopath B (%d FG): ", nrow(nob))),
-               paste(if ("FG_name" %in% names(nob)) nob$FG_name else nob[[1]], collapse = ", "), " - Ecopath estimates them from EE."),
-    tags$div(class = "small text-muted", "Full logs: 'Logs of the last run (.zip)' above, or the *_log.txt files in ", tags$code(.out_dir), ".")))
+    if (!is.null(nob) && nrow(nob)) {
+      nm <- if ("FG_name" %in% names(nob)) nob$FG_name else as.character(nob[[1]])
+      det <- grepl("detritus|discard", nm, ignore.case = TRUE)     # detritus groups: no P/B or EE, B is not estimated
+      tagList(
+        if (any(!det)) tags$div(class = "small", tags$strong(sprintf("No Ecopath B (%d FG): ", sum(!det))),
+                                paste(nm[!det], collapse = ", "), " - Ecopath estimates them from EE."),
+        if (any(det)) tags$div(class = "small", tags$strong("Detritus group(s) without B: "), paste(nm[det], collapse = ", "),
+                               " - Ecopath does not estimate a detritus biomass from EE; enter one in EwE if you have it (it only sets the detritus turnover)."))
+    },
+    tags$div(class = "small text-muted", "Full logs: 'Logs of the last run (.zip)' above, or the *_log.txt files in ", tags$code(.show_path(.out_dir)), ".")))
 })
 
 ## --- Results: key plots and every plot in out_dir/plots ----------------------
@@ -1001,7 +1025,7 @@ output$results <- renderUI({
     tags$div(class = "tab-content",
       tags$div(class = "tab-pane fade show active", id = "wm-view-key", key_nav, key_body),
       tags$div(class = "tab-pane fade", id = "wm-view-all", filt, grid)),
-    tags$small(class = "text-muted", "Click any plot to zoom. Plots are read from ", tags$code(.plot_dir), "."))
+    tags$small(class = "text-muted", "Click any plot to zoom. Plots are read from ", tags$code(.show_path(.plot_dir)), "."))
 })
 
 ## --- FG explorer: one FG's Ecosim series from the workbook ----------------
@@ -1027,24 +1051,71 @@ output$results <- renderUI({
   out <- do.call(rbind, out)
   if (is.null(out)) NULL else out[!is.na(out$Year) & !is.na(out$value), ]
 })
+## Ecopath baseline of each FG (Ecopath_B sheet): B in t/km2, the years it
+## averages (the info sheet / column name), EE when B is left to Ecopath,
+## and its source (Reference column).
+.ecopath_b <- reactive({
+  last_finished()
+  if (is.na(.wb_path) || !file.exists(.wb_path)) return(NULL)
+  x <- tryCatch(openxlsx::read.xlsx(.wb_path, "Ecopath_B", check.names = FALSE, sep.names = " "), error = function(e) NULL)
+  if (is.null(x) || !all(c("FG_num", "Biomass") %in% names(x))) return(NULL)
+  yc <- grep("^Biomass_\\d{4}(_\\d{4})?$", names(x), value = TRUE)
+  yrs <- if (length(yc)) { v <- as.integer(unlist(regmatches(yc[1], gregexpr("\\d{4}", yc[1])))); seq(min(v), max(v)) } else integer(0)
+  data.frame(FG_num = as.integer(x$FG_num), B = suppressWarnings(as.numeric(x$Biomass)),
+             EE = if ("EE_input" %in% names(x)) suppressWarnings(as.numeric(x$EE_input)) else NA_real_,
+             Ref = if ("Reference" %in% names(x)) as.character(x$Reference) else NA_character_,
+             years = if (length(yrs)) paste(range(yrs), collapse = "-") else NA_character_,
+             y0 = if (length(yrs)) min(yrs) else NA_integer_, y1 = if (length(yrs)) max(yrs) else NA_integer_, stringsAsFactors = FALSE)
+})
+.fmt_b <- function(v) if (!is.finite(v)) "-" else if (v == 0) "0" else if (v >= 0.01) formatC(v, format = "fg", digits = 3) else formatC(v, format = "e", digits = 2)
+output$fg_explore_info <- renderUI({
+  e <- .ecopath_b(); req(input$fg_explore)
+  if (is.null(e)) return(NULL)
+  r <- e[e$FG_num == as.integer(input$fg_explore), ]
+  if (!nrow(r)) return(NULL)
+  r <- r[1, ]
+  ref <- if (is.na(r$Ref) || !nzchar(r$Ref)) "no source recorded" else r$Ref
+  tags$div(class = "small mt-1",
+    tags$strong("Ecopath B", if (!is.na(r$years)) paste0(" (", r$years, ")"), ": "),
+    if (is.finite(r$B)) paste(.fmt_b(r$B), "t/km\u00b2") else
+      if (is.finite(r$EE)) paste0("left to Ecopath (EE = ", r$EE, ")") else "none",
+    tags$details(class = "d-inline ms-2", tags$summary(class = "d-inline text-muted", "source"),
+                 tags$div(class = "text-muted", style = "white-space: normal;", ref)))
+})
+## Every FG of the workbook (FGs sheet, else Ecopath_B), also those without
+## an Ecosim series; those are marked "(no series)" in the list.
+.fg_list <- reactive({
+  last_finished()
+  if (is.na(.wb_path) || !file.exists(.wb_path)) return(NULL)
+  sh <- tryCatch(openxlsx::getSheetNames(.wb_path), error = function(e) character(0))
+  x <- NULL
+  if ("FGs" %in% sh) x <- tryCatch(openxlsx::read.xlsx(.wb_path, "FGs", check.names = FALSE), error = function(e) NULL)
+  if (is.null(x) || !all(c("FG_num", "FG_name") %in% names(x)))
+    x <- tryCatch(openxlsx::read.xlsx(.wb_path, "Ecopath_B", check.names = FALSE, sep.names = " "), error = function(e) NULL)
+  if (is.null(x) || !all(c("FG_num", "FG_name") %in% names(x))) return(NULL)
+  unique(data.frame(FG_num = as.integer(x$FG_num), FG_name = as.character(x$FG_name), stringsAsFactors = FALSE))
+})
 observe({
-  d <- .ecosim_ts(); if (is.null(d) || !nrow(d)) return()
-  fg <- unique(d[order(d$FG_num), c("FG_num", "FG_name")])
-  ch <- stats::setNames(fg$FG_num, paste0(fg$FG_num, " - ", fg$FG_name))
+  d <- .ecosim_ts(); fl <- .fg_list()
+  fg <- rbind(if (!is.null(fl)) fl, if (!is.null(d) && nrow(d)) unique(d[, c("FG_num", "FG_name")]))
+  if (is.null(fg) || !nrow(fg)) return()
+  fg <- fg[!duplicated(fg$FG_num), ]; fg <- fg[order(fg$FG_num), ]
+  has_b <- if (!is.null(d)) fg$FG_num %in% d$FG_num[d$type == "Biomass (relative)"] else rep(FALSE, nrow(fg))
+  ch <- stats::setNames(fg$FG_num, paste0(fg$FG_num, " - ", fg$FG_name, ifelse(has_b, "", "  (no biomass series)")))
   updateSelectInput(session, "fg_explore", choices = ch, selected = { s <- isolate(input$fg_explore); if (is.null(s) || !s %in% ch) ch[1] else s })
 })
 output$fg_explore_plot <- renderPlot({
   d <- .ecosim_ts()
   validate(need(!is.null(d) && nrow(d), "No Ecosim_ts sheet yet - run the pipeline (01 and 02)."))
   req(input$fg_explore)
-  d <- d[d$FG_num == as.integer(input$fg_explore), ]
-  validate(need(nrow(d) > 0, "No time series for this FG in Ecosim_ts."))
+  .fg_now <- as.integer(input$fg_explore)
+  d <- d[d$FG_num == .fg_now, ]
   cvf <- file.path(.out_dir, "biomass", "survey_index_cv_by_fg_year.csv")
   b <- d[d$type == "Biomass (relative)", ]
   if (nrow(b) && file.exists(cvf)) {
     cv <- tryCatch(data.table::fread(cvf), error = function(e) NULL)
     if (!is.null(cv) && all(c("FG_num", "Year", "cv_index") %in% names(cv))) {
-      cv <- as.data.frame(cv)[cv$FG_num == d$FG_num[1], c("Year", "cv_index")]
+      cv <- as.data.frame(cv)[cv$FG_num == .fg_now, c("Year", "cv_index")]
       b <- merge(b, cv, by = "Year", all.x = TRUE)
       b$lo <- pmax(0, b$value * (1 - 1.96 * b$cv_index)); b$hi <- b$value * (1 + 1.96 * b$cv_index)
     }
@@ -1053,6 +1124,9 @@ output$fg_explore_plot <- renderPlot({
   cols <- c("Biomass (relative)" = "#0072B2", "Catches" = "#D55E00", "Discards" = "#009E73")
   sc <- ggplot2::scale_colour_manual(values = cols, limits = names(cols), drop = FALSE, name = NULL)
   th <- ggplot2::theme_minimal(base_size = 13) + ggplot2::theme(legend.position = "bottom")
+  note_panel <- function(title, txt) ggplot2::ggplot() +
+    ggplot2::annotate("text", x = 0, y = 0, label = txt, size = 3.4, colour = "grey30", lineheight = 1.1) +
+    ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 13) + ggplot2::xlim(-1, 1)
   empty <- function(title) ggplot2::ggplot() + ggplot2::annotate("text", x = 0, y = 0, label = paste("No", tolower(title))) +
     ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 13)
   p1 <- if (nrow(b)) {
@@ -1060,15 +1134,26 @@ output$fg_explore_plot <- renderPlot({
     p <- ggplot2::ggplot(b, ggplot2::aes(Year, value, colour = series))
     if ("lo" %in% names(b) && any(!is.na(b$lo)))
       p <- p + ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), fill = cols[["Biomass (relative)"]], colour = NA, alpha = 0.2, na.rm = TRUE)
+    e <- .ecopath_b(); r <- if (!is.null(e)) e[e$FG_num == .fg_now, ][1, ] else NULL
+    sub <- if (!is.null(r) && nrow(r) && !is.na(r$FG_num))
+      paste0("Ecopath B", if (!is.na(r$years)) paste0(" ", r$years), ": ",
+             if (is.finite(r$B)) paste(.fmt_b(r$B), "t/km\u00b2") else if (is.finite(r$EE)) paste0("left to Ecopath (EE ", r$EE, ")") else "none") else NULL
+    if (!is.null(r) && nrow(r) && is.finite(r$y0))   # the Ecopath baseline years
+      p <- p + ggplot2::annotate("rect", xmin = r$y0 - 0.5, xmax = r$y1 + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
     p + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) + sc + th +
-      ggplot2::labs(title = "Biomass (relative to the first year)", x = NULL, y = "B / B first year")
-  } else empty("Biomass series")
+      ggplot2::labs(title = "Biomass (relative to the first year)", subtitle = sub, x = NULL, y = "B / B first year")
+  } else {
+    .nm <- if (!is.null(.fg_list())) .fg_list()$FG_name[match(.fg_now, .fg_list()$FG_num)] else ""
+    note_panel("Biomass", if (grepl("detritus|discard", .nm, ignore.case = TRUE))
+      "Detritus group: no biomass series.\nEcosim does not fit detritus\nto a time series."
+    else "No biomass series for this group.\nNo survey index, literature or\nstock-assessment trend was found,\nso Ecosim has no biomass series\nto fit for it. Its Ecopath B is below.")
+  }
   ct <- d[d$type %in% c("Catches", "Discards"), ]
   p2 <- if (nrow(ct)) {
     ct$series <- ct$type
     ggplot2::ggplot(ct, ggplot2::aes(Year, value, colour = series)) + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) +
       sc + th + ggplot2::labs(title = "Catches and discards", x = NULL, y = "t/km\u00b2")
-  } else empty("Catches")
+  } else note_panel("Catches and discards", "No catch or discards recorded\nfor this group in the data sources.")
   if (requireNamespace("patchwork", quietly = TRUE))
     patchwork::wrap_plots(p1, p2, ncol = 2, guides = "collect") & ggplot2::theme(legend.position = "bottom")
   else p1

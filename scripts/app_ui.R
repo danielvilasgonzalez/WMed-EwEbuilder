@@ -274,8 +274,9 @@ tagList(
       tags$summary(class = "card-header py-2", tags$strong("FG explorer"), " - one group's Ecosim series from the workbook"),
       tags$div(class = "card-body py-2",
         selectInput("fg_explore", NULL, choices = NULL, width = "420px"),
-        plotOutput("fg_explore_plot", height = "330px"),
-        tags$div(class = "wm-help", "Band: survey sampling uncertainty of the index (index x (1 \u00b1 1.96 CV)), for the FGs measured by MEDITS."))),
+        plotOutput("fg_explore_plot", height = "340px"),
+        uiOutput("fg_explore_info"),
+        tags$div(class = "wm-help", "Band: survey sampling uncertainty of the index (index x (1 \u00b1 1.96 CV)), for the FGs measured by MEDITS. Grey: the Ecopath baseline years; their B (t/km\u00b2) is in the subtitle and below, with its source."))),
     tags$div(class = "wm-results", uiOutput("results"))),
 
   tags$script(type = "application/json", id = "wm-gsa-geojson", HTML(.gsa_geojson)),
