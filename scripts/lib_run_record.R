@@ -130,6 +130,14 @@ wmed_write_run_record <- function(out_dir, git_dir, pcloud_dir, t0, settings = l
                       Value = c(rec$git_commit, rec$R, basename(f), as.character(nrow(cat))), stringsAsFactors = FALSE)
     info <- rbind(info[!info$Field %in% add$Field, c("Field", "Value")], add)
     upsert_workbook_sheets(list(info = info), wb)
+    ## upsert_workbook_sheets() re-adds the sheet at the end: put info first
+    ## again, so the workbook opens on it (then FGs, Fleets, ...).
+    w <- openxlsx::loadWorkbook(wb); nm <- names(w)
+    if (nm[1] != "info" && "info" %in% nm) {
+      openxlsx::worksheetOrder(w) <- c(match("info", nm), setdiff(seq_along(nm), match("info", nm)))
+      openxlsx::activeSheet(w) <- 1
+      openxlsx::saveWorkbook(w, wb, overwrite = TRUE)
+    }
   }, error = function(e) message("[run record] info sheet not updated: ", conditionMessage(e)))
   message("[run record] ", basename(f), " written (settings, git commit ", rec$git_commit, ", ", nrow(cat), " input files with size, date and md5).")
   invisible(f)

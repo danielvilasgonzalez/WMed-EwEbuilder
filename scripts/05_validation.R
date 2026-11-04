@@ -1646,6 +1646,143 @@ validation_plots[["16_pedigree"]] <- tryCatch({
 
 fwrite(validation_summary, file.path(csv_out_dir, "validation_summary_ALL.csv"))
 
+## 18) Discard rate by vessel group vs GFCM SoMFi 2025 (Figure/Table 22:
+## average discard rate of vessel groups, western Mediterranean, 2015-2025).
+## This model's rate per group = sum D / sum (L + D) over the fleet table
+## (02, catches_by_country_fleet_sector_year.csv), years of the reference
+## period that the model covers, all countries and per country. Our fleet
+## types per vessel group: validation_reference_tables/
+## gfcm_somfi2025_discard_rates_by_vessel_group.csv (model_fleet_types).
+validation_plots[["18_discard_rate_vs_somfi"]] <- tryCatch({
+  ref <- read_validation_reference("gfcm_somfi2025_discard_rates_by_vessel_group.csv",
+                                   c("vessel_group", "discard_rate_pct", "period", "model_fleet_types"))
+  fp <- file.path(out_dir, "fisheries", "catches_by_country_fleet_sector_year.csv")
+  if (!file.exists(fp)) stop("catches_by_country_fleet_sector_year.csv not found - run 02 first")
+  fl <- fread(fp)
+  yrs <- as.integer(unlist(strsplit(ref$period[1], "-"))); yrs <- seq(yrs[1], yrs[length(yrs)])
+  fl <- fl[Year %in% yrs & is.finite(Landings_t)]
+  map <- ref[, .(FleetType = trimws(unlist(strsplit(model_fleet_types, ";")))), by = vessel_group]
+  fl <- merge(fl, map, by = "FleetType")
+  if (!nrow(fl)) stop("no fleet rows for the SoMFi vessel groups in ", ref$period[1])
+  tot <- fl[, .(landings_t = sum(Landings_t, na.rm = TRUE), discards_t = sum(Discard_t, na.rm = TRUE)), by = vessel_group][, Country := "All countries"]
+  cty <- fl[, .(landings_t = sum(Landings_t, na.rm = TRUE), discards_t = sum(Discard_t, na.rm = TRUE)), by = .(vessel_group, Country)]
+  cmp <- rbindlist(list(tot, cty), use.names = TRUE)
+  cmp[, model_rate_pct := 100 * discards_t / (landings_t + discards_t)]
+  cmp <- merge(cmp, ref[, .(vessel_group, somfi_rate_pct = discard_rate_pct)], by = "vessel_group")
+  cmp[, ratio := fifelse(somfi_rate_pct > 0, model_rate_pct / somfi_rate_pct, NA_real_)]
+  cmp[, flag := Country == "All countries" & !is.na(ratio) & (ratio > 2 | ratio < 0.5)]
+  fwrite(cmp[order(vessel_group, Country != "All countries", Country)], file.path(csv_out_dir, "discard_rate_vs_somfi2025_REVIEW.csv"))
+  .add_summary_row("Discard rate by vessel group vs GFCM SoMFi 2025 (all countries outside 0.5-2x)",
+                   file.path(csv_out_dir, "discard_rate_vs_somfi2025_REVIEW.csv"), cmp[flag == TRUE, .N])
+  message("[05_validation.R] Discard rate vs SoMFi 2025 (", min(fl$Year), "-", max(fl$Year), "): ",
+          paste(cmp[Country == "All countries", sprintf("%s %.1f%% (SoMFi %g%%)", vessel_group, model_rate_pct, somfi_rate_pct)], collapse = "; "), ".")
+  cmp[, vessel_group := factor(vessel_group, levels = ref$vessel_group)]
+  cmp[, Country := factor(Country, levels = c("All countries", sort(setdiff(unique(Country), "All countries"))))]
+  ggplot(cmp, aes(x = Country, y = model_rate_pct, fill = Country == "All countries")) +
+    geom_col(width = 0.7) +
+    geom_hline(aes(yintercept = somfi_rate_pct), colour = "firebrick", linewidth = 0.8) +
+    geom_text(data = unique(cmp[, .(vessel_group, somfi_rate_pct)]), aes(x = Inf, y = somfi_rate_pct, label = paste0("SoMFi ", somfi_rate_pct, "%")),
+              inherit.aes = FALSE, hjust = 1.05, vjust = -0.5, colour = "firebrick", size = 2.8) +
+    geom_text(aes(label = sprintf("%.1f", model_rate_pct)), vjust = -0.3, size = 2.4) +
+    facet_wrap(~ vessel_group, scales = "free_y") +
+    scale_fill_manual(values = c(`TRUE` = "#0b4f6c", `FALSE` = "#8fb8c9"), guide = "none") +
+    labs(title = "Discard rate by vessel group: this model vs GFCM SoMFi 2025 (western Mediterranean)",
+         subtitle = paste0("Share of the catch discarded, ", min(fl$Year), "-", max(fl$Year), ", from the fleet table (02). Red line: SoMFi 2025 average 2015-2025 (Figure 22)"),
+         x = NULL, y = "Discards (% of catch)") +
+    theme_minimal(base_size = 8) + theme(axis.text.x = element_text(angle = 35, hjust = 1))
+}, error = function(e) { message("[05_validation.R plot] discard rate vs SoMFi skipped - ", conditionMessage(e)); NULL })
+
+## 17) Other Ecopath models of the area (reference models): B, P/B, Q/B
+## Every CSV in pcloud_dir/data/validation_reference_models/ is one model
+## (file name = model name), e.g. the EwE "Basic input" table exported as
+## CSV. Columns (names matched loosely, decimal commas read): group name
+## ("Group name"/FG_name), biomass ("Biomass in habitat area (t/km^2)"/
+## Biomass), "Hab area (proportion)" (B x it = B per km2 of the model
+## area), P/B, Q/B and P/Q ("Production / consumption": P/B = P/Q x Q/B
+## where P/B is blank, as Ecopath does). Groups are matched to this
+## model's FGs by <model>_crosswalk.csv next to it (columns ref_group,
+## WMed_FG_num; blank = no counterpart), else a WMed_FG_num column, else
+## the names. Several of its groups on one FG: B summed, P/B and Q/B
+## biomass-weighted means. Both models' B are densities (t/km2) of their
+## own areas, so they compare directly; a ratio this/reference outside
+## 0.5-2 is flagged, as in the comparison with the 1995 model.
+.ref_dir <- file.path(pcloud_dir, "data", "validation_reference_models")
+.ref_files <- if (dir.exists(.ref_dir)) list.files(.ref_dir, "\\.csv$", full.names = TRUE, ignore.case = TRUE) else character(0)
+.ref_files <- .ref_files[!grepl("_crosswalk\\.csv$", .ref_files, ignore.case = TRUE)]   # crosswalks are not models
+if (!length(.ref_files)) message("[05_validation.R] Reference models: none (put CSVs in ", .ref_dir, " to compare B, P/B and Q/B with other models).")
+for (.rf in .ref_files) local({
+  mdl <- sub("\\.csv$", "", basename(.rf), ignore.case = TRUE)
+  res <- tryCatch({
+    r <- fread(.rf, encoding = "UTF-8")
+    col <- function(al) resolve_col(names(r), al)
+    c_nm <- col(c("FG_name", "Group", "Group_name", "Name", "FG"))
+    c_b <- col(c("Biomass", "B", "Biomass_t_km2", "Biomass in habitat area (t/km^2)", "Biomass (t/km^2)"))
+    c_pb <- col(c("PB", "P/B", "PB_yr", "Production_Biomass", "Production / biomass (/year)"))
+    c_qb <- col(c("QB", "Q/B", "QB_yr", "Consumption_Biomass", "Consumption / biomass (/year)"))
+    c_pq <- col(c("PQ", "P/Q", "Production / consumption")); c_hab <- col(c("Hab area (proportion)", "Habitat area"))
+    c_map <- col(c("WMed_FG_num", "FG_num", "Model_FG_num"))
+    if (is.na(c_nm) || all(is.na(c(c_b, c_pb, c_qb)))) stop("needs a group-name column and at least one of Biomass, PB, QB (found: ", paste(names(r), collapse = ", "), ")")
+    num <- function(cn) if (is.na(cn)) NA_real_ else parse_num_eu(r[[cn]])
+    rr <- data.table(ref_group = trimws(as.character(r[[c_nm]])), B_ref = num(c_b), PB_ref = num(c_pb), QB_ref = num(c_qb),
+                     PQ_ref = num(c_pq), hab = num(c_hab),
+                     FG_num = if (!is.na(c_map)) suppressWarnings(as.integer(r[[c_map]])) else NA_integer_)
+    rr[is.finite(hab) & hab > 0 & hab < 1, B_ref := B_ref * hab]               # biomass per km2 of that model's whole area
+    rr[!is.finite(PB_ref) & is.finite(PQ_ref) & is.finite(QB_ref), PB_ref := PQ_ref * QB_ref]
+    rr <- rr[nzchar(ref_group) & !(is.na(B_ref) & is.na(PB_ref) & is.na(QB_ref))]   # header rows of multi-stanza groups
+    cw_f <- file.path(dirname(.rf), paste0(mdl, "_crosswalk.csv"))
+    if (file.exists(cw_f)) {
+      cw <- fread(cw_f, encoding = "UTF-8")
+      if (!all(c("ref_group", "WMed_FG_num") %in% names(cw))) stop(basename(cw_f), " needs columns ref_group, WMed_FG_num")
+      rr[, FG_num := suppressWarnings(as.integer(cw$WMed_FG_num))[match(normalize_name(ref_group), normalize_name(cw$ref_group))]]
+      no_counterpart <- rr[is.na(FG_num) & normalize_name(ref_group) %in% normalize_name(cw$ref_group), ref_group]
+    } else no_counterpart <- character(0)
+    new_b <- read_sheet_safe("Ecopath_B", c("FG_num", "FG_name", "Biomass"))
+    new_pq <- read_sheet_safe("Ecopath_PBQB", c("FG_num", "PB_FG", "QB_FG"))
+    nw <- new_b[, .(FG_num = as.integer(FG_num), FG_name, B_new = suppressWarnings(as.numeric(Biomass)))]
+    if (!is.null(new_pq)) nw <- merge(nw, new_pq[, .(FG_num = as.integer(FG_num), PB_new = suppressWarnings(as.numeric(PB_FG)),
+                                                     QB_new = suppressWarnings(as.numeric(QB_FG)))], by = "FG_num", all.x = TRUE)
+    hit <- is.na(rr$FG_num) & !rr$ref_group %in% no_counterpart   # not in the crosswalk: match the names
+    rr[hit, FG_num := nw$FG_num[match(normalize_name(ref_group), normalize_name(nw$FG_name))]]
+    unm <- rr[is.na(FG_num) & !ref_group %in% no_counterpart, ref_group]
+    w <- function(x, b) if (all(is.na(x))) NA_real_ else if (sum(b[!is.na(x)], na.rm = TRUE) > 0) sum(x * b, na.rm = TRUE) / sum(b[!is.na(x)], na.rm = TRUE) else mean(x, na.rm = TRUE)
+    agg <- rr[!is.na(FG_num), .(ref_groups = paste(ref_group, collapse = " + "),
+                                B_ref = if (all(is.na(B_ref))) NA_real_ else sum(B_ref, na.rm = TRUE),
+                                PB_ref = w(PB_ref, B_ref), QB_ref = w(QB_ref, B_ref)), by = FG_num]
+    cmp <- merge(nw, agg, by = "FG_num")
+    long <- rbindlist(list(cmp[, .(FG_num, FG_name, ref_groups, metric = "Biomass (t/km2)", this = B_new, ref = B_ref)],
+                           cmp[, .(FG_num, FG_name, ref_groups, metric = "P/B (/yr)", this = PB_new, ref = PB_ref)],
+                           cmp[, .(FG_num, FG_name, ref_groups, metric = "Q/B (/yr)", this = QB_new, ref = QB_ref)]))
+    long[, ratio := fifelse(is.finite(this) & is.finite(ref) & ref > 0, this / ref, NA_real_)]
+    long[, flag := !is.na(ratio) & (ratio > 2 | ratio < 0.5)]
+    fwrite(long[order(metric, FG_num)], file.path(csv_out_dir, paste0("reference_model_", mdl, "_comparison_REVIEW.csv")))
+    if (length(unm)) fwrite(data.table(model = mdl, reference_group_not_matched = unm), file.path(csv_out_dir, paste0("reference_model_", mdl, "_unmatched_REVIEW.csv")))
+    .add_summary_row(paste0("Reference model ", mdl, ": B, P/B, Q/B ratio outside 0.5-2"),
+                     file.path(csv_out_dir, paste0("reference_model_", mdl, "_comparison_REVIEW.csv")), long[flag == TRUE, .N])
+    message("[05_validation.R] Reference model ", mdl, ": ", uniqueN(cmp$FG_num), " FG(s) compared (", length(no_counterpart),
+            " of its groups have no counterpart in the crosswalk), ", long[flag == TRUE, .N],
+            " value(s) outside 0.5-2x", if (length(unm)) paste0("; ", length(unm), " of its group(s) not matched to an FG (",
+            paste(head(unm, 8), collapse = ", "), if (length(unm) > 8) ", ..." else "", ") - add a WMed_FG_num column") else "", ".")
+    pd <- long[is.finite(this) & is.finite(ref) & this > 0 & ref > 0]
+    if (!nrow(pd)) stop("no FG with values in both models")
+    pd[, lab := paste(FG_num, FG_name)]
+    lab_layer <- if (requireNamespace("ggrepel", quietly = TRUE))
+      ggrepel::geom_text_repel(aes(label = lab), size = 2, max.overlaps = 25, min.segment.length = 0, segment.size = 0.2, show.legend = FALSE, seed = 1)
+      else geom_text(aes(label = lab), size = 2, vjust = -0.6, show.legend = FALSE)
+    ggplot(pd, aes(ref, this, colour = flag)) +
+      geom_abline(slope = 1, intercept = 0, colour = "grey40") +
+      geom_abline(slope = 1, intercept = log10(2), linetype = "dashed", colour = "grey70") +
+      geom_abline(slope = 1, intercept = log10(0.5), linetype = "dashed", colour = "grey70") +
+      geom_point(size = 1.8, alpha = 0.85) + lab_layer +
+      scale_x_log10() + scale_y_log10() + facet_wrap(~ metric, scales = "free") +
+      scale_colour_manual(values = c(`FALSE` = "grey30", `TRUE` = "firebrick"), labels = c(`FALSE` = "within 0.5-2x", `TRUE` = "outside 0.5-2x"), name = NULL) +
+      labs(title = paste0("This model vs ", mdl, ": biomass, P/B and Q/B by FG"),
+           subtitle = "Log scales. Line = equal values, dashed = 2x and 0.5x. Biomass is t/km2 of each model's own area (reference_model_*_comparison_REVIEW.csv)",
+           x = paste(mdl, "(reference)"), y = "This model") +
+      theme_minimal(base_size = 8) + theme(legend.position = "bottom")
+  }, error = function(e) { message("[05_validation.R plot] reference model ", mdl, " skipped - ", conditionMessage(e)); NULL })
+  if (!is.null(res)) validation_plots[[paste0("17_reference_model_", mdl)]] <<- res
+})
+
 validation_plots[["01b_biomass_vs_old_model_by_fg"]] <- p_bio          # values side by side, same total tonnes (see .bio_pair_plot above)
 validation_plots[["01c_biomass_vs_old_model_as_published"]] <- p_bio_pub
 

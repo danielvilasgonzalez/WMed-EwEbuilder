@@ -1247,3 +1247,23 @@ output$results_run_note <- renderUI({
   tags$div(class = "wm-help", "The inputs set above would write to ", tags$code(.run_label(want)),
            if (!want %in% .run_folders()) " (no results there yet)" else "", "; shown here: ", tags$code(.run_label(shown)), ".")
 })
+
+
+## --- Templates: the FG table and the catchability table ---------------------
+## The FG table shown in card 2 (the selected pCloud file or the uploaded
+## one) and the default catchability table, to edit and upload back.
+.catch_default <- if (!is.na(.pcloud_dir)) file.path(.pcloud_dir, "data", "Complementary data",
+                                                     "catchability_factors_ecotrans_medits_2021_spp.csv") else NA_character_
+output$dl_fg_template <- downloadHandler(
+  filename = function() { f <- fg_path(); if (is.null(f) || is.na(f)) "FG_table_template.csv" else basename(f) },
+  content = function(file) {
+    f <- fg_path()
+    if (is.null(f) || is.na(f) || !file.exists(f)) stop("FG table not found - is pCloud Drive running?")
+    file.copy(f, file)
+  })
+output$dl_catch_template <- downloadHandler(
+  filename = function() basename(.catch_default),
+  content = function(file) {
+    if (is.na(.catch_default) || !file.exists(.catch_default)) stop("Default catchability table not found in the pCloud data folder.")
+    file.copy(.catch_default, file)
+  })

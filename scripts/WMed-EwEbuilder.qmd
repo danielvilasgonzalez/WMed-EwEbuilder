@@ -2067,7 +2067,7 @@ wm_figure("fig-diet-matrix-heatmap", r"---(Diet-composition matrix: prey FG in r
 `05_validation.R` reads what 01–04 wrote; it does not change any input
 sheet.
 
-### STEP A — comparison with the 1995 Western Mediterranean model
+### Comparison with the 1995 Western Mediterranean model
 
 Reference: the "estimates" sheet of `WMed_EwE.xlsx` [@wmed1995model],
 model area $A_{old}$ = 846,002 km². Old groups are matched to new FGs
@@ -2099,7 +2099,7 @@ construction. On the 2026-10-13 data: 14 FGs flagged, 7 with $F > 1$,
 and $F$ pushes P/Q above 0.3 only for groupers (0.52) and bluefin tuna
 (0.32).
 
-### STEP B — consolidated checks
+### Consolidated checks
 
 `validation_summary_ALL.csv` indexes every REVIEW file of 01–04: P/B,
 Q/B and GE plausibility; P/Q outside 0.05–0.3; diet column sums ≠ 1;

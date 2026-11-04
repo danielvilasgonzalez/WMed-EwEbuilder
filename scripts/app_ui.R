@@ -186,6 +186,9 @@ tagList(
       column(6, selectInput("fg_file", "FG file in the pCloud data folder (FG_SPECIES_FILE)", choices = NULL, width = "100%")),
       column(6, fileInput("fg_upload", "or upload a csv", accept = ".csv", width = "100%",
                           placeholder = "columns FG_number, FG_name, species"))),
+    tags$div(class = "mb-2",
+      downloadButton("dl_fg_template", "Download the FG table shown (template)", class = "btn-sm btn-outline-secondary"),
+      tags$span(class = "wm-help ms-2", "Edit it (add species, merge or split FGs) and upload it back above.")),
     uiOutput("fg_summary")),
 
   ## 2. Years and options --------------------------------------------------
@@ -207,7 +210,9 @@ tagList(
               "Divides MEDITS density by the species catchability q. Default table: catchability_factors_ecotrans_medits_2021_spp.csv (pCloud). Upload your own below (columns ScientificName, q).", TRUE),
       conditionalPanel("input.catch_q",
         fileInput("catch_upload", "Own catchability table (CATCHABILITY_FILE, optional)", accept = ".csv", width = "100%",
-                  placeholder = "csv with ScientificName and q")),
+                  placeholder = "csv with ScientificName and q"),
+        tags$div(class = "mb-2", downloadButton("dl_catch_template", "Download the default catchability table (template)",
+                                                class = "btn-sm btn-outline-secondary"))),
       selectInput("high_f", "FGs with F > 1 (HIGH_F_B_FIX)", width = "100%",
                   choices = c("Report only (keep the survey B)" = "none",
                               "Raise B to catch / 1 (minimum B that keeps F = 1)" = "min_from_catch",
