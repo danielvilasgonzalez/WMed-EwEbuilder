@@ -1783,6 +1783,140 @@ for (.rf in .ref_files) local({
   if (!is.null(res)) validation_plots[[paste0("17_reference_model_", mdl)]] <<- res
 })
 
+## 20) F > 1: biomass too low or catch too high? For each FG with F > 1
+## (F_above_1_REVIEW.csv), the evidence on each side:
+##  biomass  - B of the other models (WMed 1995, reference models) and the F
+##             our catch would give with their B:  F_ref = C / B_ref (median
+##             of the references); the share of the FG's species the surveys
+##             observe (biomass/fg_species_coverage.csv);
+##  catch    - the share of the FG's catch that comes from records not
+##             identified to species (NEI, genus or higher taxon split;
+##             fisheries/catch_species_to_fg_REVIEW.csv);
+##  country  - the country with the highest F_k = F x c_k / b_k
+##             (F_by_country_REVIEW.csv) and whether its biomass is imputed.
+## Suggestion (a guide, not a verdict):
+##   F_ref <= 1                          -> biomass likely too low
+##   else catch from non-species records >= 50 % -> catch possibly too high
+##   else F_ref > 1 and our B >= 0.5 x theirs   -> catch likely too high for the biomass
+##   else surveys observe < 50 % of its species   -> biomass likely underestimated (survey misses it)
+##   else top country has imputed biomass -> biomass of that country uncertain
+##   else                                 -> no clear sign; check both
+f_diag <- tryCatch({
+  if (is.null(f_hi) || !nrow(f_hi)) stop("no FG with F > 1")
+  d <- f_hi[, .(FG_num, FG_name, F, B = Biomass_density_avg, C = Catch_density_avg)]
+  refs <- list()
+  if (exists("comparison_dt") && nrow(comparison_dt))
+    refs[[1]] <- comparison_dt[metric == "Biomass" & is.finite(old_value) & old_value > 0, .(FG_num, source = "WMed 1995", B_ref = old_value)]
+  for (f in list.files(csv_out_dir, "^reference_model_.*_comparison_REVIEW\\.csv$", full.names = TRUE)) {
+    r <- fread(f)[grepl("^Biomass", metric) & is.finite(ref) & ref > 0]
+    refs[[length(refs) + 1]] <- r[, .(FG_num, source = sub("^reference_model_(.*)_comparison_REVIEW\\.csv$", "\\1", basename(f)), B_ref = ref)]
+  }
+  rf <- rbindlist(refs, use.names = TRUE)
+  rb <- if (nrow(rf)) rf[, .(B_ref_median = stats::median(B_ref), B_refs = paste(sprintf("%s %.3g", source, B_ref), collapse = "; ")), by = FG_num] else
+    data.table(FG_num = integer(), B_ref_median = numeric(), B_refs = character())
+  d <- merge(d, rb, by = "FG_num", all.x = TRUE)
+  d[, `:=`(B_ratio_to_refs = B / B_ref_median, F_with_ref_B = C / B_ref_median)]
+  cf <- file.path(out_dir, "biomass", "fg_species_coverage.csv")
+  if (file.exists(cf)) {
+    cv <- fread(cf)[, .(FG_num, survey_species_share = n_observed_survey / pmax(n_species_fg_file, 1))]
+    d <- merge(d, cv, by = "FG_num", all.x = TRUE)
+  } else d[, survey_species_share := NA_real_]
+  sf <- file.path(out_dir, "fisheries", "catch_species_to_fg_REVIEW.csv")
+  if (file.exists(sf)) {
+    sp <- fread(sf)[!is.na(FG_num)]
+    sp[, w := Catch * fifelse(is.na(Split_weight), 1, Split_weight)]
+    sp[, indirect := grepl("nei_keyword|taxonomy_|fao_genus", match_method)]
+    ci <- sp[, .(catch_non_species_share = sum(w[indirect], na.rm = TRUE) / sum(w, na.rm = TRUE),
+                 main_non_species_record = { x <- .SD[indirect == TRUE][order(-w)]; if (nrow(x)) x$Species[1] else NA_character_ }), by = FG_num]
+    d <- merge(d, ci, by = "FG_num", all.x = TRUE)
+  } else d[, `:=`(catch_non_species_share = NA_real_, main_non_species_record = NA_character_)]
+  kf <- file.path(csv_out_dir, "F_by_country_REVIEW.csv")
+  if (file.exists(kf)) {
+    k <- fread(kf)[is.finite(F_country)][order(-F_country)]
+    k <- k[, .SD[1], by = FG_num][, .(FG_num, top_country = Country, top_country_F = F_country, top_country_catch_share = catch_share,
+                                     top_country_imputed = grepl("imputed", note))]
+    d <- merge(d, k, by = "FG_num", all.x = TRUE)
+  } else d[, `:=`(top_country = NA_character_, top_country_F = NA_real_, top_country_catch_share = NA_real_, top_country_imputed = NA)]
+  d[, suggestion := fcase(
+    is.finite(F_with_ref_B) & F_with_ref_B <= 1, sprintf("Biomass likely too low: with the other models' biomass (median %.3g t/km2, %.0fx ours) F would be %.2f", B_ref_median, 1 / B_ratio_to_refs, F_with_ref_B),
+    is.finite(catch_non_species_share) & catch_non_species_share >= 0.5, sprintf("Catch possibly too high: %.0f%% of its catch comes from records not identified to species (mainly '%s')", 100 * catch_non_species_share, main_non_species_record),
+    is.finite(F_with_ref_B) & F_with_ref_B > 1 & is.finite(B_ratio_to_refs) & B_ratio_to_refs >= 0.5,
+      sprintf("Catch likely too high for the biomass: our biomass is close to the other models' (%.2fx) and even with theirs F would be %.2f", B_ratio_to_refs, F_with_ref_B),
+    is.finite(survey_species_share) & survey_species_share < 0.5, sprintf("Biomass likely underestimated: the surveys observe %.0f%% of its species", 100 * survey_species_share),
+    top_country_imputed %in% TRUE, sprintf("Biomass of %s uncertain: %.0f%% of the catch, no MEDITS there (biomass imputed); F there %.1f", top_country, 100 * top_country_catch_share, top_country_F),
+    default = "No clear sign from the data at hand: check both biomass and catch")]
+  d[!is.na(top_country) & !grepl("^Biomass of", suggestion), suggestion := paste0(suggestion, sprintf(". Highest F by country: %s (%.1f, %.0f%% of the catch%s)",
+      top_country, top_country_F, 100 * top_country_catch_share, fifelse(top_country_imputed %in% TRUE, ", biomass imputed", "")))]
+  setorder(d, -F)
+  fwrite(d, file.path(csv_out_dir, "F_above_1_diagnosis_REVIEW.csv"))
+  message("[05_validation.R] F > 1 diagnosis (F_above_1_diagnosis_REVIEW.csv):\n",
+          paste(sprintf("  %s (F %.2f): %s", d$FG_name, d$F, d$suggestion), collapse = "\n"))
+  d
+}, error = function(e) { message("[05_validation.R] F > 1 diagnosis skipped - ", conditionMessage(e)); NULL })
+validation_plots[["12c_F_above_1_diagnosis"]] <- tryCatch({
+  if (is.null(f_diag)) stop("no diagnosis")
+  plot_text_list(sprintf("%s (F = %.2f): %s", f_diag$FG_name, f_diag$F, f_diag$suggestion),
+                 title = "FGs with F > 1: biomass too low or catch too high?",
+                 subtitle = "Evidence: other models' biomass, survey coverage of the FG's species, catch not identified to species, F by country (F_above_1_diagnosis_REVIEW.csv)")
+}, error = function(e) { message("[05_validation.R plot] F > 1 diagnosis page skipped - ", conditionMessage(e)); NULL })
+
+## 19) The PREBAL outliers next to other models: every FG x metric flagged
+## by PREBAL (|residual| > 2 SD, prebal_REVIEW.csv) with the value of
+## the 1995 Western Med model (comparison_dt), each reference model
+## (reference_model_*_comparison_REVIEW.csv, e.g. the NW Med model) and
+## EcoBase (pbqb-traits/Ecobase.csv: mean P/B and Q/B of the EwE models
+## matched to the FG; no biomass there). Helps tell an outlier that the
+## other models share (the group is like that) from one only this model has.
+validation_plots[["15b_prebal_outliers_vs_other_models"]] <- tryCatch({
+  if (is.null(prebal) || !prebal$long[flag == TRUE, .N]) stop("no PREBAL outliers")
+  fl <- prebal$long[flag == TRUE, .(FG_num, FG_name, metric = as.character(metric), value)]
+  src <- list(fl[, .(FG_num, FG_name, metric, source = "This model", value, note = NA_character_)])
+  if (exists("comparison_dt") && nrow(comparison_dt)) {
+    o <- comparison_dt[metric %in% c("Biomass", "PB", "QB") & is.finite(old_value) & old_value > 0,
+                       .(FG_num, metric = fifelse(metric == "Biomass", "B", metric), source = "WMed 1995 model", value = old_value, note = Old_FG_name)]
+    src[[2]] <- merge(fl[, .(FG_num, FG_name, metric)], o, by = c("FG_num", "metric"))
+  }
+  for (f in list.files(csv_out_dir, "^reference_model_.*_comparison_REVIEW\\.csv$", full.names = TRUE)) {
+    r <- fread(f); mdl <- sub("^reference_model_(.*)_comparison_REVIEW\\.csv$", "\\1", basename(f))
+    r[, metric := fcase(grepl("^Biomass", metric), "B", grepl("^P/B", metric), "PB", grepl("^Q/B", metric), "QB")]
+    r <- r[is.finite(ref) & ref > 0, .(FG_num, metric, source = mdl, value = ref, note = ref_groups)]
+    src[[length(src) + 1]] <- merge(fl[, .(FG_num, FG_name, metric)], r, by = c("FG_num", "metric"))
+  }
+  ef <- file.path(out_dir, "pbqb-traits", "Ecobase.csv")
+  if (file.exists(ef)) {
+    e <- fread(ef)
+    if (all(c("FG_num", "PB_ecobase", "QB_ecobase") %in% names(e))) {
+      e <- rbindlist(list(e[is.finite(PB_ecobase) & PB_ecobase > 0, .(FG_num, metric = "PB", value = PB_ecobase, n = n_ecobase_models)],
+                          e[is.finite(QB_ecobase) & QB_ecobase > 0, .(FG_num, metric = "QB", value = QB_ecobase, n = n_ecobase_models)]))
+      e[, `:=`(source = "EcoBase (mean)", note = paste(n, "EwE model(s)"))][, n := NULL]
+      src[[length(src) + 1]] <- merge(fl[, .(FG_num, FG_name, metric)], e, by = c("FG_num", "metric"))
+    }
+  }
+  all_src <- rbindlist(src, use.names = TRUE, fill = TRUE)
+  ours <- fl[, .(FG_num, metric, this = value)]
+  all_src <- merge(all_src, ours, by = c("FG_num", "metric"))
+  all_src[, ratio_this_to_source := fifelse(source == "This model", NA_real_, this / value)]
+  fwrite(all_src[order(metric, FG_num, source != "This model", source)], file.path(csv_out_dir, "prebal_outliers_vs_other_models_REVIEW.csv"))
+  n_ref <- all_src[source != "This model", uniqueN(paste(FG_num, metric))]
+  message("[05_validation.R] PREBAL outliers vs other models: ", fl[, .N], " FG x metric flagged, ", n_ref,
+          " with a value in at least one other model (prebal_outliers_vs_other_models_REVIEW.csv).")
+  labs_map <- c(B = "Biomass (t/km2)", PB = "P/B (1/year)", QB = "Q/B (1/year)")
+  pd <- copy(all_src)[, panel := factor(labs_map[metric], levels = labs_map)]
+  pd[, row := paste(FG_num, FG_name)]
+  pd[, row := factor(row, levels = rev(unique(row[order(FG_num)])))]
+  srcs <- unique(pd$source); pal <- c("This model" = "firebrick", "WMed 1995 model" = "grey30", "EcoBase (mean)" = "#1b7f9e")
+  other <- setdiff(srcs, names(pal)); pal <- c(pal, stats::setNames(c("#E69F00", "#009E73", "#CC79A7", "#56B4E9")[seq_along(other)], other))
+  ggplot(pd, aes(value, row, colour = source, shape = source == "This model")) +
+    geom_line(aes(group = row), colour = "grey80") +
+    geom_point(size = 2.4, alpha = 0.9) +
+    scale_x_log10() + facet_wrap(~ panel, scales = "free", ncol = 3) +
+    scale_colour_manual(values = pal, name = NULL) + scale_shape_manual(values = c(`TRUE` = 17, `FALSE` = 16), guide = "none") +
+    labs(title = "PREBAL outliers: this model's value next to other models",
+         subtitle = "Groups > 2 SD from the PREBAL line. Close to the others = the group is like that; far from all of them = check the value (prebal_outliers_vs_other_models_REVIEW.csv)",
+         x = NULL, y = NULL) +
+    theme_minimal(base_size = 8) + theme(legend.position = "bottom")
+}, error = function(e) { message("[05_validation.R plot] PREBAL outliers vs other models skipped - ", conditionMessage(e)); NULL })
+
 validation_plots[["01b_biomass_vs_old_model_by_fg"]] <- p_bio          # values side by side, same total tonnes (see .bio_pair_plot above)
 validation_plots[["01c_biomass_vs_old_model_as_published"]] <- p_bio_pub
 
