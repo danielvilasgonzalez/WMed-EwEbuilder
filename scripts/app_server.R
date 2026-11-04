@@ -123,11 +123,28 @@ output$fg_summary <- renderUI({
                                n_species = data.table::uniqueN(species)), by = FG_number][order(FG_number)]
   ## Checks: one name per FG number, each species in one FG only, no gaps in the numbers
   multi_name <- fg[grepl(" / ", FG_name), FG_number]
+  ## Multistanza: two or more FGs made of the same single species (e.g.
+  ## hake juv./adult). Their biomass, Z and the split between stanzas should
+  ## come from a stock assessment (GFCM SAF), not from the survey alone.
+  sp_fg <- unique(x[!is.na(FG_number) & !is.na(species) & nzchar(species), .(FG_number, species = trimws(species))])
+  one_sp <- sp_fg[, .(n = .N, species = species[1]), by = FG_number][n == 1]
+  ms <- one_sp[, .(stanzas = list(sort(FG_number)), n_fg = .N), by = species][n_fg > 1]
+  fg[, stanza := NA_character_]
+  for (k in seq_len(nrow(ms))) {
+    st <- ms$stanzas[[k]]
+    fg[FG_number %in% st, stanza := paste0("stanza ", match(FG_number, st), "/", length(st))]
+  }
+  saf_sp <- tryCatch({
+    f <- file.path(.pcloud_dir, "data", "fisheries", "GFCM_SAF", "gfcm_saf_stock_assessments_ALL.csv")
+    if (file.exists(f)) unique(data.table::fread(f, select = "species")$species) else character(0)
+  }, error = function(e) character(0))
+  ms[, has_saf := species %in% saf_sp]
   sp2 <- x[!is.na(species) & nzchar(species), .(n = data.table::uniqueN(FG_number)), by = species][n > 1, species]
+  sp2 <- setdiff(sp2, ms$species)                                  # shared species that are not a multistanza group
   gaps <- setdiff(seq(min(fg$FG_number), max(fg$FG_number)), fg$FG_number)
   warn <- c(if (length(multi_name)) paste("FG number(s) with more than one FG_name:", paste(multi_name, collapse = ", ")),
             if (length(sp2)) paste0(length(sp2), " species in more than one FG (", paste(head(sp2, 3), collapse = ", "),
-                                    if (length(sp2) > 3) ", ...", ") - expected only for multistanza groups such as hake juv./adult"),
+                                    if (length(sp2) > 3) ", ...", ") outside a multistanza group - each species should be in one FG only"),
             if (length(gaps)) paste("Missing FG number(s):", paste(gaps, collapse = ", ")))
   stat <- function(label, value, note = NULL)
     column(3, tags$div(class = "wm-stat", tags$div(class = "l", label), tags$div(class = "v", value), if (!is.null(note)) tags$div(class = "n", note)))
@@ -139,7 +156,10 @@ output$fg_summary <- renderUI({
   has_cov <- !is.null(cov) && all(c("FG_num", "coverage", "coverage_survey") %in% names(cov))
   if (has_cov) fg <- merge(fg, cov[, .(FG_number = as.numeric(FG_num), coverage, coverage_survey, species_without_biomass)], by = "FG_number", all.x = TRUE)
   rows <- lapply(seq_len(nrow(fg)), function(i)
-    tags$tr(tags$td(fg$FG_number[i]), tags$td(fg$FG_name[i]), if (has_group) tags$td(fg$FG_group[i]), tags$td(fg$n_species[i]),
+    tags$tr(class = if (!is.na(fg$stanza[i])) "wm-stanza" else NULL,
+            title = if (!is.na(fg$stanza[i])) "Multistanza group: biomass, Z and the stanza split from the stock assessment" else NULL,
+            tags$td(fg$FG_number[i]),
+            tags$td(fg$FG_name[i], if (!is.na(fg$stanza[i])) tags$span(class = "badge wm-stanza-badge ms-1", fg$stanza[i])), if (has_group) tags$td(fg$FG_group[i]), tags$td(fg$n_species[i]),
             if (has_cov) tags$td(title = if (!is.na(fg$species_without_biomass[i]) && nzchar(fg$species_without_biomass[i])) paste("No biomass:", fg$species_without_biomass[i]) else NULL,
                                  fg$coverage[i]),
             if (has_cov) tags$td(fg$coverage_survey[i])))
@@ -151,6 +171,16 @@ output$fg_summary <- renderUI({
       if (has_cov) stat("With biomass (last run)", paste0(sum(cov$n_with_biomass), "/", sum(cov$n_species_fg_file)),
                         paste0(sum(cov$n_observed_survey), " observed in the surveys; ", format(file.mtime(.cov_f), "%d %b %H:%M")))),
     if (length(warn)) tags$div(class = "alert alert-warning py-2 small mt-2 mb-2", lapply(warn, function(w) tags$div(w))),
+    if (nrow(ms)) tags$div(class = "alert alert-info py-2 small mt-2 mb-2",
+      tags$strong(sprintf("Multistanza group(s) (%d): ", nrow(ms))),
+      "FGs made of the same single species (highlighted below). Their biomass, Z (P/B) and the split between stanzas should come from the stock assessment of that species, with the survey giving the trend.",
+      tags$ul(class = "mb-0 mt-1", lapply(seq_len(nrow(ms)), function(k) {
+        st <- ms$stanzas[[k]]
+        tags$li(tags$em(ms$species[k]), ": ", paste(paste(st, fg$FG_name[match(st, fg$FG_number)]), collapse = " + "), " - ",
+                if (ms$has_saf[k]) tags$span(class = "text-success", "GFCM stock assessment available")
+                else tags$span(class = "text-danger", "no GFCM stock assessment found (gfcm_saf_stock_assessments_ALL.csv) - the stanza split rests on the survey only"))
+      }))),
+    tags$style(HTML(".wm-stanza td { background: #fff4e0 !important; } .wm-stanza-badge { background: #e8a33d; color: #fff; font-weight: 500; }")),
     tags$div(class = "wm-fg-table mt-2",
       tags$table(class = "table table-sm table-striped",
         tags$thead(tags$tr(tags$th("FG_number"), tags$th("FG_name"), if (has_group) tags$th("FG_group"), tags$th("N species"),
