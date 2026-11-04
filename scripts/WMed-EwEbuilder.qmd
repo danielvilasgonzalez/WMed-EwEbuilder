@@ -135,6 +135,8 @@ table td code, table th code { white-space: normal; overflow-wrap: anywhere; }
   "12b_F_by_country.png"                              = "plots/validation/12b_F_by_country.png",
   "PQ_ratio_by_fg.png"                                = "plots/validation/PQ_ratio_by_fg.png",
   "biomass_vs_old_model_by_fg.png"                    = "plots/validation/biomass_vs_old_model_by_fg.png",
+  "15d_all_models_comparison.png"                     = "plots/validation/15d_all_models_comparison.png",
+  "comparison_with_old_westmed_estimates.png"         = "plots/validation/comparison_with_old_westmed_estimates.png",
   "11_zooplankton_total_field_check.png"              = "plots/validation/11_zooplankton_total_field_check.png",
   "11b_phytoplankton_sources.png"                     = "plots/validation/11b_phytoplankton_sources.png",
   "environment_timeseries.png"                        = "plots/environment/environment_timeseries.png",
@@ -2276,6 +2278,13 @@ Copernicus rows appear once 06 has run.
 #| eval: true
 #| echo: false
 wm_figure("fig-biomass-vs-old", r"---(New vs. old (1995) biomass by FG, both values shown on the new model area (same total tonnes).)---", "biomass_vs_old_model_by_fg.png", r"---(05_validation.R)---")
+```
+
+```{r}
+#| label: show-fig-all-models
+#| eval: true
+#| echo: false
+wm_figure("fig-all-models", r"---(Biomass, P/B and Q/B by FG: this model against the 1995 Western Med model and the NW Med model (one point per FG and model; line = equal, dashed = 2x and 0.5x; labelled = outside 0.5-2x). Biomass in t/km2 of each model's own area. Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_comparison.png", r"---(05_validation.R)---")
 ```
 
 ```{r}

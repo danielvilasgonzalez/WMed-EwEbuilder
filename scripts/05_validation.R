@@ -2013,7 +2013,7 @@ validation_plots[["15c_multistanza_vs_other_models"]] <- tryCatch({
 ## (reference_model_*_comparison_REVIEW.csv, e.g. the NW Med model) and
 ## EcoBase (P/B, Q/B). Biomass is t/km2 of each model's own area (as
 ## published). Output: all_models_comparison_REVIEW.csv (one row per FG x
-## metric, one column per model) and all_models_comparison.png.
+## metric, one column per model) and the page 15d_all_models_comparison.png.
 all_models_cmp <- tryCatch({
   labs_map <- c(B = "Biomass (t/km2)", PB = "P/B (1/year)", QB = "Q/B (1/year)")
   src <- list()
@@ -2092,7 +2092,6 @@ if (!is.null(all_models_cmp)) validation_plots[["15d_all_models_comparison"]] <-
                            "\nBiomass is t/km2 of each model's own area (all_models_comparison_REVIEW.csv)"),
          x = "Other model", y = "This model") +
     theme_minimal(base_size = 8) + theme(legend.position = "bottom")
-  ggsave(file.path(plot_dir, "all_models_comparison.png"), p, width = 13, height = 5.5, dpi = PLOT_DPI, bg = "white")
   p
 }, error = function(e) { message("[05_validation.R plot] All models comparison figure skipped - ", conditionMessage(e)); NULL })
 
