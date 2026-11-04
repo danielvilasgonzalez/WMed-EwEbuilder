@@ -2011,8 +2011,9 @@ validation_plots[["15c_multistanza_vs_other_models"]] <- tryCatch({
 ## old groups split in 2026, e.g. European hake -> juv. + adult, are
 ## compared as the sum of the new FGs), each reference model
 ## (reference_model_*_comparison_REVIEW.csv, e.g. the NW Med model) and
-## EcoBase (P/B, Q/B). Biomass is t/km2 of each model's own area (as
-## published). Output: all_models_comparison_REVIEW.csv (one row per FG x
+## EcoBase (P/B, Q/B). Biomass: the 1995 model on the new model area
+## (same total tonnes, as in biomass_vs_old_model_by_fg), the reference
+## models as published (t/km2 of their own area). Output: all_models_comparison_REVIEW.csv (one row per FG x
 ## metric, one column per model) and the page 15d_all_models_comparison.png.
 all_models_cmp <- tryCatch({
   labs_map <- c(B = "Biomass (t/km2)", PB = "P/B (1/year)", QB = "Q/B (1/year)")
@@ -2020,7 +2021,9 @@ all_models_cmp <- tryCatch({
   if (exists("comparison_dt") && nrow(comparison_dt)) {
     cd <- comparison_dt[metric %in% c("Biomass", "PB", "QB")][, metric := fifelse(metric == "Biomass", "B", metric)]
     src[[1]] <- cd[is.finite(new_value), .(FG_num, FG_name, metric, source = "This model", value = new_value, note = NA_character_)]
-    src[[2]] <- cd[is.finite(old_value) & old_value > 0, .(FG_num, FG_name, metric, source = "WMed 1995 model", value = old_value, note = Old_FG_name)]
+    if (!"old_value_on_new_area" %in% names(cd)) cd[, old_value_on_new_area := NA_real_]
+    cd[, old_v := fifelse(metric == "B" & is.finite(old_value_on_new_area), old_value_on_new_area, old_value)]   # B: same total tonnes on the new area
+    src[[2]] <- cd[is.finite(old_v) & old_v > 0, .(FG_num, FG_name, metric, source = "WMed 1995 model", value = old_v, note = Old_FG_name)]
   }
   for (f in list.files(csv_out_dir, "^reference_model_.*_comparison_REVIEW\\.csv$", full.names = TRUE)) {
     r <- fread(f); mdl <- sub("^reference_model_(.*)_comparison_REVIEW\\.csv$", "\\1", basename(f))
@@ -2065,35 +2068,64 @@ all_models_cmp <- tryCatch({
           " FG x metric outside 0.5-2x of the other models' median (all_models_comparison_REVIEW.csv).")
   list(oth = oth, labs_map = labs_map)
 }, error = function(e) { message("[05_validation.R plot] All models side by side skipped - ", conditionMessage(e)); NULL })
-if (!is.null(all_models_cmp)) validation_plots[["15d_all_models_comparison"]] <- tryCatch({
-  pd <- all_models_cmp$oth[source != "EcoBase (mean)" & is.finite(this) & this > 0 & is.finite(value) & value > 0]   # the three models; EcoBase stays in the CSV
-  if (!nrow(pd)) stop("no FG with values in this model and another model")
-  pd[, panel := factor(all_models_cmp$labs_map[metric], levels = all_models_cmp$labs_map)]
-  pd[, out := ratio > 2 | ratio < 0.5]
-  pd[, lab := paste0(fifelse(FG_num < 0, "", paste0(FG_num, " ")), FG_name)]
-  pal <- c("WMed 1995 model" = "grey25", "EcoBase (mean)" = "#1b7f9e")
-  other <- setdiff(unique(pd$source), names(pal))
-  pal <- c(pal, stats::setNames(c("#E69F00", "#009E73", "#CC79A7", "#56B4E9")[seq_along(other)], other))
-  pal <- pal[names(pal) %in% unique(pd$source)]
-  lab_layer <- if (requireNamespace("ggrepel", quietly = TRUE))
-    ggrepel::geom_text_repel(data = pd[out == TRUE], aes(label = lab), size = 1.9, max.overlaps = 30, min.segment.length = 0,
-                             segment.size = 0.2, show.legend = FALSE, seed = 1)
-    else geom_text(data = pd[out == TRUE], aes(label = lab), size = 1.9, vjust = -0.6, show.legend = FALSE)
-  p <- ggplot(pd, aes(value, this, colour = source, shape = source)) +
-    geom_abline(slope = 1, intercept = 0, colour = "grey40") +
-    geom_abline(slope = 1, intercept = log10(2), linetype = "dashed", colour = "grey70") +
-    geom_abline(slope = 1, intercept = log10(0.5), linetype = "dashed", colour = "grey70") +
-    geom_point(aes(alpha = out), size = 1.9) + lab_layer +
-    scale_x_log10() + scale_y_log10() + facet_wrap(~ panel, scales = "free") +
-    scale_colour_manual(values = pal, name = NULL) + scale_shape_manual(values = c(16, 17, 15, 18, 3, 4)[seq_along(pal)] |> stats::setNames(names(pal)), name = NULL) +
-    scale_alpha_manual(values = c(`FALSE` = 0.45, `TRUE` = 0.95), guide = "none") +
-    labs(title = "This model vs the 1995 Western Med model and the NW Med model: biomass, P/B and Q/B by FG",
-         subtitle = paste0("Log scales. Line = equal values, dashed = 2x and 0.5x; labelled = outside 0.5-2x. One point per FG and model.",
-                           "\nBiomass is t/km2 of each model's own area (all_models_comparison_REVIEW.csv)"),
-         x = "Other model", y = "This model") +
-    theme_minimal(base_size = 8) + theme(legend.position = "bottom")
-  p
-}, error = function(e) { message("[05_validation.R plot] All models comparison figure skipped - ", conditionMessage(e)); NULL })
+## Point plot per metric (same layout as biomass_vs_old_model_by_fg):
+## one row per FG, the new pipeline and each other model as points on a
+## log axis, their values printed on the right, then the change of the
+## new pipeline against each model ((new - other) / other): red = new
+## pipeline higher, blue = lower, bold = outside 0.5-2x.
+.all_models_pair_plot <- function(oth, m, title, xlab) {
+  pd <- oth[metric == m & source != "EcoBase (mean)" & is.finite(value) & value > 0]   # the three models; EcoBase stays in the CSV
+  pd <- pd[!grepl("detritus|discard", FG_name, ignore.case = TRUE)]
+  if (!nrow(pd)) return(NULL)
+  short <- function(x) { y <- trimws(sub("[[:space:]_-]*(Model|model|Basic input).*$", "", x)); ifelse(x == "WMed 1995 model", "WMed 1995", ifelse(nzchar(y), y, x)) }
+  srcs <- c("WMed 1995 model", sort(setdiff(unique(pd$source), "WMed 1995 model"))); srcs <- srcs[srcs %in% unique(pd$source)]
+  pd[, src := factor(short(source), levels = short(srcs))]
+  pd[, row := paste0(ifelse(FG_num < 0, "(sum) ", paste0(FG_num, " ")), FG_name)]
+  lv <- rev(unique(pd[order(FG_num < 0, abs(FG_num)), row]))
+  pd[, row := factor(row, levels = lv)]
+  own <- unique(pd[is.finite(this) & this > 0, .(row, this)], by = "row")
+  .fv <- function(x) ifelse(is.na(x), "", ifelse(x >= 100, sprintf("%.0f", x), ifelse(x >= 1, sprintf("%.2f", x), sprintf("%.2g", x))))
+  pd[, r := this / value]
+  pd[, pct_lab := ifelse(!is.finite(r), "", ifelse(abs(r - 1) >= 10, paste0("x", signif(r, 2)), paste0(ifelse(r > 1, "+", ""), round(100 * (r - 1)), "%")))]
+  pd[, dir := ifelse(!is.finite(r), "none", ifelse(r > 1, "higher", "lower"))]
+  pd[, out := is.finite(r) & (r > VALIDATION_RATIO_HIGH | r < VALIDATION_RATIO_LOW)]
+  allv <- c(pd$value, own$this); rng <- range(allv[is.finite(allv) & allv > 0])
+  k <- length(srcs); step <- 10                                       # text columns to the right, one decade apart (log axis)
+  x_cols <- rng[2] * step^(seq_len(1 + 2 * k) + 0.5)
+  hdr <- c("new", short(srcs), paste0("vs ", short(srcs)))
+  pal_pts <- c("New pipeline" = "firebrick", stats::setNames(c("grey35", "#E69F00", "#009E73", "#CC79A7")[seq_len(k)], short(srcs)))
+  pts <- rbindlist(list(own[, .(row, v = this, who = "New pipeline")], pd[, .(row, v = value, who = as.character(src))]))
+  seg <- merge(pd[, .(row, value, src)], own, by = "row")
+  vals <- rbindlist(list(own[, .(row, x = x_cols[1], lab = .fv(this), colr = "New pipeline")],
+                         pd[, .(row, x = x_cols[1 + as.integer(src)], lab = .fv(value), colr = as.character(src))]))
+  pcts <- pd[, .(row, x = x_cols[1 + k + as.integer(src)], lab = pct_lab, dir, out)]
+  n_out <- pd[out == TRUE, .N]
+  ggplot() +
+    scale_y_discrete(limits = lv) +
+    geom_segment(data = seg, aes(x = value, xend = this, y = row, yend = row), colour = "grey80", linewidth = 0.4) +
+    geom_point(data = pts, aes(v, row, colour = who, shape = who == "New pipeline"), size = 1.7) +
+    geom_text(data = vals, aes(x, row, label = lab, colour = colr), size = 2, hjust = 1, show.legend = FALSE) +
+    geom_text(data = pcts, aes(x, row, label = lab, colour = dir, fontface = ifelse(out, "bold", "plain")), size = 2.1, hjust = 1, show.legend = FALSE) +
+    annotate("text", x = x_cols, y = Inf, label = hdr, vjust = -0.4, hjust = 1, size = 2.4, fontface = "bold") +
+    scale_x_log10(breaks = scales::breaks_log(6), labels = function(x) ifelse(x <= rng[2] * 1.01, format(x, digits = 2, scientific = FALSE, drop0trailing = TRUE), "")) +
+    coord_cartesian(clip = "off") +
+    scale_colour_manual(values = c(pal_pts, higher = "#b2182b", lower = "#2166ac", none = "grey50"), breaks = names(pal_pts), name = NULL) +
+    scale_shape_manual(values = c(`TRUE` = 17, `FALSE` = 16), guide = "none") +
+    labs(title = title,
+         subtitle = paste0("Right: values, then the change of the new pipeline against each model, (new - other) / other: red = new pipeline higher, blue = lower;",
+                           "\nbold = outside ", VALIDATION_RATIO_LOW, "-", VALIDATION_RATIO_HIGH, "x (", n_out, ").",
+                           if (m == "B") "\nBiomass in t/km2: the 1995 model on the new model area (same total tonnes), the other models as published." else "",
+                           "\n(sum) = an old group split in 2026, compared with the sum of the new FGs. Table: all_models_comparison_REVIEW.csv"),
+         x = xlab, y = NULL) +
+    theme_minimal(base_size = 8) + theme(legend.position = "top", plot.margin = margin(18, 8, 5, 5))
+}
+if (!is.null(all_models_cmp)) for (.m in c("B", "PB", "QB")) {
+  .ttl <- c(B = "Biomass", PB = "P/B", QB = "Q/B")[[.m]]
+  validation_plots[[paste0("15d_all_models_", .m)]] <- tryCatch(
+    .all_models_pair_plot(all_models_cmp$oth, .m, paste0(.ttl, ": new pipeline vs the 1995 Western Med model and the NW Med model, by FG"),
+                          paste0(all_models_cmp$labs_map[[.m]], ", log scale")),
+    error = function(e) { message("[05_validation.R plot] All models comparison (", .m, ") skipped - ", conditionMessage(e)); NULL })
+}
 
 validation_plots[["01b_biomass_vs_old_model_by_fg"]] <- p_bio          # values side by side, same total tonnes (see .bio_pair_plot above)
 validation_plots[["01c_biomass_vs_old_model_as_published"]] <- p_bio_pub
@@ -2418,7 +2450,7 @@ if (length(validation_plots) == 0) {
   pdf(VALIDATION_PLOTS_PDF, width = 11, height = 8)   # same open-loop-close PDF pattern 02_fisheries.R's own validation_plots list uses
   ## Larger text on each page, except the tall one-row-per-FG pages, which
   ## would not fit an 8-inch page at that size (their PNGs are 14 in tall).
-  .tall <- c("01b_biomass_vs_old_model_by_fg", "01c_biomass_vs_old_model_as_published", "16_pedigree")
+  .tall <- c("01b_biomass_vs_old_model_by_fg", "01c_biomass_vs_old_model_as_published", "16_pedigree", "15d_all_models_B", "15d_all_models_PB", "15d_all_models_QB")
   for (nm in names(validation_plots)) print(if (nm %in% .tall) validation_plots[[nm]] else .readable(validation_plots[[nm]]))
   dev.off()
   ## The per-FG biomass-vs-old-model plot has ~one row per FG
@@ -2443,7 +2475,7 @@ if (length(validation_plots) == 0) {
     ## these three already have their own PNG (saved above under a
     ## descriptive name); a second copy here was the same figure twice
     if (nm %in% .own_png) next
-    ht <- if (nm %in% c("01b_biomass_vs_old_model_by_fg", "01c_biomass_vs_old_model_as_published", "16_pedigree")) 14 else if (nm == "15_prebal") 5 else 7
+    ht <- if (nm %in% c("01b_biomass_vs_old_model_by_fg", "01c_biomass_vs_old_model_as_published", "16_pedigree", "15d_all_models_B", "15d_all_models_PB", "15d_all_models_QB")) 14 else if (nm == "15_prebal") 5 else 7
     p_save <- validation_plots[[nm]]; readable <- TRUE
     if (identical(nm, "13_ecosim_ts_assessment")) {
       ## height grows with the number of series so every y label fits at a

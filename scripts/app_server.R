@@ -985,7 +985,9 @@ makeActiveBinding(".plot_dir", function() if (!is.na(.out_dir)) file.path(.out_d
                 "Diet matrix"         = "diets/diet_matrix_heatmap.png",
                 "PREBAL"              = "validation/15_prebal.png",
                 "vs 1995 model"       = "validation/biomass_vs_old_model_by_fg.png",
-                "B, P/B, Q/B vs 1995 and NW Med models" = "validation/15d_all_models_comparison.png",
+                "B vs other models"   = "validation/15d_all_models_B.png",
+                "P/B vs other models" = "validation/15d_all_models_PB.png",
+                "Q/B vs other models" = "validation/15d_all_models_QB.png",
                 "Phytoplankton sources" = "validation/11b_phytoplankton_sources.png",
                 "Environment"         = "environment/environment_timeseries.png")
 

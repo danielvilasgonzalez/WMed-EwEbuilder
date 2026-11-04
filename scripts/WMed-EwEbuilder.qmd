@@ -135,7 +135,9 @@ table td code, table th code { white-space: normal; overflow-wrap: anywhere; }
   "12b_F_by_country.png"                              = "plots/validation/12b_F_by_country.png",
   "PQ_ratio_by_fg.png"                                = "plots/validation/PQ_ratio_by_fg.png",
   "biomass_vs_old_model_by_fg.png"                    = "plots/validation/biomass_vs_old_model_by_fg.png",
-  "15d_all_models_comparison.png"                     = "plots/validation/15d_all_models_comparison.png",
+  "15d_all_models_B.png"                             = "plots/validation/15d_all_models_B.png",
+  "15d_all_models_PB.png"                            = "plots/validation/15d_all_models_PB.png",
+  "15d_all_models_QB.png"                            = "plots/validation/15d_all_models_QB.png",
   "comparison_with_old_westmed_estimates.png"         = "plots/validation/comparison_with_old_westmed_estimates.png",
   "11_zooplankton_total_field_check.png"              = "plots/validation/11_zooplankton_total_field_check.png",
   "11b_phytoplankton_sources.png"                     = "plots/validation/11b_phytoplankton_sources.png",
@@ -2281,10 +2283,24 @@ wm_figure("fig-biomass-vs-old", r"---(New vs. old (1995) biomass by FG, both val
 ```
 
 ```{r}
-#| label: show-fig-all-models
+#| label: show-fig-all-models-b
 #| eval: true
 #| echo: false
-wm_figure("fig-all-models", r"---(Biomass, P/B and Q/B by FG: this model against the 1995 Western Med model and the NW Med model (one point per FG and model; line = equal, dashed = 2x and 0.5x; labelled = outside 0.5-2x). Biomass in t/km2 of each model's own area. Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_comparison.png", r"---(05_validation.R)---")
+wm_figure("fig-all-models-b", r"---(Biomass by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_B.png", r"---(05_validation.R)---")
+```
+
+```{r}
+#| label: show-fig-all-models-pb
+#| eval: true
+#| echo: false
+wm_figure("fig-all-models-pb", r"---(P/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_PB.png", r"---(05_validation.R)---")
+```
+
+```{r}
+#| label: show-fig-all-models-qb
+#| eval: true
+#| echo: false
+wm_figure("fig-all-models-qb", r"---(Q/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_QB.png", r"---(05_validation.R)---")
 ```
 
 ```{r}
