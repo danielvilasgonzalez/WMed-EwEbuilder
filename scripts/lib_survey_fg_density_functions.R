@@ -5281,7 +5281,17 @@ build_fg_references_sheet <- function(out_path,
   if (file.exists(biomass_src_path)) {
     b <- fread(biomass_src_path)
     if ("biomass_source" %in% names(b)) {
-      b_by_fg <- b[, .(B_ref = paste(sort(unique(biomass_source)), collapse = " | ")), by = FG_num]
+      ## Ecopath_B is the mean over YEAR_ECOPATH: its reference names the
+      ## sources of those years; sources used only in other (Ecosim) years
+      ## are listed apart, so e.g. a MEDITS baseline doesn't read as
+      ## "MEDITS | stock assessment" because one later year had no survey.
+      .yb <- if (exists("YEAR_ECOPATH", inherits = TRUE)) get("YEAR_ECOPATH", inherits = TRUE) else NULL
+      b_by_fg <- b[!is.na(biomass_source) & nzchar(biomass_source), {
+        base <- if (!is.null(.yb) && any(Year %in% .yb)) unique(biomass_source[Year %in% .yb]) else unique(biomass_source)
+        other <- setdiff(unique(biomass_source), base)
+        .(B_ref = paste0(paste(sort(base), collapse = " | "),
+                         if (length(other)) paste0(" [other years only: ", paste(sort(other), collapse = " | "), "]") else ""))
+      }, by = FG_num]
       refs <- merge(refs, b_by_fg, by = "FG_num", all.x = TRUE)
     } else {
       message("build_fg_references_sheet(): '", biomass_src_path, "' has no biomass_source column",

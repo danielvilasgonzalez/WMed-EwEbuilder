@@ -2148,6 +2148,28 @@ describe_chosen <- function(dt, method_col_to_label) {
 ## derive Winf from a/b length-weight relationship (protocol Eq. 11)
 ## when not directly available from popgrowth's Winfinity field
 species_df[, Winf := fcoalesce(Winf, a_lw * Loo^b_lw)]
+## Winf check: popgrowth()'s Winfinity is sometimes orders of magnitude
+## off (e.g. Conger conger 9.8 g at Loo 214 cm, Sarda sarda 36 g at Loo
+## 62.5 cm - likely kg entered as g, or another length type). It inflates
+## Palomares & Pauly Q/B. Where the species' FishBase length-weight
+## relationship gives a Winf more than 5x away, the L-W value (a*Loo^b) is
+## used; without an L-W relationship, a Winf below 1/1000 of 0.01*Loo^3
+## (no fish shape is that thin) is dropped so Q/B falls back as for a
+## species with no Winf.
+.w_lw <- species_df[, a_lw * Loo^b_lw]
+.w_rt <- species_df$Winf / .w_lw
+.bad_w <- which(is.finite(.w_rt) & .w_lw > 0 & (.w_rt > 5 | .w_rt < 0.2))
+.bad_w0 <- which(!is.finite(.w_lw) & is.finite(species_df$Winf) & is.finite(species_df$Loo) & species_df$Winf < 1e-3 * 0.01 * species_df$Loo^3)
+if (length(.bad_w)) {
+  message("[Winf check] ", length(.bad_w), " species' Winf replaced by the length-weight value a*Loo^b (popgrowth Winf more than 5x away): ",
+          paste0(species_df$Species[.bad_w], " (", signif(species_df$Winf[.bad_w], 3), " -> ", signif(.w_lw[.bad_w], 3), " g)", collapse = "; "))
+  species_df[.bad_w, Winf := .w_lw[.bad_w]]
+}
+if (length(.bad_w0)) {
+  message("[Winf check] ", length(.bad_w0), " species' Winf dropped (implausibly low for its Loo, no L-W relationship to replace it): ",
+          paste0(species_df$Species[.bad_w0], " (", signif(species_df$Winf[.bad_w0], 3), " g at Loo ", species_df$Loo[.bad_w0], " cm)", collapse = "; "))
+  species_df[.bad_w0, Winf := NA_real_]
+}
 
 ## Froese & Binohlan (2000) fallback for Loo/K when missing entirely -
 ## now fully automatic: Lmax from species(), Lm/Tmat from maturity().
@@ -3130,6 +3152,21 @@ if (ENABLE_ECOBASE_QUERY && file.exists(ECOBASE_CSV_PATH)) {
   ## composition than a borrowed literature value.
   fg_weighted_ecobase[, PB_FG_filled := fifelse(is.na(PB_FG), PB_ecobase, PB_FG)]
   fg_weighted_ecobase[, QB_FG_filled := fifelse(is.na(QB_FG), QB_ecobase, QB_FG)]
+  ## Sea turtles: no empirical P/B or Q/B equation in this script fits a
+  ## reptile - the species step falls back to the invertebrate formulas
+  ## (Gascuel 2008, Q/P = 3), which gave loggerhead P/B 0.63, about 3x the
+  ## 1995 Western Med (0.20) and NW Med (0.17) models. An FG made only of
+  ## reptiles therefore takes the EcoBase (published models) value when
+  ## there is one.
+  .rept_sp <- c("Caretta caretta", "Chelonia mydas", "Dermochelys coriacea", "Eretmochelys imbricata", "Lepidochelys kempii")
+  .rept_fg <- species_df[, .(all_rept = all(Class %in% REPTILE_CLASSES | Species %in% .rept_sp)), by = FG][all_rept == TRUE, FG]
+  .rep_pb <- fg_weighted_ecobase$FG %in% .rept_fg & is.finite(fg_weighted_ecobase$PB_ecobase)
+  .rep_qb <- fg_weighted_ecobase$FG %in% .rept_fg & is.finite(fg_weighted_ecobase$QB_ecobase)
+  fg_weighted_ecobase[.rep_pb, PB_FG_filled := PB_ecobase]
+  fg_weighted_ecobase[.rep_qb, QB_FG_filled := QB_ecobase]
+  if (any(.rep_pb | .rep_qb))
+    message("[Reptiles] ", paste(fg_weighted_ecobase[.rep_pb | .rep_qb, FG_name], collapse = ", "),
+            ": P/B and Q/B from EcoBase (published models) instead of the invertebrate fallback formulas.")
   ## PB_source/QB_source used to just say "EcoBase (literature)" - a
   ## generic word with no actual citation. `References` (built just
   ## above, per FG_name) already carries the real "Model (authors,
@@ -3139,11 +3176,11 @@ if (ENABLE_ECOBASE_QUERY && file.exists(ECOBASE_CSV_PATH)) {
   ## PB_source/QB_source straight through) can see exactly which
   ## published model/paper the gap-filled PB or QB came from.
   fg_weighted_ecobase[, PB_source := fifelse(
-    is.na(PB_FG),
+    is.na(PB_FG) | .rep_pb,
     fifelse(is.na(References), "EcoBase (literature model - citation not resolved)", paste0("EcoBase: ", References)),
     "empirical")]
   fg_weighted_ecobase[, QB_source := fifelse(
-    is.na(QB_FG),
+    is.na(QB_FG) | .rep_qb,
     fifelse(is.na(References), "EcoBase (literature model - citation not resolved)", paste0("EcoBase: ", References)),
     "empirical")]
   
