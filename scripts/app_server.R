@@ -1153,14 +1153,23 @@ output$fg_explore_plot <- renderPlot({
     }
   }
   ## One colour per series, one legend for both panels (patchwork collects it)
-  cols <- c("Biomass (relative)" = "#0072B2", "Catches" = "#D55E00", "Discards" = "#009E73")
-  sc <- ggplot2::scale_colour_manual(values = cols, limits = names(cols), drop = FALSE, name = NULL)
-  th <- ggplot2::theme_minimal(base_size = 13) + ggplot2::theme(legend.position = "bottom")
+  ## show.legend = TRUE on every line/point layer and the same fixed scale in
+  ## both panels make the two legends identical, so patchwork shows one
+  cols <- c("Biomass" = "#0072B2", "Catches" = "#D55E00", "Discards" = "#009E73")
+  sc <- ggplot2::scale_colour_manual(values = cols, limits = names(cols), breaks = names(cols), drop = FALSE, name = NULL,
+                                     guide = ggplot2::guide_legend(override.aes = list(linewidth = 1.1, size = 2)))
+  th <- ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::theme(legend.position = "bottom", legend.text = ggplot2::element_text(size = 11),
+                   plot.title = ggplot2::element_text(size = 12, face = "bold"),
+                   plot.subtitle = ggplot2::element_text(size = 9, colour = "grey30"),
+                   axis.title.y = ggplot2::element_text(size = 10), plot.margin = ggplot2::margin(4, 10, 4, 4))
+  .ln <- function() list(ggplot2::geom_line(show.legend = TRUE, na.rm = TRUE), ggplot2::geom_point(size = 1.3, show.legend = TRUE, na.rm = TRUE))
   note_panel <- function(title, txt) ggplot2::ggplot() +
     ggplot2::annotate("text", x = 0, y = 0, label = txt, size = 3.4, colour = "grey30", lineheight = 1.1) +
-    ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 13) + ggplot2::xlim(-1, 1)
+    ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 11) + ggplot2::xlim(-1, 1) +
+    ggplot2::theme(plot.title = ggplot2::element_text(size = 12, face = "bold"))
   empty <- function(title) ggplot2::ggplot() + ggplot2::annotate("text", x = 0, y = 0, label = paste("No", tolower(title))) +
-    ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 13)
+    ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 11)
   ## Both panels relative to the Ecopath years (mean over them = 1, grey
   ## band), so biomass and catch trends read on the same scale; the
   ## absolute Ecopath values are in the subtitles. Without values in the
@@ -1174,20 +1183,21 @@ output$fg_explore_plot <- renderPlot({
     list(x = v / ref, ref = ref, lab = lab)
   }
   p1 <- if (nrow(b)) {
-    b$series <- "Biomass (relative)"
+    b$series <- "Biomass"
     rb <- .rel(b$value, b$Year); b$value <- rb$x
     if ("lo" %in% names(b)) { b$lo <- b$lo / rb$ref * 1; b$hi <- b$hi / rb$ref * 1 }
     p <- ggplot2::ggplot(b, ggplot2::aes(Year, value, colour = series))
     if ("lo" %in% names(b) && any(!is.na(b$lo)))
-      p <- p + ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), fill = cols[["Biomass (relative)"]], colour = NA, alpha = 0.2, na.rm = TRUE)
+      p <- p + ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), fill = cols[["Biomass"]], colour = NA, alpha = 0.2, na.rm = TRUE)
     e <- .ecopath_b(); r <- if (!is.null(e)) e[e$FG_num == .fg_now, ][1, ] else NULL
     sub <- if (!is.null(r) && nrow(r) && !is.na(r$FG_num))
       paste0("Ecopath B", if (!is.na(r$years)) paste0(" ", r$years), ": ",
              if (is.finite(r$B)) paste(.fmt_b(r$B), "t/km\u00b2") else if (is.finite(r$EE)) paste0("left to Ecopath (EE ", r$EE, ")") else "none") else NULL
     if (!is.null(r) && nrow(r) && is.finite(r$y0))   # the Ecopath baseline years
       p <- p + ggplot2::annotate("rect", xmin = r$y0 - 0.5, xmax = r$y1 + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
-    p + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed") + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) + sc + th +
-      ggplot2::labs(title = "Biomass (relative)", subtitle = sub, x = NULL, y = paste0("B / B ", if (rb$lab == "Ecopath years") "Ecopath years" else rb$lab))
+    p + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed") + .ln() + sc + th +
+      ggplot2::labs(title = "Biomass", subtitle = sub, x = NULL,
+                    y = if (rb$lab == "Ecopath years") "Relative to Ecopath years (= 1)" else paste0("Relative to ", sub("^first year with a value, ", "", rb$lab), " (= 1)"))
   } else {
     .nm <- if (!is.null(.fg_list())) .fg_list()$FG_name[match(.fg_now, .fg_list()$FG_num)] else ""
     note_panel("Biomass", if (grepl("detritus|discard", .nm, ignore.case = TRUE))
@@ -1200,14 +1210,14 @@ output$fg_explore_plot <- renderPlot({
     refs <- character(0)
     for (tp in unique(ct$type)) {
       k <- ct$type == tp; rc <- .rel(ct$value[k], ct$Year[k]); ct$value[k] <- rc$x
-      refs <- c(refs, paste0(tp, " ", .fmt_b(rc$ref), " t/km\u00b2", if (rc$lab != "Ecopath years" && nzchar(rc$lab)) paste0(" (", rc$lab, ")")))
+      refs <- c(refs, paste0(if (tp == "Catches") "C " else "Di ", .fmt_b(rc$ref), if (rc$lab != "Ecopath years" && nzchar(rc$lab)) paste0(" (", sub("^first year with a value, ", "", rc$lab), ")")))
     }
     pc <- ggplot2::ggplot(ct, ggplot2::aes(Year, value, colour = series))
     if (length(base_yrs)) pc <- pc + ggplot2::annotate("rect", xmin = min(base_yrs) - 0.5, xmax = max(base_yrs) + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
-    pc + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed") + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) +
-      sc + th + ggplot2::labs(title = "Catches and discards (relative)",
-                              subtitle = paste0("= 1 at: ", paste(refs, collapse = "\n         ")), x = NULL,
-                              y = if (length(base_yrs)) "C / C Ecopath years" else "C / C first year")
+    pc + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed") + .ln() +
+      sc + th + ggplot2::labs(title = "Catches and discards",
+                              subtitle = paste0("Ecopath years: ", paste(refs, collapse = ", "), " t/km\u00b2"), x = NULL,
+                              y = "Relative to Ecopath years (= 1)")
   } else note_panel("Catches and discards", "No catch or discards recorded\nfor this group in the data sources.")
   if (requireNamespace("patchwork", quietly = TRUE))
     patchwork::wrap_plots(p1, p2, ncol = 2, guides = "collect") & ggplot2::theme(legend.position = "bottom")
