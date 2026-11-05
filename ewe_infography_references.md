@@ -87,6 +87,8 @@ Items marked **[verify]** are cited in the code by author, year and journal, but
 10. GFCM. Regional Fleet Register (GFCM-RFR). [fao.org/gfcm](https://www.fao.org/gfcm) — fleet segments for Morocco, Algeria and Tunisia.
 11. Ricard et al. 2012, RAM Legacy (see Biomass 4) — catch cross-check.
 
+12. Watson, R.A. (2017). A database of global marine commercial, small-scale, illegal and unreported fisheries catch 1950-2014. Scientific Data, 4, 170039. doi:10.1038/sdata.2017.39 — discard ratio (reported vs total catch), via the ISIMIP3a fishing data.
+
 ## 3 — P/B, Q/B and traits
 
 1. Pauly, D. (1980). On the interrelationships between natural mortality, growth parameters, and mean environmental temperature in 175 fish stocks. Journal du Conseil International pour l'Exploration de la Mer, 39(2), 175-192. — M (P/B = Z = M + F).
@@ -117,6 +119,15 @@ Items marked **[verify]** are cited in the code by author, year and journal, but
 5. Ribes, M., Coma, R., Gili, J.M. (1999). Natural diet and grazing rate of the temperate sweet gorgonian Paramuricea clavata (Cnidaria: Octocorallia) in a western Mediterranean ecosystem. Marine Ecology Progress Series, 183, 125-137. — corals and gorgonians diet (literature fallback).
 6. Coll, M., Palomera, I., Tudela, S., Sardà, F. (2006). Trophic flows, ecosystem structure and fishing impacts in the South Catalan Sea, Northwestern Mediterranean. Journal of Marine Systems, 59, 63-96. — zooplankton diet (literature fallback).
 7. Bănaru, D., Mellon-Duval, C., Roos, D., et al. (2013). Trophic structure in the Gulf of Lions marine ecosystem (north-western Mediterranean Sea) and fishing impacts. Journal of Marine Systems, 111-112, 45-68. — suprabenthos diet (literature fallback).
+
+## 6 — Environment
+
+1. Copernicus Marine Service. Mediterranean Sea Physics Reanalysis, MEDSEA_MULTIYEAR_PHY_006_004. [marine.copernicus.eu](https://marine.copernicus.eu) — sea surface and bottom temperature, salinity.
+2. Copernicus Marine Service. Mediterranean Sea Biogeochemistry Reanalysis (MedBFM), MEDSEA_MULTIYEAR_BGC_006_008. — net primary production and phytoplankton carbon, integrated over the euphotic zone (depth with 99% of the column NPP).
+3. Aumont, O., Ethé, C., Tagliabue, A., Bopp, L., Gehlen, M. (2015). PISCES-v2: an ocean biogeochemical model for carbon and ecosystem studies. Geoscientific Model Development, 8, 2465-2513. — global hindcast GLOBAL_MULTIYEAR_BGC_001_029, 1994-1998 gap fill scaled to MedBFM.
+4. Copernicus Marine Service. Mediterranean Sea ocean colour, multi-year L4 plankton (cmems_obs-oc_med_bgc-plankton_my_l4-multi-1km_P1M). **[verify product ID]** — phytoplankton size classes for the large/small split.
+5. Di Cicco, A., Sammartino, M., Marullo, S., Santoleri, R. (2017). Regional empirical algorithms for an improved identification of phytoplankton functional types and size classes in the Mediterranean Sea using satellite data. Frontiers in Marine Science, 4, 126. doi:10.3389/fmars.2017.00126 — size-class algorithm.
+6. Pauly, D., Christensen, V. (1995) (see 1b-22) — carbon to wet weight 1:9.
 
 ## 5 — Validation
 

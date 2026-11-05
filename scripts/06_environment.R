@@ -14,8 +14,16 @@
 ##   temp_surf  sea surface temperature, deg C   MedPHY reanalysis, thetao, first level (~1 m)
 ##   sal_surf   sea surface salinity             MedPHY reanalysis, so, first level
 ##   temp_bot   sea bottom temperature, deg C    MedPHY reanalysis, bottomT
-##   npp        net primary production, g C m-2 d-1, integrated 0-ENV_INTEGRATION_DEPTH m
-##   phyto_c    phytoplankton carbon, g C m-2, integrated 0-ENV_INTEGRATION_DEPTH m
+##   npp        net primary production, g C m-2 d-1, integrated over the euphotic zone
+##   phyto_c    phytoplankton carbon, g C m-2, integrated over the euphotic zone
+##  Euphotic zone (ENV_INTEGRATION = "euphotic", default): per cell and month,
+##  the depth above which ENV_EU_FRACTION (99%) of the 0-ENV_INTEGRATION_DEPTH m
+##  NPP happens, from MedBFM's own NPP profile (MedBFM publishes no euphotic
+##  depth). NPP = that 99%; phytoplankton carbon is summed down to the same
+##  depth, so non-producing biomass below it (sinking cells) is left out.
+##  ENV_INTEGRATION = "fixed" integrates both over 0-ENV_INTEGRATION_DEPTH m.
+##  The PISCES gap fill keeps 0-ENV_INTEGRATION_DEPTH m: only its
+##  year-to-year ratio is used, the level comes from MedBFM (see below).
 ##  For each: one GeoTIFF per variable on the native 1/24 deg grid (one
 ##  layer per month), monthly ASCII maps on the Ecospace base map
 ##  (ECOSPACE_DEPTH_FILE), and the monthly and annual means over the model
@@ -103,7 +111,10 @@ source(file.path(git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"))   # c
 .env_default("ENV_OVERLAP_YEARS", 1999:2010)                          # MedBFM vs PISCES, for the gap fill
 .env_default("ENV_GAP_RATIO_MAX", 4)
 .env_default("ENV_PFT_YEARS", 1998:2000)
-.env_default("ENV_INTEGRATION_DEPTH", 200)                            # m, NPP and phytoplankton carbon
+.env_default("ENV_INTEGRATION_DEPTH", 200)                            # m, deepest level read for NPP and phytoplankton carbon
+.env_default("ENV_INTEGRATION", "euphotic")                           # "euphotic" (depth with 99% of the column NPP) or "fixed" (0-ENV_INTEGRATION_DEPTH m)
+.env_default("ENV_EU_FRACTION", 0.99)                                 # share of the column NPP above the euphotic depth
+.int_lab <- if (identical(ENV_INTEGRATION, "euphotic")) paste0("over the euphotic zone (", round(100 * ENV_EU_FRACTION), "% of the 0-", ENV_INTEGRATION_DEPTH, " m NPP)") else paste0("0-", ENV_INTEGRATION_DEPTH, " m")
 .env_default("ENV_DOMAIN", "area")                                    # "area" = the run's model area (GSAs or custom region); "ecospace" = cells of ECOSPACE_DEPTH_FILE
 .env_default("PHYTO_C_TO_WW", 9)
 .env_default("ECOSPACE_DEPTH_FILE", file.path(pcloud_dir, "data", "Bathymetry", "depth_wmed.asc"))
@@ -231,7 +242,7 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
 ## summed over depth x layer thickness (cells where every level is NA stay
 ## NA). Read one month at a time to keep memory low (a year of 0-200 m
 ## MedBFM is ~0.5 GB in memory otherwise).
-.env_read_monthly <- function(f, name, var, integrate) {
+.env_read_monthly <- function(f, name, var, integrate, eu = FALSE, zeu_file = NULL) {
   nc <- ncdf4::nc_open(f); on.exit(ncdf4::nc_close(nc))
   if (!var %in% names(nc$var)) stop("'", var, "' not in ", basename(f), " (has: ", paste(names(nc$var), collapse = ", "), ")")
   units <- ncdf4::ncatt_get(nc, var, "units")$value
@@ -244,6 +255,14 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
   per_second <- grepl("s-1|/s\\b|s\\^-1", units)
   z <- if (length(i_dep)) dimvals[[i_dep]] else 0
   th <- .env_thickness(z, ENV_INTEGRATION_DEPTH)
+  edges_lo <- c(0, head(cumsum(th), -1)); edges_hi <- cumsum(th)
+  ## euphotic depth: computed from the NPP profile (name == "npp") and kept
+  ## per month in zeu_file; phytoplankton carbon (name == "phyto_c") reads it
+  zeu_store <- list()
+  zeu_in <- if (eu && name == "phyto_c" && !is.null(zeu_file) && file.exists(zeu_file)) readRDS(zeu_file) else NULL
+  if (eu && name == "phyto_c" && is.null(zeu_in))
+    .env_msg("  [euphotic] no euphotic depth for ", basename(f), " - phytoplankton carbon integrated 0-", ENV_INTEGRATION_DEPTH, " m.")
+  zeu_vals <- list()
   layers <- vector("list", length(dates))
   for (k in seq_along(dates)) {
     st <- rep(1, length(dims)); ct <- rep(-1, length(dims)); st[i_tim] <- k; ct[i_tim] <- 1
@@ -254,7 +273,34 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
     if (integrate) {
       ok <- apply(is.finite(a), c(1, 2), any)
       a[!is.finite(a)] <- 0
-      m <- apply(sweep(a, 3, th, `*`), c(1, 2), sum); m[!ok] <- NA
+      contrib <- sweep(a, 3, th, `*`)
+      m <- apply(contrib, c(1, 2), sum); m[!ok] <- NA
+      mkey <- format(dates[k], "%Y-%m")
+      if (eu && name == "npp" && length(z) > 1) {
+        ## depth where the cumulative NPP reaches ENV_EU_FRACTION of the column
+        nx <- dim(contrib)[1]; ny <- dim(contrib)[2]; nz <- dim(contrib)[3]
+        cm <- matrix(contrib, nx * ny, nz)
+        cs <- t(apply(cm, 1, cumsum)); tot <- cs[, nz]; target <- ENV_EU_FRACTION * tot
+        kk <- max.col(cs >= target, ties.method = "first")
+        before <- ifelse(kk > 1, cs[cbind(seq_len(nrow(cs)), pmax(kk - 1, 1))], 0)
+        inlayer <- cm[cbind(seq_len(nrow(cm)), kk)]
+        frac <- ifelse(inlayer > 0, (target - before) / inlayer, 1)
+        zeu <- edges_lo[kk] + pmin(pmax(frac, 0), 1) * th[kk]
+        zeu[!(tot > 0) | !as.vector(ok)] <- NA
+        zeu_store[[mkey]] <- list(zeu = matrix(zeu, nx, ny), lon = dimvals[[i_lon]], lat = dimvals[[i_lat]])
+        zeu_vals[[mkey]] <- zeu
+        m <- m * ENV_EU_FRACTION                                         # NPP above the euphotic depth
+      }
+      if (eu && name == "phyto_c" && !is.null(zeu_in[[mkey]]) && length(z) > 1 &&
+          isTRUE(all.equal(zeu_in[[mkey]]$lon, dimvals[[i_lon]])) && isTRUE(all.equal(zeu_in[[mkey]]$lat, dimvals[[i_lat]]))) {
+        zv <- as.vector(zeu_in[[mkey]]$zeu)
+        zv[!is.finite(zv)] <- ENV_INTEGRATION_DEPTH
+        ## thickness of each level that lies above the euphotic depth, per cell
+        w <- pmax(outer(zv, edges_hi, pmin) - matrix(edges_lo, length(zv), length(edges_lo), byrow = TRUE), 0)
+        am <- matrix(a, length(zv), length(z))
+        m <- matrix(rowSums(am * w), dim(a)[1], dim(a)[2]); m[!ok] <- NA
+        zeu_vals[[mkey]] <- zv
+      }
     } else {
       m <- a[, , 1]
     }
@@ -264,16 +310,26 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
   }
   r <- terra::rast(layers)
   names(r) <- format(dates, "%Y-%m")
+  if (length(zeu_store) && !is.null(zeu_file)) saveRDS(c(if (file.exists(zeu_file)) readRDS(zeu_file) else list(), zeu_store), zeu_file)
+  zq <- if (length(zeu_vals)) stats::quantile(unlist(zeu_vals), c(0.1, 0.5, 0.9), na.rm = TRUE) else rep(NA_real_, 3)
+  if (length(zeu_vals) && name == "npp")
+    .env_msg("  [euphotic] ", basename(f), ": euphotic depth (", round(100 * ENV_EU_FRACTION), "% of NPP) median ", round(zq[[2]]),
+             " m (10-90%: ", round(zq[[1]]), "-", round(zq[[3]]), " m).")
   attr(r, "diag") <- data.table(variable = name, file = basename(f), units = units, per_second_converted = per_second,
                                 n_levels = length(z), top_m = min(z), bottom_m = max(z),
-                                thickness_sum_m = if (integrate) sum(th) else NA_real_)
+                                thickness_sum_m = if (integrate) sum(th) else NA_real_,
+                                integration = if (integrate) (if (length(zeu_vals)) "euphotic" else paste0("0-", ENV_INTEGRATION_DEPTH, " m")) else "surface/bottom",
+                                zeu_p10_m = zq[[1]], zeu_median_m = zq[[2]], zeu_p90_m = zq[[3]])
   r
 }
 
 ## Cached monthly SpatRaster of one variable for one year from one product
 .env_year <- function(name, year, ids, var, depth, integrate, tag = name) {
+  eu <- integrate && identical(ENV_INTEGRATION, "euphotic") && !grepl("_pisces$", tag)
+  if (eu) tag <- paste0(tag, "_eu", round(100 * ENV_EU_FRACTION))       # own cache, so a 0-200 m cache is not reused
+  zeu_file <- if (eu) file.path(cache_dir, sprintf("zeu_eu%d_%d.rds", round(100 * ENV_EU_FRACTION), year)) else NULL
   cf <- file.path(cache_dir, sprintf("%s_%d.tif", tag, year))
-  if (file.exists(cf)) return(terra::rast(cf))
+  if (file.exists(cf) && !(eu && name == "npp" && !file.exists(zeu_file))) return(terra::rast(cf))
   got <- list(); months_have <- character(0)
   ## no request for years before a product starts; the interim ("myint")
   ## datasets only hold the last few years, so they are only asked then
@@ -283,11 +339,13 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
   for (id in ids) {
     f <- .env_subset(id, var, sprintf("%d-01-01", year), sprintf("%d-12-31", year), depth = depth, tag = tag)
     if (is.null(f)) next
-    r <- tryCatch(.env_read_monthly(f, name, var, integrate), error = function(e) {
+    r <- tryCatch(.env_read_monthly(f, name, var, integrate, eu = eu, zeu_file = zeu_file), error = function(e) {
       .env_msg("  [read] ", basename(f), ": ", conditionMessage(e)); NULL })
     if (!ENV_KEEP_NETCDF) unlink(f)
     if (is.null(r)) next
-    fwrite(attr(r, "diag"), file.path(diag_dir, "netcdf_units_and_levels.csv"), append = file.exists(file.path(diag_dir, "netcdf_units_and_levels.csv")))
+    .df <- file.path(diag_dir, "netcdf_units_and_levels.csv")
+    .same <- file.exists(.df) && identical(names(fread(.df, nrows = 0)), names(attr(r, "diag")))
+    fwrite(attr(r, "diag"), .df, append = .same)
     new <- setdiff(names(r), months_have)
     if (length(new)) { got[[length(got) + 1]] <- r[[new]]; months_have <- c(months_have, new) }
     if (length(months_have) == 12) break
@@ -514,7 +572,7 @@ if (nrow(env_ts)) tryCatch({
   suppressPackageStartupMessages(library(ggplot2))
   plot_dir_env <- file.path(out_dir, "plots", "environment"); dir.create(plot_dir_env, recursive = TRUE, showWarnings = FALSE)
   lab <- c(temp_surf = "Surface temperature (deg C)", sal_surf = "Surface salinity", temp_bot = "Bottom temperature (deg C)",
-           npp = "NPP 0-200 m (monthly g C m-2 d-1; annual g C m-2 yr-1 / 365)", phyto_c = "Phytoplankton C 0-200 m (g C m-2)")
+           npp = paste0("NPP ", .int_lab, " (monthly g C m-2 d-1; annual g C m-2 yr-1 / 365)"), phyto_c = paste0("Phytoplankton C ", .int_lab, " (g C m-2)"))
   yr_keep <- sort(unique(c(ENV_YEARS, ENV_ECOPATH_PB_YEARS)))
   d <- copy(env_ts)[year %in% yr_keep][, date := as.Date(sprintf("%d-%02d-15", year, month))][, panel := factor(lab[variable], levels = lab)]
   a <- copy(env_annual)[year %in% yr_keep][, date := as.Date(sprintf("%d-07-01", year))][, panel := factor(lab[variable], levels = lab)]
@@ -605,8 +663,8 @@ tryCatch(if (nrow(env_ts) && all(c("npp", "phyto_c") %in% env_ts$variable)) {
     B_gC_m2 = b_c * shares, Biomass_t_km2 = b_ww * shares, PB = pb,
     NPP_gC_m2_yr = npp_c * shares,
     B_year = ENV_ECOPATH_B_YEAR, PB_npp_years = paste(range(npp_y$year), collapse = "-"),
-    Source_citation = paste0("Copernicus Marine: phytoplankton carbon (phyc) and NPP (nppv) integrated 0-", ENV_INTEGRATION_DEPTH,
-                             " m, area-weighted over ", .area_label, "; ", b_src, " for ", ENV_ECOPATH_B_YEAR,
+    Source_citation = paste0("Copernicus Marine: phytoplankton carbon (phyc) and NPP (nppv) integrated ", .int_lab,
+                             ", area-weighted over ", .area_label, "; ", b_src, " for ", ENV_ECOPATH_B_YEAR,
                              " (MedBFM MEDSEA_MULTIYEAR_BGC_006_008 level and seasonality, year-to-year change from PISCES",
                              " GLOBAL_MULTIYEAR_BGC_001_029 before 1999); C:WW 1:", PHYTO_C_TO_WW,
                              " (Pauly & Christensen 1995); Large/Small = satellite micro vs nano+pico chlorophyll share",

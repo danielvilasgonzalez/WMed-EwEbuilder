@@ -349,7 +349,7 @@ The pipeline covers several conceptually distinct problems in sequence:
 #| label: show-fig-flow-overview
 #| eval: true
 #| echo: false
-wm_repo_figure("fig-flow-overview", r"---(Workflow: the species-to-Functional-Group table and the data sources feed four blocks (1 biomass, 2 fisheries, 3 P/B, Q/B and traits, 4 diets) that produce the EwE input. Click to zoom.)---", "ewe_infography.jpg")
+wm_repo_figure("fig-flow-overview", r"---(Workflow: the species-to-Functional-Group table and the data sources feed five blocks (1 biomass, 2 fisheries, 3 P/B, Q/B and traits, 4 diets, 6 environment), checked by 5 validation, that produce the EwE input. Click to zoom.)---", "ewe_infography.jpg")
 ```
 
 Some density steps are conditional: catchability correction only runs if
@@ -1719,8 +1719,14 @@ year.
 3.  Gears with no model fleet (`FleetType = EXCLUDED`):
     $C \leftarrow C\,(1 - \text{share}_{excl,c,y})$, share from FDI
     (2014+) or SAU (earlier). The removed tonnes are in the 02 log.
-4.  Discards: $Di = C \times r$, $r$ = FDI per-fleet discard ratio, else
-    the FishMIP reported-vs-total ratio by FG × year; $L = C - Di$.
+4.  Discards: $C = L / (1 - r)$, $Di = C - L$. The discard ratio $r$
+    by country × FG × year is the first available of: STECF FDI (2014+,
+    Spain, France, Italy); Sea Around Us, the country's own year (EU
+    bias-corrected against the FDI overlap years, non-EU uncalibrated);
+    the reported-vs-total ratio of the global catch reconstruction
+    [@watson2017] (ISIMIP3a fishing data, by FG × year,
+    Mediterranean-wide); the same country × FG's nearest year with a
+    ratio.
 5.  ICCAT (bluefin tuna, swordfish, albacore): Task I nominal catch of
     the target countries, Mediterranean records only, scaled to the
     model GSAs by each country's FDI landings share inside them:
@@ -1789,7 +1795,7 @@ year.
 | FAO-GFCM capture production | bulk catch by country × species × division | [@gfcm2025capture] |
 | STECF FDI | EU catch, landings, discards, effort, capacity, model GSAs, 2014+ | [@stecffdi] |
 | Sea Around Us | catch by gear, pre-2014 fleet shares | [@sau2020], seaaroundus.org |
-| FishMIP / ISIMIP3a | effort and discard ratios | [@rousseau2024] |
+| ISIMIP3a fishing data ("FishMIP") | nominal effort; discard ratios (reported vs total catch) | effort [@rousseau2024]; catch [@watson2017] |
 | ICCAT Task I nominal catch; ST01 active vessels | BFT/SWO/ALB catch and gear split; vessel-size check of the gear → fleet mapping (2016+) | [@iccatt1nc] |
 | Stock assessments: GFCM Stock Assessment Forms (default) | stock biomass (SSB, else total biomass) for assessed single-species FGs; catch cross-check; hake stanza B | GFCM validated SAFs, read from the GFCM website on each run (`lib_gfcm_saf_online.R`); stocks with no readable table: hand-transcribed SAFs, then RAM Legacy [@ricard2012]. `STOCK_ASSESSMENT_SOURCE = "RAM"` uses RAM Legacy only |
 | `gear_to_fleettype.csv`, `fleet_register_taxonomy.csv` | gear → fleet type; excluded gears | project reference tables |
@@ -1885,21 +1891,19 @@ FG level: $X_f = \sum_s B_s X_s / \sum_s B_s$. Missing species values
 are borrowed from the closest relative (genus \> family \> order \>
 class).
 
-**Fishing mortality for non-fish FGs.** $P/B = Z = M + F$ [@allen1971]
-holds for every group, not only fish, as long as the empirical P/B is
-natural mortality. Fish species get $P/B = M + F$ inside `calc_fish()`.
-For invertebrate, mammal and seabird FGs the FG-level $F$ from
-`02_fisheries.R` (`F_by_fg.csv`) is added to the part of the FG whose
-P/B is natural mortality (Siler survivorship; Tumbiolo & Downing; Brey),
-$P/B_f = P/B^{emp}_f + F_f\,(1 - s_f)$, where $s_f$ is the biomass share
-of the FG whose P/B comes from the [@gascuel2008] equation: that
-equation was fitted to the P/B of published EwE models, i.e. total
-mortality, so it already includes fishing (all seabirds, and the
-fallback for mammals and invertebrates); and for invertebrates
-$Q/B_f = 3\,P/B_f$ is computed on that P/B, so a fished group's P/B
-includes its fishing mortality (otherwise Ecopath cannot balance it,
-e.g. coastal benthic cephalopods with $F$ = 0.85). ASSUMPTION: the
-empirical invertebrate P/B is treated as natural mortality.
+**Fishing mortality by group.** $P/B = Z = M + F$ [@allen1971] at
+steady state. Fish: $M$ is estimated and $F$ from 02 is added per
+species inside `calc_fish()`. Mammals: the Siler survivorship P/B
+[@barlow1991] is natural mortality, so the FG-level $F$ from
+`02_fisheries.R` (`F_by_fg.csv`) is added,
+$P/B_f = P/B^{emp}_f + F_f\,(1 - s_f)$, $s_f$ = biomass share of the FG
+whose P/B comes from [@gascuel2008] (fitted to EwE models, so it already
+includes fishing). Invertebrates: the empirical equations give P/B, which
+is already $Z$, so **no $F$ is added**; for a species with a stock
+assessment, $P/B = Z = F + M$ from the assessment
+(`assessment_total_mortality_Z.csv`). An invertebrate FG with $F > P/B$
+is listed in `invertebrate_F_above_PB_REVIEW.csv` (biomass too low, or
+P/B too low).
 
 ::: callout-warning
 ### Known caveats
@@ -2351,8 +2355,16 @@ inputs:
 |---|---|---|
 | `temp_surf`, `sal_surf` | Mediterranean physics reanalysis (MEDSEA_MULTIYEAR_PHY_006_004), first level (\~1 m) | °C, PSU |
 | `temp_bot` | same, `bottomT` | °C |
-| `npp` | Mediterranean biogeochemistry reanalysis (MedBFM, MEDSEA_MULTIYEAR_BGC_006_008), `nppv` integrated 0–200 m | g C m⁻² d⁻¹ |
-| `phyto_c` | same, `phyc` integrated 0–200 m | g C m⁻² |
+| `npp` | Mediterranean biogeochemistry reanalysis (MedBFM, MEDSEA_MULTIYEAR_BGC_006_008), `nppv` integrated over the euphotic zone | g C m⁻² d⁻¹ |
+| `phyto_c` | same, `phyc` integrated over the euphotic zone | g C m⁻² |
+
+Euphotic zone, per cell and month: the depth above which 99 % of the
+0–200 m NPP happens, taken from MedBFM's own NPP profile (MedBFM does not
+publish a euphotic depth). NPP is that 99 %; phytoplankton carbon is
+summed down to the same depth, so biomass below it (sinking cells) is left
+out of B and P/B. The PISCES gap fill (1994–1998) keeps 0–200 m, since
+only its year-to-year ratio is used. `ENV_INTEGRATION = "fixed"` integrates
+both over 0–200 m.
 
 MedBFM starts in 1999. For 1994–1998 the global Copernicus model (PISCES,
 GLOBAL_MULTIYEAR_BGC_001_029) is scaled to MedBFM, cell by cell and month

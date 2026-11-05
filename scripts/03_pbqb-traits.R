@@ -2954,6 +2954,28 @@ message("These per-method columns (PB_Pauly_1980, PB_FishLife_2023, PB_Gascuel_2
 ## observed input data, not dependent on the PB/QB calculation succeeding
 fg_biomass_total <- results[, .(Biomass_FG = sum(Biomass, na.rm = TRUE)), by = FG]
 
+## Invertebrates with a stock assessment: P/B = Z (= F + M) from the
+## assessment, read from pbqb_reference_tables/assessment_total_mortality_Z.csv
+## (columns Species, Z, Years, Source; one row per species). The empirical
+## invertebrate equations give P/B (= Z), not M, so no F is added to them
+## later; the assessment Z is the better value where it exists.
+.z_path <- file.path(pcloud_dir, "data/Complementary data/pbqb_reference_tables/assessment_total_mortality_Z.csv")
+if (file.exists(.z_path)) {
+  .zt <- fread(.z_path)[is.finite(as.numeric(Z)) & nzchar(Species)]
+  if (nrow(.zt)) {
+    .zt[, Z := as.numeric(Z)]
+    .hit <- results$Species %in% .zt$Species & results$dispatch_group == "invertebrate"
+    if (any(.hit)) {
+      .zi <- match(results$Species[.hit], .zt$Species)
+      .q3 <- .hit & grepl("^Q/P=3", results$QB_method)
+      results[.hit, `:=`(PB = .zt$Z[.zi], PB_method = paste0("Stock assessment Z = F + M (", .zt$Source[.zi], ", ", .zt$Years[.zi], ")"))]
+      results[.q3, QB := 3 * PB]
+      message("[P/B] ", sum(.hit), " invertebrate species take P/B = Z from their stock assessment (", basename(.z_path), "): ",
+              paste0(results$Species[.hit], " ", signif(results$PB[.hit], 3), collapse = "; "))
+    }
+  }
+}
+
 fg_weighted <- results[!is.na(PB) | !is.na(QB), .(
   PB_FG = sum(Biomass * PB, na.rm = TRUE) / sum(Biomass[!is.na(PB)], na.rm = TRUE),
   QB_FG = sum(Biomass * QB, na.rm = TRUE) / sum(Biomass[!is.na(QB)], na.rm = TRUE),
@@ -3276,6 +3298,13 @@ message("\nSaved: species_pb_qb_by_taxon_group.csv, fg_pb_qb_weighted.csv,",
   r[, w := if (all(is.na(w))) 1 else fifelse(is.na(w), 0, w), by = FG]
   r[, .(pb_total_share = sum(w[grepl("^Gascuel", PB_method)]) / sum(w)), by = FG][is.finite(pb_total_share)]
 }
+## Invertebrate FGs: the empirical equations (Tumbiolo & Downing 1994,
+## Brey 1999, Gascuel 2008) give P/B, i.e. Z at steady state, not M -
+## adding F would count fishing twice. F is added only to fish (species
+## level, calc_fish) and to mammals/seabirds whose P/B is natural mortality.
+## An invertebrate FG with F > P/B is flagged instead (biomass too low or
+## P/B too low; invertebrate_F_above_PB_REVIEW.csv).
+.inv_fg_noF <- results[, .(all_invert = all(dispatch_group == "invertebrate")), by = FG][all_invert == TRUE, FG]
 if (FG_YIELD_SOURCE == "fg_catch_csv" && exists("fg_yield_density")) {
   fg_yield_for_merge <- copy(fg_yield_density)
   setnames(fg_yield_for_merge, "FG_num", "FG")
@@ -3293,9 +3322,9 @@ if (FG_YIELD_SOURCE == "fg_catch_csv" && exists("fg_yield_density")) {
   
   fg_weighted[, PB_FG_before_F := PB_FG]
   fg_weighted <- merge(fg_weighted, .pb_total_share(), by = "FG", all.x = TRUE)[is.na(pb_total_share), pb_total_share := 0]
-  fg_weighted[n_species_with_F == 0 & !is.na(F_FG), PB_FG := PB_FG_before_F + F_FG * (1 - pb_total_share)]
+  fg_weighted[n_species_with_F == 0 & !is.na(F_FG) & !FG %in% .inv_fg_noF, PB_FG := PB_FG_before_F + F_FG * (1 - pb_total_share)]
   
-  n_fg_with_F <- fg_weighted[n_species_with_F == 0 & !is.na(F_FG), .N]
+  n_fg_with_F <- fg_weighted[n_species_with_F == 0 & !is.na(F_FG) & !FG %in% .inv_fg_noF, .N]
   message(n_fg_with_F, " of ", nrow(fg_weighted), " FG(s) had FG-level F added here",
           " (typically non-fish groups; fish FGs got F earlier, at the species level).",
           " PB_FG_before_F keeps the pre-F value for comparison. FGs with no catch",
@@ -3307,20 +3336,25 @@ if (FG_YIELD_SOURCE == "fg_catch_csv" && exists("fg_yield_density")) {
 } else if (file.exists(f_by_fg_path)) {
   ## Current path (02_fisheries.R): F_FG = C_f / B_f from F_by_fg.csv, with
   ## B_f = the final Ecopath_B. Added to PB_FG only for FGs with no
-  ## species-level F (n_species_with_F == 0) - invertebrates, mammals,
-  ## seabirds - since calc_fish() already used PB = M + F for fish. For a
-  ## fished invertebrate FG the empirical P/B (Tumbiolo & Downing 1994;
-  ## Brey 1999) describes the measured populations' production; adding F
-  ## keeps P/B >= F so Ecopath can balance (P/B = Z = M + F at steady
-  ## state; Allen 1971). ASSUMPTION: the empirical P/B is treated as M.
+  ## species-level F (n_species_with_F == 0) that are not invertebrates -
+  ## mammals, seabirds - since calc_fish() already used PB = M + F for fish.
+  ## Invertebrate FGs keep their empirical P/B (= Z) or the assessment Z
+  ## (see .inv_fg_noF above); F > P/B is flagged, not added.
   f_fg_02 <- fread(f_by_fg_path)
   if (all(c("FG_num", "F") %in% names(f_fg_02))) {
     f_fg_02 <- unique(f_fg_02[!is.na(F), .(FG = as.integer(FG_num), F_FG = as.numeric(F))], by = "FG")
     fg_weighted <- merge(fg_weighted, f_fg_02, by = "FG", all.x = TRUE)
     fg_weighted[, PB_FG_before_F := PB_FG]
     fg_weighted <- merge(fg_weighted, .pb_total_share(), by = "FG", all.x = TRUE)[is.na(pb_total_share), pb_total_share := 0]
-    fg_weighted[n_species_with_F == 0 & !is.na(F_FG) & !is.na(PB_FG), PB_FG := PB_FG_before_F + F_FG * (1 - pb_total_share)]
-    added <- fg_weighted[n_species_with_F == 0 & !is.na(F_FG) & !is.na(PB_FG_before_F)]
+    fg_weighted[n_species_with_F == 0 & !is.na(F_FG) & !is.na(PB_FG) & !FG %in% .inv_fg_noF, PB_FG := PB_FG_before_F + F_FG * (1 - pb_total_share)]
+    added <- fg_weighted[n_species_with_F == 0 & !is.na(F_FG) & !is.na(PB_FG_before_F) & !FG %in% .inv_fg_noF]
+    .inv_hi <- fg_weighted[FG %in% .inv_fg_noF & is.finite(F_FG) & is.finite(PB_FG) & F_FG > PB_FG,
+                           .(FG, FG_name, PB_FG, F_FG, ratio_F_to_PB = F_FG / PB_FG)]
+    fwrite(.inv_hi, file.path(csv_out_dir, "invertebrate_F_above_PB_REVIEW.csv"))
+    if (nrow(.inv_hi))
+      message("\n[F] ", nrow(.inv_hi), " invertebrate FG(s) with F > P/B (P/B is not raised by F any more - check their biomass or P/B;",
+              " a stock-assessment Z can go in assessment_total_mortality_Z.csv): ",
+              paste0(.inv_hi$FG_name, " (P/B ", signif(.inv_hi$PB_FG, 3), ", F ", signif(.inv_hi$F_FG, 3), ")", collapse = "; "))
     ## Invertebrate Q/B was set as Q/P = 3 on the species P/B (Christensen,
     ## Walters & Pauly 2008); keep Q/P = 3 on the P/B that now includes F,
     ## otherwise P/Q can exceed 1 for heavily fished groups.
