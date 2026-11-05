@@ -265,6 +265,7 @@ ECOPATH_WORKBOOK_PATH <- file.path(out_dir, "ecopath_ecosim_inputs.xlsx")  # pat
 ## block's own outputs (species density, Ecosim.csv, FG_lookup.csv,
 ## strata_area_by_area.csv for the model GSAs and area).
 csv_out_dir <- file.path(out_dir, "fisheries")
+source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_intermediate(out_dir)   # intermediate tables back in place (see lib_output_tidy.R)
 if (!dir.exists(csv_out_dir)) dir.create(csv_out_dir, recursive = TRUE)
 BIOMASS_CSV_DIR <- file.path(out_dir, "biomass")
 
@@ -7660,34 +7661,25 @@ message("\n[Fleet split method check] fleet_split_method_by_country.csv: breaks 
         " catch report. ", n_flat_country, " of ", uniqueN(fleet_split_out$Country), " country/ies have at least",
         " one row using the deepest 'no SAU data at all - equal share' fallback.")
 fwrite(bycatch_placeholder, file.path(csv_out_dir, "bycatch_placeholder.csv"))  # write the bycatch placeholder table
-fwrite(gfcm_task2_placeholder, file.path(csv_out_dir, "gfcm_task2_catch_placeholder.csv"))  # write the GFCM Task 2 placeholder table
-fwrite(gfcm_saf_effort_placeholder, file.path(csv_out_dir, "gfcm_saf_effort_placeholder.csv"))  # write the GFCM SAF placeholder table
+## (the GFCM Task 2 and GFCM SAF effort placeholders are empty templates - no longer written)
 if (nrow(stecf_fdi_catch_by_gsa) > 0) fwrite(stecf_fdi_catch_by_gsa, file.path(csv_out_dir, "stecf_fdi_catch_by_gsa_gear_year.csv"))  # re-write, if available
 if (nrow(stecf_fdi_effort_by_gsa) > 0) fwrite(stecf_fdi_effort_by_gsa, file.path(csv_out_dir, "stecf_fdi_effort_by_gsa_gear_year.csv"))  # re-write, if available
 fwrite(catches_ecopath_by_fleet_wide, file.path(csv_out_dir, "catches_ecopath_by_fleet_wide.csv"))  # write the Ecopath-by-fleet snapshot table
 fwrite(fleet_structure_out, file.path(csv_out_dir, "fleet_structure.csv"))  # write the Fleet_Structure table
-if (nrow(effort_by_fleet) > 0) fwrite(effort_by_fleet, file.path(csv_out_dir, "fishing_effort_by_fleet_timeseries_FishMIP.csv"))  # write the FishMIP effort table, if available
 if (nrow(f_by_fg) > 0) fwrite(f_by_fg, file.path(csv_out_dir, "F_by_FG_ecopath_years.csv"))  # write the fishing-mortality table, if available
 if (nrow(unreported_by_country) > 0) fwrite(unreported_by_country, file.path(csv_out_dir, "unreported_pct_by_country.csv"))  # write the unreported-ratio table, if available
 
+## Tables already written above under their own CSV name (GFCM catch by
+## species/division, fleet-vs-division check, catch by fleet and sector,
+## Ecopath catch by fleet, F by FG, STECF FDI catch/effort/capacity, EU-3
+## effort) are not written a second time here, and the empty GFCM Task 2 /
+## SAF effort placeholders are not written at all.
 sheets_to_write <- list(
-  Catches_Species_Division_FG   = gfcm_species_division_fg,
-  GFCM_Catches_by_Division      = gfcm_catches_by_area,
-  Fleet_vs_Division_Check       = fleet_vs_division_check,
-  Catches_ByCountryFleetSector  = fleet_split_out,
   Bycatch_Placeholder           = bycatch_placeholder,
-  GFCM_Task2_Placeholder        = gfcm_task2_placeholder,
-  GFCM_SAF_Effort_Placeholder   = gfcm_saf_effort_placeholder,
-  Catches_Ecopath_ByFleet       = catches_ecopath_by_fleet_wide,
   Fleet_Structure               = fleet_structure_out
 )
 if (nrow(unreported_by_country) > 0) sheets_to_write$Unreported_Pct_by_Country <- unreported_by_country  # add this sheet only if it has data
 if (nrow(effort_by_fleet) > 0) sheets_to_write$Fishing_Effort_by_Fleet <- effort_by_fleet  # add this sheet only if it has data
-if (nrow(f_by_fg) > 0) sheets_to_write$F_by_FG_EcopathYears <- f_by_fg  # add this sheet only if it has data
-if (nrow(stecf_fdi_catch_by_gsa) > 0) sheets_to_write$STECF_FDI_Catch_by_GSA <- stecf_fdi_catch_by_gsa  # add this sheet only if it has data
-if (nrow(stecf_fdi_effort_by_gsa) > 0) sheets_to_write$STECF_FDI_Effort_by_GSA <- stecf_fdi_effort_by_gsa  # add this sheet only if it has data
-if (nrow(effort_by_fleettype_eu3) > 0) sheets_to_write$Effort_by_FleetType_EU3 <- effort_by_fleettype_eu3  # add this sheet only if it has data
-if (nrow(stecf_fdi_capacity_by_fleet) > 0) sheets_to_write$STECF_FDI_Capacity_by_Fleet <- stecf_fdi_capacity_by_fleet  # add this sheet only if it has data
 if (nrow(discard_calibration) > 0) sheets_to_write$SAU_STECF_Discard_Calibration <- discard_calibration  # add this sheet only if it has data
 if (nrow(star_catch_by_fg) > 0) sheets_to_write$STAR_RAM_Catch_CrossCheck <- catches_discards_fg[!is.na(star_catches_t), .(Year, FG_num, FG_name, Catch_t, star_catches_t, star_landings_t, star_catch_pct_diff, star_n_stocks, star_sources)]  # add this sheet only if the STAR/RAM cross-check found data
 

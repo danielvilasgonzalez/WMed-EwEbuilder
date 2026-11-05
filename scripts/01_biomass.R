@@ -417,6 +417,7 @@ if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 ## FG_lookup.csv, Ecosim.csv) point at this same subfolder explicitly -
 ## see 02_fisheries.R/03_pbqb-traits.R/04_diets.R.
 csv_out_dir <- file.path(out_dir, "biomass")
+source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_intermediate(out_dir)   # intermediate tables back in place (see lib_output_tidy.R)
 if (!dir.exists(csv_out_dir)) dir.create(csv_out_dir, recursive = TRUE)
 
 ## Loud and explicit on purpose - if two different runs of this same
@@ -3262,6 +3263,27 @@ if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa
   setcolorder(fg_index_for_csv, c("GSA", setdiff(names(fg_index_for_csv), "GSA")))
 }
 fwrite(fg_index_for_csv, file.path(csv_out_dir, "survey_fg_annual_index.csv"))
+## Rocky/seagrass FGs that rest on MEDITS/MEDIAS only: a bottom trawl
+## avoids rock and Posidonia, so their survey density is likely an
+## underestimate even where the depth was sampled. Flagged in
+## biomass_source (and so in the Ecopath_B reference) and listed in
+## rocky_habitat_fg_survey_only_REVIEW.csv. Edit the list before sourcing.
+if (!exists("ROCKY_HABITAT_FG_NAMES", envir = .GlobalEnv, inherits = FALSE))
+  ROCKY_HABITAT_FG_NAMES <- c("Groupers", "Salema", "Common dentex", "Labridae and Serranidae", "Sparidae",
+                              "Scorpaenidae", "European lobster", "Expanding herbivore fish")
+.rocky_note <- " - NOTE: rocky/seagrass FG; bottom trawl undersamples its habitat (likely underestimate)"
+.rk <- fg_index_regional_combined$FG_name %in% ROCKY_HABITAT_FG_NAMES &
+  grepl("^MEDITS|^MEDIAS", fg_index_regional_combined$biomass_source) &
+  !grepl("rocky/seagrass FG", fg_index_regional_combined$biomass_source, fixed = TRUE)
+fg_index_regional_combined[.rk, biomass_source := paste0(biomass_source, .rocky_note)]
+.rk_tab <- fg_index_regional_combined[FG_name %in% ROCKY_HABITAT_FG_NAMES & Year %in% YEAR_ECOPATH,
+  .(Ecopath_B_t_km2 = mean(mean_density, na.rm = TRUE), survey_only = all(grepl("^MEDITS|^MEDIAS", biomass_source))),
+  by = .(FG_num, FG_name)][survey_only == TRUE]
+fwrite(.rk_tab, file.path(csv_out_dir, "rocky_habitat_fg_survey_only_REVIEW.csv"))
+if (nrow(.rk_tab))
+  message("[Rocky habitat] ", nrow(.rk_tab), " rocky/seagrass FG(s) with an Ecopath B from MEDITS/MEDIAS only (likely underestimate - bottom trawl",
+          " avoids their habitat): ", paste0(.rk_tab$FG_name, " (", signif(.rk_tab$Ecopath_B_t_km2, 2), " t/km2)", collapse = "; "),
+          ". Consider a literature density or letting Ecopath estimate B (ECOPATH_B_FROM_EE).")
 fwrite(fg_index_regional_combined, file.path(csv_out_dir, "survey_fg_annual_index_regional_combined.csv"))
 
 ## --- Ecosim_ts hygiene for non-survey FGs -----------------

@@ -546,6 +546,7 @@ if (!exists("SPECIES_DF_SOURCE", envir = .GlobalEnv, inherits = FALSE)) SPECIES_
 ## FISHERIES_CSV_DIR point at the other two blocks' subfolders for this
 ## script's cross-block reads.
 csv_out_dir <- file.path(out_dir, "pbqb-traits")
+source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_intermediate(out_dir)   # intermediate tables back in place (see lib_output_tidy.R)
 if (!dir.exists(csv_out_dir)) dir.create(csv_out_dir, recursive = TRUE)
 BIOMASS_CSV_DIR   <- file.path(out_dir, "biomass")
 FISHERIES_CSV_DIR <- file.path(out_dir, "fisheries")

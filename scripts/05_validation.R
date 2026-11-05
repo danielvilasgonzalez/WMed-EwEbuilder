@@ -216,6 +216,7 @@ if (!exists("ECOPATH_WORKBOOK_PATH", envir = .GlobalEnv, inherits = FALSE)) ECOP
 ## Always reassigned (never inherited from 01-04 in the same R session -
 ## inheriting sent validation output into output/pbqb-traits).
 csv_out_dir <- file.path(out_dir, "validation")
+source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_intermediate(out_dir)   # intermediate tables back in place (see lib_output_tidy.R)
 if (!dir.exists(csv_out_dir)) dir.create(csv_out_dir, recursive = TRUE)
 ## Matches the folder convention in output_subfolder_refactor_notes.md -
 ## every validation-type plot for reviewing Ecopath inputs, including
@@ -734,11 +735,10 @@ p_bio <- tryCatch(.bio_pair_plot("old_B_t_km2_on_new_area", "Ecopath B: new pipe
 p_bio_pub <- tryCatch(.bio_pair_plot("old_B_t_km2_old_area", "Ecopath B as published: each model on its own area",
                                      "Old model t/km2 of 846,002 km2; new pipeline t/km2 of the new model area."),
                       error = function(e) NULL)
-if (!is.null(p_bio_pub)) ggsave(file.path(plot_dir, "biomass_vs_old_model_by_fg_as_published.png"), p_bio_pub, width = 10, height = 14, dpi = PLOT_DPI, bg = "white")
-if (!is.null(p_bio)) {
-  ggsave(file.path(plot_dir, "biomass_vs_old_model_by_fg.png"), p_bio, width = 10, height = 14, dpi = PLOT_DPI, bg = "white")
-  message("[05_validation.R] Saved: biomass_vs_old_model_by_fg.png and biomass_vs_old_model_REVIEW.csv")
-}
+## The per-FG biomass figures against the 1995 model alone are no longer
+## drawn: 15d_all_models_B (below) shows the same values (1995 model on the
+## new area) next to the other models. The table is still written:
+## biomass_vs_old_model_REVIEW.csv.
 
 n_flagged <- comparison_dt[flag != "Within review range", .N]
 message("\n[05_validation.R] comparison_with_old_westmed_estimates_REVIEW.csv written: ", nrow(comparison_dt),
@@ -1750,16 +1750,28 @@ for (.rf in .ref_files) local({
     rr <- rr[nzchar(ref_group) & !(is.na(B_ref) & is.na(PB_ref) & is.na(QB_ref))]   # header rows of multi-stanza groups
     cw_f <- file.path(dirname(.rf), paste0(mdl, "_crosswalk.csv"))
     if (file.exists(cw_f)) {
+      ## WMed_FG_name (preferred: FG numbers change between FG files) or
+      ## WMed_FG_num; a blank cell = no counterpart in this model
       cw <- fread(cw_f, encoding = "UTF-8")
-      if (!all(c("ref_group", "WMed_FG_num") %in% names(cw))) stop(basename(cw_f), " needs columns ref_group, WMed_FG_num")
-      rr[, FG_num := suppressWarnings(as.integer(cw$WMed_FG_num))[match(normalize_name(ref_group), normalize_name(cw$ref_group))]]
-      no_counterpart <- rr[is.na(FG_num) & normalize_name(ref_group) %in% normalize_name(cw$ref_group), ref_group]
+      has_nm <- "WMed_FG_name" %in% names(cw); has_num <- "WMed_FG_num" %in% names(cw)
+      if (!"ref_group" %in% names(cw) || !(has_nm || has_num)) stop(basename(cw_f), " needs columns ref_group and WMed_FG_name (or WMed_FG_num)")
+      .ix <- match(normalize_name(rr$ref_group), normalize_name(cw$ref_group))
+      rr[, cw_name := if (has_nm) trimws(as.character(cw$WMed_FG_name))[.ix] else NA_character_]
+      rr[!is.na(cw_name) & !nzchar(cw_name), cw_name := NA_character_]
+      rr[, FG_num := if (has_num && !has_nm) suppressWarnings(as.integer(cw$WMed_FG_num))[.ix] else NA_integer_]
+      no_counterpart <- rr[!is.na(.ix) & is.na(FG_num) & is.na(cw_name), ref_group]
     } else no_counterpart <- character(0)
     new_b <- read_sheet_safe("Ecopath_B", c("FG_num", "FG_name", "Biomass"))
     new_pq <- read_sheet_safe("Ecopath_PBQB", c("FG_num", "PB_FG", "QB_FG"))
     nw <- new_b[, .(FG_num = as.integer(FG_num), FG_name, B_new = suppressWarnings(as.numeric(Biomass)))]
     if (!is.null(new_pq)) nw <- merge(nw, new_pq[, .(FG_num = as.integer(FG_num), PB_new = suppressWarnings(as.numeric(PB_FG)),
                                                      QB_new = suppressWarnings(as.numeric(QB_FG)))], by = "FG_num", all.x = TRUE)
+    if ("cw_name" %in% names(rr)) {                               # crosswalk by name -> this run's FG numbers
+      rr[!is.na(cw_name), FG_num := nw$FG_num[match(normalize_name(cw_name), normalize_name(nw$FG_name))]]
+      .lost <- rr[!is.na(cw_name) & is.na(FG_num), unique(cw_name)]
+      if (length(.lost)) message("[05_validation.R] Reference model ", mdl, ": crosswalk FG name(s) not in this run's FGs: ",
+                                 paste(.lost, collapse = ", "), " - fix WMed_FG_name in ", basename(cw_f), ".")
+    }
     hit <- is.na(rr$FG_num) & !rr$ref_group %in% no_counterpart   # not in the crosswalk: match the names
     rr[hit, FG_num := nw$FG_num[match(normalize_name(ref_group), normalize_name(nw$FG_name))]]
     unm <- rr[is.na(FG_num) & !ref_group %in% no_counterpart, ref_group]
@@ -2142,8 +2154,6 @@ if (!is.null(all_models_cmp)) for (.m in c("B", "PB", "QB")) {
     error = function(e) { message("[05_validation.R plot] All models comparison (", .m, ") skipped - ", conditionMessage(e)); NULL })
 }
 
-validation_plots[["01b_biomass_vs_old_model_by_fg"]] <- p_bio          # values side by side, same total tonnes (see .bio_pair_plot above)
-validation_plots[["01c_biomass_vs_old_model_as_published"]] <- p_bio_pub
 
 validation_plots <- c(list("01_old_vs_new_comparison" = p_comparison), validation_plots)
 validation_plots <- validation_plots[!sapply(validation_plots, is.null)]

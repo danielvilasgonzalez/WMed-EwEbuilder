@@ -134,7 +134,6 @@ table td code, table th code { white-space: normal; overflow-wrap: anywhere; }
   "F_by_fg.png"                                       = "plots/validation/F_by_fg.png",
   "12b_F_by_country.png"                              = "plots/validation/12b_F_by_country.png",
   "PQ_ratio_by_fg.png"                                = "plots/validation/PQ_ratio_by_fg.png",
-  "biomass_vs_old_model_by_fg.png"                    = "plots/validation/biomass_vs_old_model_by_fg.png",
   "15d_all_models_B.png"                             = "plots/validation/15d_all_models_B.png",
   "15d_all_models_PB.png"                            = "plots/validation/15d_all_models_PB.png",
   "15d_all_models_QB.png"                            = "plots/validation/15d_all_models_QB.png",
@@ -2278,13 +2277,6 @@ Copernicus rows appear once 06 has run.
   `biomass_vs_old_model_REVIEW.csv`, `validation_summary_ALL.csv`,
   `zooplankton_total_field_check_REVIEW.csv`, `prebal_REVIEW.csv`,
   `prebal_slopes.csv`, `pedigree_REVIEW.csv`.
-
-```{r}
-#| label: show-fig-biomass-vs-old
-#| eval: true
-#| echo: false
-wm_figure("fig-biomass-vs-old", r"---(New vs. old (1995) biomass by FG, both values shown on the new model area (same total tonnes).)---", "biomass_vs_old_model_by_fg.png", r"---(05_validation.R)---")
-```
 
 ```{r}
 #| label: show-fig-all-models-b

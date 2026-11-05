@@ -238,6 +238,7 @@ if (!exists("ECOPATH_WORKBOOK_PATH", envir = .GlobalEnv, inherits = FALSE)) ECOP
 ## the same R session, and inheriting it sent this script's CSVs into
 ## output/pbqb-traits. Each script owns its own output subfolder.
 csv_out_dir <- file.path(out_dir, "diet")
+source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_intermediate(out_dir)   # intermediate tables back in place (see lib_output_tidy.R)
 if (!dir.exists(csv_out_dir)) dir.create(csv_out_dir, recursive = TRUE)
 if (!exists("BIOMASS_CSV_DIR", envir = .GlobalEnv, inherits = FALSE)) BIOMASS_CSV_DIR <- file.path(out_dir, "biomass")
 if (!exists("METAWEB_XLSX_PATH",        envir = .GlobalEnv, inherits = FALSE)) METAWEB_XLSX_PATH        <- file.path(pcloud_dir, "data/Complementary data/data_entry_metaweb_empty.xlsx")   # Mediterranean trophic metaweb database - currently empty (template only, no DATA_ENTRY rows yet), but this is the file to read once it's populated

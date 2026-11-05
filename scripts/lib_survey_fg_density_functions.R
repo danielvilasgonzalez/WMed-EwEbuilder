@@ -2699,6 +2699,45 @@ impute_unsampled_cells <- function(obs, sampled_cells, cell_area, id_cols, n_ite
   grid[, m_fill := fifelse(sampled, m, a * b)]
   out <- grid[, .(numerator = sum(m_fill * area_km2), area_imputed_km2 = sum(area_km2[!sampled])),
               by = c(id_cols, "Year")]
+  ## Depth strata NEVER sampled in a GSA that is surveyed (e.g. 10-50 m in
+  ## GSAs 2, 5 and 8, where MEDITS starts at ~50 m) are not in `grid` and
+  ## would count as zero while their area is in the denominator. With
+  ## SURVEY_FILL_NEVER_SAMPLED_STRATA (default TRUE) they get the mean
+  ## density of the SAME stratum in the GSAs that sampled it (area-weighted,
+  ## zeros included), times the GSA's year level b (else the median b of
+  ## that year over GSAs, else 1).
+  if (isTRUE(get0("SURVEY_FILL_NEVER_SAMPLED_STRATA", ifnotfound = TRUE))) {
+    ever <- unique(sampled_cells[, .(AreaID, Stratum)])
+    never <- fsetdiff(unique(cell_area[AreaID %in% sampled_gsa$AreaID, .(AreaID, Stratum)]), ever)
+    if (nrow(never)) {
+      ever_area <- merge(ever, cell_area, by = key_c)
+      ids <- unique(obs[, id_cols, with = FALSE])
+      ea <- merge(ids[, .k := 1L], ever_area[, .k := 1L], by = ".k", allow.cartesian = TRUE)[, .k := NULL]
+      ids[, .k := NULL]; ever_area[, .k := NULL]
+      ea <- merge(ea, unique(grid[, c(id_cols, key_c, "a"), with = FALSE]), by = c(id_cols, key_c), all.x = TRUE)
+      ea[is.na(a), a := 0]
+      a_bar <- ea[, .(a_bar = sum(a * area_km2) / sum(area_km2)), by = c(id_cols, "Stratum")][a_bar > 0]
+      if (nrow(a_bar)) {
+        nv <- merge(merge(never, cell_area, by = key_c), sampled_gsa, by = "AreaID", allow.cartesian = TRUE)
+        nv <- merge(nv, a_bar, by = "Stratum", allow.cartesian = TRUE)
+        b_own <- unique(grid[, c(id_cols, "AreaID", "Year", "b"), with = FALSE])
+        b_reg <- b_own[, .(b_reg = stats::median(b, na.rm = TRUE)), by = c(id_cols, "Year")]
+        nv <- merge(nv, b_own, by = c(id_cols, "AreaID", "Year"), all.x = TRUE)
+        nv <- merge(nv, b_reg, by = c(id_cols, "Year"), all.x = TRUE)
+        nv[, b := fcoalesce(b, b_reg, 1)]
+        add <- nv[, .(numerator_nv = sum(a_bar * b * area_km2), area_nv = sum(area_km2)), by = c(id_cols, "Year")]
+        out <- merge(out, add, by = c(id_cols, "Year"), all = TRUE)
+        out[, `:=`(numerator = fcoalesce(numerator, 0) + fcoalesce(numerator_nv, 0),
+                   area_imputed_km2 = fcoalesce(area_imputed_km2, 0) + fcoalesce(area_nv, 0))]
+        out[, c("numerator_nv", "area_nv") := NULL]
+        .msg_key <- paste(sort(unique(paste0("GSA ", never$AreaID, " stratum ", never$Stratum))), collapse = ", ")
+        if (!identical(get0(".never_strata_msg", envir = .GlobalEnv, ifnotfound = ""), .msg_key)) {
+          message("[Survey] Never-sampled depth strata of surveyed GSAs filled from the same stratum in the other GSAs: ", .msg_key, ".")
+          assign(".never_strata_msg", .msg_key, envir = .GlobalEnv)
+        }
+      }
+    }
+  }
   ## id x years with no positive cell at all in the sampled GSAs -> 0
   all_y <- unique(obs[, id_cols, with = FALSE])[, .(Year = sort(unique(sampled_gsa$Year))), by = id_cols]
   out <- merge(all_y, out, by = c(id_cols, "Year"), all.x = TRUE)

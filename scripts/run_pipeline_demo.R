@@ -193,6 +193,7 @@ if (nzchar(RUN_NAME)) writeLines(c(paste("Run:", RUN_NAME), paste("Last run:", f
 message("\n=== ", if (nzchar(RUN_NAME)) paste0("Inputs differ from the defaults: own folder runs/", RUN_NAME) else "Default inputs: main output folder",
         ". Run folder: ", out_dir, " ===\n")
 tryCatch(wmed_archive_previous_run(out_dir), error = function(e) message("[run record] previous run not archived: ", conditionMessage(e)))
+source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_intermediate(out_dir)   # every table where the scripts expect it
 ## Custom region, before 02: the catch GSAs from 01's overlap table
 .set_custom_catch_gsas <- function() {
   ov <- file.path(out_dir, "biomass", "custom_gsa_overlap.csv")
@@ -265,6 +266,9 @@ if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
 if (exists("FG_SPECIES_FILE", envir = .GlobalEnv)) .rec_settings$FG_SPECIES_FILE <- basename(FG_SPECIES_FILE)
 tryCatch(wmed_write_run_record(out_dir, git_dir, pcloud_dir, .t0, .rec_settings, .step_minutes),
          error = function(e) message("[run record] not written: ", conditionMessage(e)))
+
+## intermediate tables to <block>/intermediate/ (lib_output_tidy.R)
+tryCatch(wmed_tidy_intermediate(out_dir), error = function(e) message("[Outputs] intermediate tables not moved: ", conditionMessage(e)))
 
 message(sprintf("\n=== Pipeline finished in %.1f min. Workbook: %s ===",
                 as.numeric(difftime(Sys.time(), .t0, units = "mins")),

@@ -984,7 +984,6 @@ makeActiveBinding(".plot_dir", function() if (!is.na(.out_dir)) file.path(.out_d
                 "P/Q by FG"           = "validation/PQ_ratio_by_fg.png",
                 "Diet matrix"         = "diets/diet_matrix_heatmap.png",
                 "PREBAL"              = "validation/15_prebal.png",
-                "vs 1995 model"       = "validation/biomass_vs_old_model_by_fg.png",
                 "B vs other models"   = "validation/15d_all_models_B.png",
                 "P/B vs other models" = "validation/15d_all_models_PB.png",
                 "Q/B vs other models" = "validation/15d_all_models_QB.png",
@@ -1162,8 +1161,22 @@ output$fg_explore_plot <- renderPlot({
     ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 13) + ggplot2::xlim(-1, 1)
   empty <- function(title) ggplot2::ggplot() + ggplot2::annotate("text", x = 0, y = 0, label = paste("No", tolower(title))) +
     ggplot2::labs(title = title) + ggplot2::theme_void(base_size = 13)
+  ## Both panels relative to the Ecopath years (mean over them = 1, grey
+  ## band), so biomass and catch trends read on the same scale; the
+  ## absolute Ecopath values are in the subtitles. Without values in the
+  ## Ecopath years, the first year with a value is the reference.
+  e_all <- .ecopath_b(); r0 <- if (!is.null(e_all)) e_all[e_all$FG_num == .fg_now, ][1, ] else NULL
+  base_yrs <- if (!is.null(r0) && nrow(r0) && is.finite(r0$y0)) seq(r0$y0, r0$y1) else integer(0)
+  .rel <- function(v, yr) {
+    ref <- mean(v[yr %in% base_yrs & is.finite(v)])
+    lab <- "Ecopath years"
+    if (!is.finite(ref) || ref <= 0) { k <- which(is.finite(v) & v > 0)[1]; ref <- if (is.na(k)) NA_real_ else v[k]; lab <- if (is.na(k)) "" else paste("first year with a value,", yr[k]) }
+    list(x = v / ref, ref = ref, lab = lab)
+  }
   p1 <- if (nrow(b)) {
     b$series <- "Biomass (relative)"
+    rb <- .rel(b$value, b$Year); b$value <- rb$x
+    if ("lo" %in% names(b)) { b$lo <- b$lo / rb$ref * 1; b$hi <- b$hi / rb$ref * 1 }
     p <- ggplot2::ggplot(b, ggplot2::aes(Year, value, colour = series))
     if ("lo" %in% names(b) && any(!is.na(b$lo)))
       p <- p + ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), fill = cols[["Biomass (relative)"]], colour = NA, alpha = 0.2, na.rm = TRUE)
@@ -1173,8 +1186,8 @@ output$fg_explore_plot <- renderPlot({
              if (is.finite(r$B)) paste(.fmt_b(r$B), "t/km\u00b2") else if (is.finite(r$EE)) paste0("left to Ecopath (EE ", r$EE, ")") else "none") else NULL
     if (!is.null(r) && nrow(r) && is.finite(r$y0))   # the Ecopath baseline years
       p <- p + ggplot2::annotate("rect", xmin = r$y0 - 0.5, xmax = r$y1 + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
-    p + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) + sc + th +
-      ggplot2::labs(title = "Biomass (relative to the first year)", subtitle = sub, x = NULL, y = "B / B first year")
+    p + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed") + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) + sc + th +
+      ggplot2::labs(title = "Biomass (relative)", subtitle = sub, x = NULL, y = paste0("B / B ", if (rb$lab == "Ecopath years") "Ecopath years" else rb$lab))
   } else {
     .nm <- if (!is.null(.fg_list())) .fg_list()$FG_name[match(.fg_now, .fg_list()$FG_num)] else ""
     note_panel("Biomass", if (grepl("detritus|discard", .nm, ignore.case = TRUE))
@@ -1184,8 +1197,17 @@ output$fg_explore_plot <- renderPlot({
   ct <- d[d$type %in% c("Catches", "Discards"), ]
   p2 <- if (nrow(ct)) {
     ct$series <- ct$type
-    ggplot2::ggplot(ct, ggplot2::aes(Year, value, colour = series)) + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) +
-      sc + th + ggplot2::labs(title = "Catches and discards", x = NULL, y = "t/km\u00b2")
+    refs <- character(0)
+    for (tp in unique(ct$type)) {
+      k <- ct$type == tp; rc <- .rel(ct$value[k], ct$Year[k]); ct$value[k] <- rc$x
+      refs <- c(refs, paste0(tp, " ", .fmt_b(rc$ref), " t/km\u00b2", if (rc$lab != "Ecopath years" && nzchar(rc$lab)) paste0(" (", rc$lab, ")")))
+    }
+    pc <- ggplot2::ggplot(ct, ggplot2::aes(Year, value, colour = series))
+    if (length(base_yrs)) pc <- pc + ggplot2::annotate("rect", xmin = min(base_yrs) - 0.5, xmax = max(base_yrs) + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
+    pc + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed") + ggplot2::geom_line() + ggplot2::geom_point(size = 1.4) +
+      sc + th + ggplot2::labs(title = "Catches and discards (relative)",
+                              subtitle = paste0("= 1 at: ", paste(refs, collapse = "\n         ")), x = NULL,
+                              y = if (length(base_yrs)) "C / C Ecopath years" else "C / C first year")
   } else note_panel("Catches and discards", "No catch or discards recorded\nfor this group in the data sources.")
   if (requireNamespace("patchwork", quietly = TRUE))
     patchwork::wrap_plots(p1, p2, ncol = 2, guides = "collect") & ggplot2::theme(legend.position = "bottom")
