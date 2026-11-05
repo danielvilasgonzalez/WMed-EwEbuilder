@@ -1176,16 +1176,31 @@ output$fg_explore_plot <- renderPlot({
   ## Ecopath years, the first year with a value is the reference.
   e_all <- .ecopath_b(); r0 <- if (!is.null(e_all)) e_all[e_all$FG_num == .fg_now, ][1, ] else NULL
   base_yrs <- if (!is.null(r0) && nrow(r0) && is.finite(r0$y0)) seq(r0$y0, r0$y1) else integer(0)
-  .rel <- function(v, yr) {
-    ref <- mean(v[yr %in% base_yrs & is.finite(v)])
+  absolute <- identical(input$fg_explore_scale, "abs")
+  ## Relative series start at 1 in the first Ecosim year, and that first
+  ## year holds the Ecopath baseline (mean over the Ecopath years) - as in
+  ## Ecosim_ts, where 01 sets the first year of each biomass series to the
+  ## Ecopath B before scaling it. ref_first = TRUE (biomass): the series is
+  ## already scaled that way, so its first value is the reference. Catches
+  ## and discards (t/km2 in Ecosim_ts): the first year is replaced by their
+  ## Ecopath-years mean, which becomes 1.
+  .rel <- function(v, yr, ref_first = FALSE) {
+    y1 <- min(yr)
+    ref <- if (ref_first) v[yr == y1][1] else mean(v[yr %in% base_yrs & is.finite(v)])
     lab <- "Ecopath years"
     if (!is.finite(ref) || ref <= 0) { k <- which(is.finite(v) & v > 0)[1]; ref <- if (is.na(k)) NA_real_ else v[k]; lab <- if (is.na(k)) "" else paste("first year with a value,", yr[k]) }
-    list(x = v / ref, ref = ref, lab = lab)
+    else if (!ref_first) v[yr == y1] <- ref
+    list(x = v / ref, v = v, ref = ref, lab = lab)
   }
   p1 <- if (nrow(b)) {
     b$series <- "Biomass"
-    rb <- .rel(b$value, b$Year); b$value <- rb$x
+    rb <- .rel(b$value, b$Year, ref_first = TRUE); b$value <- rb$x
     if ("lo" %in% names(b)) { b$lo <- b$lo / rb$ref * 1; b$hi <- b$hi / rb$ref * 1 }
+    ## absolute: the relative series x the Ecopath B (the Ecosim index is
+    ## relative; its level is the Ecopath baseline). Not possible when B is
+    ## left to Ecopath (EE) or the reference is not the Ecopath years.
+    b_abs <- absolute && !is.null(r0) && nrow(r0) && is.finite(r0$B) && r0$B > 0 && rb$lab == "Ecopath years"
+    if (b_abs) { b$value <- b$value * r0$B; if ("lo" %in% names(b)) { b$lo <- b$lo * r0$B; b$hi <- b$hi * r0$B } }
     p <- ggplot2::ggplot(b, ggplot2::aes(Year, value, colour = series))
     if ("lo" %in% names(b) && any(!is.na(b$lo)))
       p <- p + ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), fill = cols[["Biomass"]], colour = NA, alpha = 0.2, na.rm = TRUE)
@@ -1195,9 +1210,10 @@ output$fg_explore_plot <- renderPlot({
              if (is.finite(r$B)) paste(.fmt_b(r$B), "t/km\u00b2") else if (is.finite(r$EE)) paste0("left to Ecopath (EE ", r$EE, ")") else "none") else NULL
     if (!is.null(r) && nrow(r) && is.finite(r$y0))   # the Ecopath baseline years
       p <- p + ggplot2::annotate("rect", xmin = r$y0 - 0.5, xmax = r$y1 + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
-    p + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed") + .ln() + sc + th +
+    if (absolute && !b_abs) sub <- paste0(sub, " - shown relative (no Ecopath B to scale to)")
+    p + ggplot2::geom_hline(yintercept = if (b_abs) r0$B else 1, colour = "grey70", linetype = "dashed") + .ln() + sc + th +
       ggplot2::labs(title = "Biomass", subtitle = sub, x = NULL,
-                    y = if (rb$lab == "Ecopath years") "Relative to Ecopath years (= 1)" else paste0("Relative to ", sub("^first year with a value, ", "", rb$lab), " (= 1)"))
+                    y = if (b_abs) "t/km\u00b2" else if (rb$lab == "Ecopath years") "Relative to Ecopath years (= 1)" else paste0("Relative to ", sub("^first year with a value, ", "", rb$lab), " (= 1)"))
   } else {
     .nm <- if (!is.null(.fg_list())) .fg_list()$FG_name[match(.fg_now, .fg_list()$FG_num)] else ""
     note_panel("Biomass", if (grepl("detritus|discard", .nm, ignore.case = TRUE))
@@ -1209,15 +1225,15 @@ output$fg_explore_plot <- renderPlot({
     ct$series <- ct$type
     refs <- character(0)
     for (tp in unique(ct$type)) {
-      k <- ct$type == tp; rc <- .rel(ct$value[k], ct$Year[k]); ct$value[k] <- rc$x
+      k <- ct$type == tp; rc <- .rel(ct$value[k], ct$Year[k]); ct$value[k] <- if (absolute) rc$v else rc$x
       refs <- c(refs, paste0(if (tp == "Catches") "C " else "Di ", .fmt_b(rc$ref), if (rc$lab != "Ecopath years" && nzchar(rc$lab)) paste0(" (", sub("^first year with a value, ", "", rc$lab), ")")))
     }
     pc <- ggplot2::ggplot(ct, ggplot2::aes(Year, value, colour = series))
     if (length(base_yrs)) pc <- pc + ggplot2::annotate("rect", xmin = min(base_yrs) - 0.5, xmax = max(base_yrs) + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
-    pc + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed") + .ln() +
+    (if (absolute) pc else pc + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed")) + .ln() +
       sc + th + ggplot2::labs(title = "Catches and discards",
                               subtitle = paste0("Ecopath years: ", paste(refs, collapse = ", "), " t/km\u00b2"), x = NULL,
-                              y = "Relative to Ecopath years (= 1)")
+                              y = if (absolute) "t/km\u00b2" else "Relative to Ecopath years (= 1)")
   } else note_panel("Catches and discards", "No catch or discards recorded\nfor this group in the data sources.")
   if (requireNamespace("patchwork", quietly = TRUE))
     patchwork::wrap_plots(p1, p2, ncol = 2, guides = "collect") & ggplot2::theme(legend.position = "bottom")
