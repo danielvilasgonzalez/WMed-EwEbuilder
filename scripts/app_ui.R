@@ -19,7 +19,7 @@ library(shiny)
 .gsa_names <- c("Northern Alboran", "Alboran Island", "Southern Alboran", "Algeria", "Balearic Islands",
                 "Northern Spain", "Gulf of Lion", "Corsica", "Ligurian & N Tyrrhenian", "S & C Tyrrhenian", "Sardinia", "Northern Tunisia")
 .card <- function(step, title, icon, ..., class = "") {
-  tags$div(class = paste("card wm-card mb-3", class),
+  tags$div(class = paste("card wm-card mb-3", class), id = paste0("wm-card-", step), `data-wmtitle` = title,
            tags$div(class = "card-header wm-card-header",
                     tags$span(class = "wm-step", step), tags$span(class = "wm-icon", icon), title),
            tags$div(class = "card-body", ...))
@@ -109,6 +109,8 @@ tagList(
               color: #0b4f6c; background: transparent; text-decoration: none; }
     #wm-nav a:hover, #wm-nav button:hover { background: #e6f2f6; }
     body.wm-hide-methods .wm-methods-section { display: none !important; }
+    #TOC ul.wm-toc-app, #TOC ul.wm-toc-app ul { display: block !important; padding-left: .8rem; }
+    #TOC ul.wm-toc-app a.nav-link { font-size: .85em; padding-top: .1rem; padding-bottom: .1rem; }
     @media (max-width: 600px) { #wm-nav { top: auto; bottom: 10px; right: 10px; } }
   ")),
   tags$div(id = "wm-nav",
@@ -116,6 +118,33 @@ tagList(
     tags$a(href = "#wm-results-card", "Results"),
     tags$a(href = "#overview", id = "wm-nav-methods", "Methods"),
     tags$button(type = "button", id = "wm-toggle-methods", title = "Show or hide the methods text", "Hide methods")),
+  ## Table of contents (right-hand band): the cards of section 1 (and the
+  ## parts of Results) as sub-entries of "Configure and run the pipeline",
+  ## so plots, results and the FG explorer can be reached in one click.
+  tags$script(HTML("
+    $(function () {
+      var top = $('#TOC a[href=\"#sec-configure\"]').first();
+      if (!top.length || top.siblings('ul.wm-toc-app').length) return;
+      var ul = $('<ul class=\"wm-toc-app\"></ul>');
+      function add(list, href, txt, tab) {
+        var a = $('<a class=\"nav-link\"></a>').attr('href', href).text(txt);
+        if (tab) a.on('click', function () { var b = $('[data-bs-target=\"' + tab + '\"]'); if (b.length) b.trigger('click'); });
+        var li = $('<li></li>').append(a); list.append(li); return li;
+      }
+      $('.wm-card[id^=\"wm-card-\"]').each(function () {
+        var li = add(ul, '#' + this.id, $(this).data('wmtitle'));
+        if (this.id === 'wm-card-6') {
+          var sub = $('<ul></ul>');
+          add(sub, '#run_summary', 'Run summary');
+          add(sub, '#wm-fg-explorer', 'FG explorer');
+          add(sub, '#results', 'Key plots', '#wm-view-key');
+          add(sub, '#results', 'All plots', '#wm-view-all');
+          li.append(sub);
+        }
+      });
+      top.after(ul);
+    });
+  ")),
   tags$script(HTML("
     $(function () {
       var conf = document.getElementById('sec-configure');
@@ -276,7 +305,7 @@ tagList(
       downloadButton("dl_logs", "Logs of the last run (.zip)", class = "btn-sm btn-outline-secondary"),
       uiOutput("dl_info", inline = TRUE)),
     uiOutput("run_summary"),
-    tags$details(class = "card mb-3", open = NA,
+    tags$details(class = "card mb-3", open = NA, id = "wm-fg-explorer",
       tags$summary(class = "card-header py-2", tags$strong("FG explorer"), " - one group's Ecosim series from the workbook"),
       tags$div(class = "card-body py-2",
         div(class = "d-flex flex-wrap align-items-center gap-3",
