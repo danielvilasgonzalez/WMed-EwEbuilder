@@ -1792,7 +1792,9 @@ if (isTRUE(STRATA) && (!is.na(ECOSIM_HAUL_CAP_Q) || ECOSIM_MIN_AREA_COVERAGE > 0
 ## STEP 8: plots (MEDITS)
 ## =================================================================
 p_by_area <- plot_fg_timeseries_by_area(
-  fg_index, title = "MEDITS trawl survey by FG and area (strata-weighted)", y_lab = "Density (t/km^2)")
+  fg_index, title = paste0("MEDITS trawl survey by FG and ", if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa")) "GSA" else "area",
+                           " (strata-weighted)"), y_lab = "Density (t/km^2)",
+  area_label = if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa")) "GSA" else "Area")
 ggsave(file.path(plot_dir, "survey_fg_density_timeseries.png"), p_by_area, width = 14, height = 10, dpi = PLOT_DPI, bg = "white")
 
 regional_title_area <- if (AREA_MODE == "westmed") "Western Med" else AREA_NAME

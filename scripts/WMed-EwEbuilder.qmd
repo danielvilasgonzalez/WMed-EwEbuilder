@@ -1019,7 +1019,7 @@ overestimate for a species caught in only 1 of 4 hauls at a stratum.
 #| label: show-fig-strata-timeseries
 #| eval: true
 #| echo: false
-wm_figure("fig-strata-timeseries", r"---(Density index by Functional Group and area, strata-weighted (per-area version - see @sec-regional for the region-wide aggregate used in Ecopath/Ecosim inputs).)---", "survey_fg_density_timeseries.png", r"---(01_biomass.R (AREA_MODE = "westmed"))---")
+wm_figure("fig-strata-timeseries", r"---(Density index by Functional Group and GSA, strata-weighted (per-GSA version - see @sec-regional for the region-wide aggregate used in Ecopath/Ecosim inputs).)---", "survey_fg_density_timeseries.png", r"---(01_biomass.R (AREA_MODE = "westmed"))---")
 ```
 
 ## Region-wide aggregation (across areas) {#sec-regional}
@@ -1787,8 +1787,8 @@ year.
     $C^{ICCAT}_{c,sp} \times s_{c,sp}$. Shares in this run: Italy SWO
     0.59, BFT 0.57, ALB 0.23; Spain BFT 0.95, SWO 0.89; France 1.
 6.  Fleet split: $C_l = C_{c,f,y}\,p_{l,c,f,y}$; $p$ from FDI (2014+),
-    SAU hindcast bias-corrected to FDI (earlier), else FDI multi-year
-    mean, else country mix, else equal share (flagged). Target-country
+    SAU hindcast bias-corrected to FDI (earlier), else FDI of the two nearest years,
+    else country mix, else equal share (flagged). Target-country
     catch whose fleet cannot be resolved goes to the residual column
     "Target countries - fleet not resolved" (renamed on 2026-10-07; it
     no longer holds other countries' catch).

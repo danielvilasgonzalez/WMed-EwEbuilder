@@ -95,6 +95,7 @@ tagList(
     #wm-lightbox img { position: absolute; top: 0; left: 0; transform-origin: 0 0; cursor: grab; max-width: none; user-select: none; }
     #wm-lightbox .wm-lb-bar { position: absolute; top: 12px; right: 16px; z-index: 2001; display: flex; gap: .4rem; }
     #wm-lightbox .wm-lb-bar button { border: 0; border-radius: 20px; padding: .35rem .85rem; font-weight: 600; background: #fff; color: #0b4f6c; }
+    #wm-lightbox .wm-lb-name { position: absolute; top: 16px; left: 18px; color: #eceff1; font-size: .9rem; z-index: 2001; max-width: 55%; }
     #wm-lightbox .wm-lb-hint { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); color: #cfd8dc; font-size: .8rem; z-index: 2001; }
   ")),
 
@@ -398,7 +399,19 @@ tagList(
   $(init);
 
   // --- Zoomable plot viewer: click a plot, wheel or +/- to zoom, drag to move, Esc to close
-  var lb, img, sc = 1, tx = 0, ty = 0, drag = null;
+  var lb, img, sc = 1, tx = 0, ty = 0, drag = null, seq = [], pos = 0;
+  // Left/right arrows (or the < > buttons) go to the previous/next plot of
+  // the same set: the visible thumbnails of All plots, the Key plots, or the
+  // figures in the text.
+  function showAt(i) {
+    if (!seq.length) return;
+    pos = (i + seq.length) % seq.length;
+    var el = seq[pos];
+    img.onload = fit; img.src = el.currentSrc || el.src;
+    lb.find('.wm-lb-name').text(($(el).attr('alt') || '') + (seq.length > 1 ? '   (' + (pos + 1) + ' / ' + seq.length + ')' : ''));
+    lb.find('[data-z="prev"], [data-z="next"]').toggle(seq.length > 1);
+    lb.show(); if (img.complete) fit();
+  }
   function apply() { img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + sc + ')'; }
   function fit() {
     var w = img.naturalWidth, h = img.naturalHeight, W = window.innerWidth, H = window.innerHeight;
@@ -410,20 +423,28 @@ tagList(
   }
   function build() {
     lb = $('<div id="wm-lightbox"><div class="wm-lb-bar">' +
+           '<button data-z="prev" title="Previous (left arrow)">&lsaquo;</button><button data-z="next" title="Next (right arrow)">&rsaquo;</button>' +
            '<button data-z="in">+</button><button data-z="out">&minus;</button>' +
            '<button data-z="fit">Fit</button><button data-z="full">100%</button><button data-z="close">Close &times;</button></div>' +
-           '<img alt=""><div class="wm-lb-hint">Mouse wheel or +/- to zoom - drag to move - Esc to close</div></div>').appendTo('body');
+           '<div class="wm-lb-name"></div>' +
+           '<img alt=""><div class="wm-lb-hint">Left/right arrows: previous/next plot - mouse wheel or +/- to zoom - drag to move - Esc to close</div></div>').appendTo('body');
     img = lb.find('img')[0];
     lb.on('click', 'button', function () {
       var z = $(this).data('z'), W = window.innerWidth / 2, H = window.innerHeight / 2;
       if (z === 'in') zoomAt(1.4, W, H); else if (z === 'out') zoomAt(1 / 1.4, W, H);
-      else if (z === 'fit') fit(); else if (z === 'full') zoomAt(1 / sc, W, H); else lb.hide();
+      else if (z === 'fit') fit(); else if (z === 'full') zoomAt(1 / sc, W, H);
+      else if (z === 'prev') showAt(pos - 1); else if (z === 'next') showAt(pos + 1); else lb.hide();
     });
     lb[0].addEventListener('wheel', function (e) { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY); }, { passive: false });
     $(img).on('mousedown', function (e) { e.preventDefault(); drag = { x: e.clientX - tx, y: e.clientY - ty }; img.style.cursor = 'grabbing'; });
     $(document).on('mousemove', function (e) { if (drag) { tx = e.clientX - drag.x; ty = e.clientY - drag.y; apply(); } });
     $(document).on('mouseup', function () { drag = null; if (img) img.style.cursor = 'grab'; });
-    $(document).on('keydown', function (e) { if (e.key === 'Escape') lb.hide(); });
+    $(document).on('keydown', function (e) {
+      if (!lb || !lb.is(':visible')) return;
+      if (e.key === 'Escape') lb.hide();
+      else if (e.key === 'ArrowRight') { e.preventDefault(); showAt(pos + 1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); showAt(pos - 1); }
+    });
   }
   function wmFilter() {
     var f = $('.wm-filter .btn.active').data('folder') || '', q = ($('#wm-search').val() || '').toLowerCase();
@@ -461,14 +482,16 @@ tagList(
   $(document).on('click', 'img[data-wmfile], img[data-wmrepo]', function () {
     if (!this.naturalWidth || this.naturalWidth < 2) return;
     if (!lb) build();
-    img.onload = fit; img.src = this.src; lb.show();
-    if (img.complete) fit();
+    seq = $('img[data-wmfile], img[data-wmrepo]').filter(function () { return this.naturalWidth > 1; }).toArray();
+    showAt(Math.max(seq.indexOf(this), 0));
   });
   $(document).on('click', '.wm-results img', function () {
     if (!this.src || this.naturalWidth === 0) return;
     if (!lb) build();
-    img.onload = fit; img.src = this.src; lb.show();
-    if (img.complete) fit();
+    var grid = $(this).closest('.wm-grid');
+    seq = (grid.length ? grid.find('.wm-thumb:visible img') : $(this).closest('.tab-pane').find('img.wm-key-img')).toArray();
+    if (seq.indexOf(this) < 0) seq = [this];
+    showAt(seq.indexOf(this));
   });
 })();
 )---"))

@@ -3402,14 +3402,17 @@ filter_top_n <- function(df, group_col, value_col, area_col = NULL, top_n_areas 
   filter(df, .data[[group_col]] %in% top_groups)
 }
 
-plot_fg_timeseries_by_area <- function(fg_index, title = "FG density by area", y_lab = "Density",
-                                       top_n_areas = 20, top_n_fg = 40) {
+plot_fg_timeseries_by_area <- function(fg_index, title = "FG density by GSA", y_lab = "Density",
+                                       top_n_areas = 20, top_n_fg = 40, area_label = "GSA") {
   plot_data <- filter_top_n(as_tibble(fg_index), "FG_name", "mean_density",
                             area_col = "AreaID", top_n_areas = top_n_areas, top_n_groups = top_n_fg)
-  ggplot(plot_data, aes(x = Year, y = mean_density, color = as.factor(AreaID))) +
+  plot_data$area_lab <- factor(paste(area_label, plot_data$AreaID),
+                              levels = paste(area_label, sort(unique(suppressWarnings(as.numeric(as.character(plot_data$AreaID)))))))
+  if (anyNA(plot_data$area_lab)) plot_data$area_lab <- factor(paste(area_label, plot_data$AreaID))
+  ggplot(plot_data, aes(x = Year, y = mean_density, color = area_lab)) +
     geom_line(linewidth = 0.6, alpha = 0.7) +
     facet_wrap(vars(FG_name), scales = "free_y", labeller = ggplot2::label_wrap_gen(width = 28)) +
-    labs(title = title, x = "Year", y = y_lab, color = "Area") +
+    labs(title = title, x = "Year", y = y_lab, color = NULL) +
     theme_minimal(base_size = 11) +
     theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 1)) +
     ## legend lines shown thicker and fully opaque than the actual plot
@@ -3662,7 +3665,7 @@ plot_area_weight_donut <- function(strata_area_by_area, strata_def, area_ids = N
     coord_polar(theta = "y") +
     xlim(c(2, 4)) +
     facet_wrap(vars(!!rlang::sym(area_id_label)), labeller = label_both) +
-    labs(title = "Area proportion (prop) by depth stratum", fill = "Depth stratum") +
+    labs(title = "Share of each GSA's area by depth stratum", fill = "Depth stratum") +
     theme_void(base_size = 11) +
     theme(legend.position = "right")
 }

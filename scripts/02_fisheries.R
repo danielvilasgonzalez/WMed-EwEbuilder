@@ -160,8 +160,8 @@ while (sink.number() > 0) sink()
 ## (4) Discards: Di = C x r, r = FDI per-fleet discard ratio, else
 ##     FishMIP reported-vs-total ratio by FG x year; L = C - Di.
 ## (5) Fleet split: C_l = C_c,f,y x p_l,c,f,y, p from FDI (2014+), SAU
-##     hindcast bias-corrected to FDI (earlier), else FDI multi-year
-##     mean, else country mix, else equal share (flagged).
+##     hindcast bias-corrected to FDI (earlier), else FDI of the 2 nearest years,
+##     else country mix, else equal share (flagged).
 ## (6) Effort (EU): E_l,y = NE_c,y x kappa_c x s_l,y, NE = Rousseau et
 ##     al. nominal effort, kappa_c = sum E^FDI / sum NE over the overlap
 ##     years, s_l,y = fleet effort share (observed FDI share from 2014;
@@ -6140,12 +6140,30 @@ fleet_prop_hindcast_part <- if (nrow(sau_fleet_prop_by_year_hindcast) > 0) {
 hindcast_covered <- unique(fleet_prop_hindcast_part[, .(Country, FG_num, Year)])  # cells the hindcast tier actually filled
 flat_rows_needed <- non_stecf_rows[!hindcast_covered, on = c("Country", "FG_num", "Year")]  # cells still needing a fallback below the SAU hindcast
 
+## FDI composition for years FDI does not cover (before 2014, or after its
+## last year) when SAU has nothing: the mean of the FLEET_SPLIT_FDI_NEAREST_N
+## (default 2) FDI years NEAREST to that year (2014-2015 for the 1990s),
+## not the mean over every FDI year - fleets change, so the closest years
+## are the better prior. A fleet absent in one of those years counts as 0
+## there; shares are renormalised to 1.
+if (!exists("FLEET_SPLIT_FDI_NEAREST_N", envir = .GlobalEnv, inherits = FALSE)) FLEET_SPLIT_FDI_NEAREST_N <- 2
 stecf_fg_avg_part <- if (nrow(flat_rows_needed) > 0 && nrow(stecf_fleet_prop_by_year) > 0) {
-  stecf_fg_avg <- stecf_fleet_prop_by_year[, .(prop_fleet = mean(prop_fleet, na.rm = TRUE)),
-                                           by = .(Country, FG_num, Sector, FleetType, GSA, Comment)]  # FDI's own real composition for this Country x FG, averaged across every year FDI covers it
-  stecf_fg_avg[, prop_fleet := prop_fleet / sum(prop_fleet), by = .(Country, FG_num)]  # renormalize - averaging across years with different FleetType coverage can leave the sum slightly off 1
-  stecf_fg_avg[, fleet_split_source := "STECF FDI's own real fleet composition for this Country x FG, averaged across all years FDI covers it (used as a pre-2014 prior - far better grounded than an equal split when SAU has no data at all for this FG)"]
-  merge(flat_rows_needed, stecf_fg_avg, by = c("Country", "FG_num"), allow.cartesian = TRUE)  # attach FDI's own FG-specific average composition for these cells
+  .need <- unique(flat_rows_needed[, .(Country, FG_num, Year)])
+  .avail <- unique(stecf_fleet_prop_by_year[, .(Country, FG_num, fdi_year = Year)])
+  .pick <- merge(.need, .avail, by = c("Country", "FG_num"), allow.cartesian = TRUE)
+  .pick[, d := abs(fdi_year - Year)]
+  setorder(.pick, Country, FG_num, Year, d, fdi_year)
+  .pick <- .pick[, head(.SD, FLEET_SPLIT_FDI_NEAREST_N), by = .(Country, FG_num, Year)]
+  .pick[, `:=`(n_yrs = .N, yrs_lab = paste(sort(unique(fdi_year)), collapse = ", ")), by = .(Country, FG_num, Year)]
+  .sp <- merge(.pick[, .(Country, FG_num, Year, fdi_year, n_yrs, yrs_lab)],
+               stecf_fleet_prop_by_year[, .(Country, FG_num, fdi_year = Year, Sector, FleetType, GSA, Comment, prop_fleet)],
+               by = c("Country", "FG_num", "fdi_year"), allow.cartesian = TRUE)
+  stecf_fg_avg <- .sp[, .(prop_fleet = sum(prop_fleet, na.rm = TRUE) / n_yrs[1], yrs_lab = yrs_lab[1]),
+                      by = .(Country, FG_num, Year, Sector, FleetType, GSA, Comment)]
+  stecf_fg_avg[, prop_fleet := prop_fleet / sum(prop_fleet), by = .(Country, FG_num, Year)]
+  stecf_fg_avg[, fleet_split_source := paste0("STECF FDI fleet composition for this Country x FG, mean of the FDI year(s) nearest to this year (",
+                                              yrs_lab, ") - SAU has no data for this FG")][, yrs_lab := NULL]
+  merge(flat_rows_needed, stecf_fg_avg, by = c("Country", "FG_num", "Year"))
 } else {
   data.table(Country = character(), FG_num = integer(), Year = integer(), Sector = character(),
              FleetType = character(), GSA = character(), Comment = character(),
@@ -6170,7 +6188,7 @@ n_flat_cells     <- nrow(unique(fleet_prop_flat_part[, .(Country, FG_num, Year)]
 message("\n[Fleet split] fleet_prop_final: ", n_stecf_cells, " cell(s) use STECF FDI's own per-year",
         " gear/metier x GSA split (2014+, Spain/France/Italy); ", n_hindcast_cells, " cell(s) use SAU's",
         " own year-by-year hindcast (bias-corrected against FDI where a calibration factor exists); ",
-        n_fdiavg_cells, " cell(s) use STECF FDI's own FG-specific multi-year average composition (pre-2014,",
+        n_fdiavg_cells, " cell(s) use STECF FDI's FG-specific composition of the ", FLEET_SPLIT_FDI_NEAREST_N, " nearest FDI years (pre-2014,",
         " SAU has no data for this FG but FDI covers it in some year); ",
         n_flat_cells, " cell(s) fall all the way back to fleet_prop's flat all-years average (SAU has no",
         " catch at all for that specific Country x FG x Year, and FDI never covers that FG either).",
