@@ -82,6 +82,10 @@ table td code, table th code { white-space: normal; overflow-wrap: anywhere; }
    app draws after the page opens). */
 .wm-table-scroll { overflow-x: auto; max-width: 100%; margin-bottom: 1rem; }
 .wm-table-scroll > table { margin-bottom: .25rem; }
+/* Function sources under each code chunk (function-definitions-hook) */
+details.wm-fundefs { margin: -.5rem 0 1.2rem; font-size: .9em; }
+details.wm-fundefs > summary { cursor: pointer; color: #555; }
+details.wm-fundefs pre { max-height: 32rem; overflow: auto; }
 </style>
 <script>
 (function () {
@@ -103,6 +107,57 @@ table td code, table th code { white-space: normal; overflow-wrap: anywhere; }
   });
 })();
 </script>
+```
+
+```{r}
+#| label: function-definitions-hook
+#| eval: true
+#| echo: false
+#| include: false
+## Every code chunk shown on this page calls functions of the pipeline
+## (lib_*.R, 0*_*.R). Under each chunk, a collapsed block lists those
+## functions with their full source, read from the scripts at render time
+## (file and line given), plus the pipeline functions they call in turn,
+## so the reader sees what each call actually does. Turn it off for one
+## chunk with #| wm_defs: false.
+local({
+  idx <- list()
+  for (f in sort(list.files(".", "\\.R$"))) {
+    ex <- tryCatch(parse(f, keep.source = TRUE), error = function(e) NULL)
+    if (is.null(ex)) next
+    sr <- attr(ex, "srcref")
+    for (k in seq_along(ex)) {
+      e <- ex[[k]]
+      if (is.call(e) && as.character(e[[1]])[1] %in% c("<-", "=") && is.name(e[[2]]) && is.call(e[[3]]) &&
+          identical(e[[3]][[1]], as.name("function"))) {
+        nm <- as.character(e[[2]])
+        if (is.null(idx[[nm]])) idx[[nm]] <- list(file = f, line = sr[[k]][1], code = paste(as.character(sr[[k]]), collapse = "\n"))
+      }
+    }
+  }
+  .called <- function(code) {
+    code <- gsub("(^|\n)\\s*#[^\n]*", "\\1", code)                    # skip comment lines
+    nms <- names(idx)
+    nms[vapply(nms, function(n) grepl(paste0("(^|[^A-Za-z0-9._])", gsub(".", "\\.", n, fixed = TRUE), "\\s*\\("), code), logical(1))]
+  }
+  old <- knitr::knit_hooks$get("source")
+  knitr::knit_hooks$set(source = function(x, options) {
+    out <- old(x, options)
+    if (identical(options$wm_defs, FALSE)) return(out)
+    code <- paste(x, collapse = "\n")
+    defined_here <- regmatches(code, gregexpr("[A-Za-z0-9._]+(?=\\s*(<-|=)\\s*function)", code, perl = TRUE))[[1]]
+    first <- setdiff(.called(code), defined_here)
+    if (!length(first)) return(out)
+    second <- setdiff(unique(unlist(lapply(first, function(n) .called(idx[[n]]$code)))), c(first, defined_here))
+    fns <- head(c(first, second), 15)
+    blocks <- vapply(fns, function(n) paste0("**`", n, "()`** - `", idx[[n]]$file, "`, line ", idx[[n]]$line,
+                                             if (n %in% second) " (called by the functions above)" else "",
+                                             "\n\n```r\n", idx[[n]]$code, "\n```\n"), "")
+    paste0(out, "\n\n<details class=\"wm-fundefs\"><summary>What the code does: source of ", length(fns), " function",
+           if (length(fns) > 1) "s" else "", " (", paste0(fns, "()", collapse = ", "), ")</summary>\n\n",
+           paste(blocks, collapse = "\n"), "\n</details>\n\n")
+  })
+})
 ```
 
 ```{r}
