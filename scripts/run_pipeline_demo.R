@@ -5,7 +5,7 @@
 ##
 ## Runs the whole WMed EwE input pipeline in one go:
 ##   01_biomass.R -> 02_fisheries.R -> 03_pbqb-traits.R -> 04_diets.R
-##   -> 05_validation.R
+##   -> 05_diagnostics.R
 ## The order matters: 02 needs Ecopath_B and strata_area_by_area.csv from
 ## 01 (F = C / B), 03 needs F_by_fg.csv from 02 (P/B = M + F), 04 needs
 ## the species biomass shares from 01, and 05 reads everything.
@@ -32,7 +32,7 @@ if (!exists("CLEAN_START", envir = .GlobalEnv, inherits = FALSE) || isTRUE(CLEAN
   invisible(gc())
 }
 options(warn = 1)
-## RUN_STEPS: which scripts to run (1 = 01_biomass ... 5 = 05_validation,
+## RUN_STEPS: which scripts to run (1 = 01_biomass ... 5 = 05_diagnostics,
 ## 6 = 06_environment, the Copernicus environmental drivers; 6 runs before
 ## 5 when both are asked, so the validation can compare its phytoplankton).
 ## Default all; e.g. RUN_STEPS <- 5 redraws the validation plots from the
@@ -65,6 +65,19 @@ if (!isTRUE(.wp$ok) && requireNamespace("rstudioapi", quietly = TRUE) && rstudio
   }
 }
 if (!isTRUE(.wp$ok)) stop("[run_pipeline_demo.R] ", .wp$problem, "Nothing was run.", call. = FALSE)
+## Local copy of the shared data (wmed_paths.R): made on the first run,
+## so the pipeline never reads or writes the pCloud folder itself.
+## Update it from the page ("Update local data") or with
+## wmed_sync_local_data(.wp$shared_dir, .wp$local_data_dir).
+if (!isTRUE(.wp$using_local_copy) && !isTRUE(.wp$use_shared) && !is.na(.wp$shared_dir)) {
+  message("[run_pipeline_demo.R] Copying the shared data folder to a local copy (first run only, ~2.5 GB):\n  ",
+          .wp$shared_dir, "/data\n  -> ", .wp$local_data_dir, "/data")
+  .sync <- wmed_sync_local_data(.wp$shared_dir, .wp$local_data_dir,
+                                progress = function(k, n, f) message(sprintf("  %d / %d files", k, n)))
+  message("[run_pipeline_demo.R] Local copy ready: ", .sync$new, " files (", .sync$MB_copied, " MB).")
+  .wp <- wmed_set_paths(git_dir = dirname(.this_dir))
+}
+if (isTRUE(.wp$use_shared)) message("[run_pipeline_demo.R] WMED_USE_SHARED_DATA=1: reading the shared folder directly (not recommended).")
 
 .missing <- c(if (!dir.exists(out_dir)) paste0("out_dir = ", out_dir),
               if (!dir.exists(pcloud_dir)) paste0("pcloud_dir = ", pcloud_dir),
@@ -73,7 +86,7 @@ if (length(.missing)) stop("[run_pipeline_demo.R] These folders do not exist on 
                            paste(.missing, collapse = "\n  "), "\nFix config.local.R (this computer) and run again. Nothing was run.",
                            call. = FALSE)
 .scripts <- file.path(git_dir, "scripts", c("01_biomass.R", "02_fisheries.R", "03_pbqb-traits.R",
-                                            "04_diets.R", "05_validation.R"))
+                                            "04_diets.R", "05_diagnostics.R"))
 if (any(!file.exists(.scripts))) stop("[run_pipeline_demo.R] Missing in git_dir:\n  ",
                                       paste(.scripts[!file.exists(.scripts)], collapse = "\n  "), call. = FALSE)
 
@@ -250,8 +263,8 @@ if (6 %in% RUN_STEPS)
 
 if (!exists("RUN_VALIDATION", envir = .GlobalEnv, inherits = FALSE)) RUN_VALIDATION <- TRUE
 if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
-  tryCatch(.run_step(5, "05_validation.R", "[comparison with the 1995 model + all checks] "),
-           error = function(e) message("05_validation.R failed (steps 1-4 are complete): ", conditionMessage(e)))
+  tryCatch(.run_step(5, "05_diagnostics.R", "[comparison with the 1995 model + all checks] "),
+           error = function(e) message("05_diagnostics.R failed (steps 1-4 are complete): ", conditionMessage(e)))
 } else {
   if (5 %in% RUN_STEPS) message("--- Step 5/6: skipped (RUN_VALIDATION = FALSE) ---")
 }
@@ -260,7 +273,8 @@ if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
 ## versions, input files (out_dir/run_record_<time>.json + the info sheet)
 .rec_names <- c("RUN_STEPS", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
                 "AREA_MODE", "AREA_NAME", "CUSTOM_AREA_TYPE", "CUSTOM_BBOX", "STRATA", "DROP_OUTLIERS", "NORMALIZE_TS",
-                "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE", "HIGH_F_B_FIX")
+                "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE", "HIGH_F_B_FIX",
+                "ECOSIM_CATCH_COUNTRIES", "ECOSIM_CATCH_START_YEAR", "ECOSIM_CATCH_SCALING", "MULTISTANZA_B_SOURCE")
 .rec_settings <- Filter(Negate(is.null), lapply(stats::setNames(.rec_names, .rec_names), function(n)
   if (exists(n, envir = .GlobalEnv, inherits = FALSE)) get(n, envir = .GlobalEnv) else NULL))
 if (exists("FG_SPECIES_FILE", envir = .GlobalEnv)) .rec_settings$FG_SPECIES_FILE <- basename(FG_SPECIES_FILE)

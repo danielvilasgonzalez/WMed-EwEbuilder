@@ -40,6 +40,8 @@ You don't need to edit any paths. `scripts/wmed_paths.R` finds the three folders
 | `pcloud_dir` | the shared data folder | `config.local.R` → `config.R` → environment variable `WMED_PCLOUD_DIR` → the standard pCloud Drive place (macOS `~/pCloud Drive/EwE Western Med 2026`, Windows `P:/EwE Western Med 2026`, Linux `~/pCloudDrive/EwE Western Med 2026`) |
 | `out_dir` | where the outputs go (your own computer) | `config.local.R` → `config.R` → `WMED_OUT_DIR` → `~/WMed_EwE_output` (created if missing) |
 
+**Local copy of the data.** The pipeline never reads the pCloud folder directly. The first run (or *Make local copy of the data* on the page, Settings) copies its `data/` folder (~2.5 GB) to `~/WMed_EwE_data/EwE Western Med 2026`, and `pcloud_dir` then points to that copy, so a run cannot change the shared data. *Update local data* copies only new or changed files. Another place: `local_data_dir` in `config.local.R` or the environment variable `WMED_LOCAL_DATA_DIR`.
+
 If the pCloud folder is somewhere else, the page (card 0) or RStudio asks you to pick it once and saves your answer to `config.local.R`. To set the folders by hand, copy `config.R.example` to `config.local.R` and edit it. `config.R` and `config.local.R` are git-ignored, so your paths never reach other users.
 
 ## Interactive page
@@ -47,6 +49,8 @@ If the pCloud folder is somewhere else, the page (card 0) or RStudio asks you to
 `scripts/WMed-EwEbuilder.qmd` is a Quarto/Shiny page to set up, run and check the pipeline without editing code. It also documents every method, equation, assumption and source.
 
 **Start it:**
+
+> **Render the page, do not run it.** Open it with **Run Document** / **Render** (or `quarto serve`). Running its code chunks one by one (Run, Ctrl/Cmd+Enter, Run All) gives errors in the R session: most chunks are documentation and need objects from a pipeline run. To run only the pipeline: `source("scripts/run_pipeline_demo.R")`.
 
 - RStudio: open `scripts/WMed-EwEbuilder.qmd`, switch the editor to **Source** mode (not Visual: it rewraps the file), and click **Run Document**. Click *Show in new window* to open it in your browser.
 - Terminal:
@@ -84,7 +88,7 @@ Each step reads files the earlier ones wrote. `run_pipeline_demo.R` runs the ste
 | 3 | `03_pbqb-traits.R` | **P/B and Q/B** per FG from FishBase/SeaLifeBase traits and empirical equations, plus EcoBase. |
 | 4 | `04_diets.R` | **Diet matrix.** Sources in order: Mediterranean metaweb → MAISHA → FishBase/SeaLifeBase → EcoBase → literature fallback. FG order follows the FG table. |
 | 6 | `06_environment.R` (optional) | **Environmental drivers** from Copernicus Marine (Mediterranean reanalyses; global model scaled to the Med for 1994–98): bottom and surface temperature, surface salinity, NPP. Maps on the model grid (`.asc` for Ecospace), time series with the 10–90 % range over the area, Ecosim forcing series, and phytoplankton B and P/B for Ecopath. |
-| 5 | `05_validation.R` | **Validation.** Compares with the 1995 Western Med model and runs the EwE plausibility checks (P/Q, diet sums, cannibalism, PREBAL, F). Writes one summary table and one PDF of all plots. |
+| 5 | `05_diagnostics.R` | **Validation.** Compares with the 1995 Western Med model and runs the EwE plausibility checks (P/Q, diet sums, cannibalism, PREBAL, F). Writes one summary table and one PDF of all plots. |
 
 Every method, equation, assumption and reference is in `scripts/WMed-EwEbuilder.qmd`.
 
@@ -176,10 +180,11 @@ previous_runs/<time>/           # the workbook, logs and validation summary of t
 |---|---|
 | The page is grey or a list on it is empty | Close the `.qmd` tab in RStudio with **Don't Save** (RStudio may save an old copy over the file), reopen it in **Source** mode and click Run Document again. |
 | "Folders not found" | Card 0 of the page, or copy `config.R.example` to `config.local.R` and set the paths. |
+| Errors after running chunks of the `.qmd` in the console | The page must be rendered (Run Document), not run chunk by chunk. Restart R and click Run Document. |
 | A step failed | Results → **Logs of the last run (.zip)**, or the `<date>_0N_..._log.txt` files in `out_dir`. The run summary on the page shows the first error of each script. |
 | 06 downloads nothing | Card 0 → **Check setup** (Copernicus tool and login), then card 4 → *enter or change the login*. |
 | Packages older than the reference | `source("scripts/install_packages.R")` and restart R. |
-| The input snapshot or first run is slow | pCloud Drive downloads each file when it is first read; later runs are faster. |
+| The input snapshot or first run is slow | The first run copies the shared data to the local copy (~2.5 GB); later runs read the local copy. |
 
 ## Repository structure
 
@@ -191,7 +196,7 @@ scripts/
   wmed_paths.R                     # finds git_dir, pcloud_dir, out_dir on any computer
   install_packages.R  package_versions.csv
   01_biomass.R  01b_biomass_unsurveyed.R  02_fisheries.R  03_pbqb-traits.R  04_diets.R
-  05_validation.R  06_environment.R
+  05_diagnostics.R  06_environment.R
   03b_ecobase.R                    # EcoBase fallbacks
   lib_*.R                          # shared functions (survey density, AquaMaps, FishBase diets,
                                    #   plankton, Copernicus, taxonomy, run record)

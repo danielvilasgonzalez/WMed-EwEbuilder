@@ -1557,7 +1557,7 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
   ## biomass (01_biomass.R), out_dir/plots/fisheries (02_fisheries.R)
   ## and out_dir/plots/pbqb-traits (03_pbqb-traits.R) - one subfolder
   ## per producing script. out_dir/plots/validation is reserved for
-  ## 05_validation.R's own output, not for this script's
+  ## 05_diagnostics.R's own output, not for this script's
   ## diet-matrix figure.
   diets_plot_dir <- file.path(out_dir, "plots", "diets")
   if (!dir.exists(diets_plot_dir)) dir.create(diets_plot_dir, recursive = TRUE, showWarnings = FALSE)

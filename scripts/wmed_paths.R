@@ -25,6 +25,18 @@
 ##        Linux   ~/pCloudDrive/EwE Western Med 2026
 ##      and for out_dir ~/WMed_EwE_output (created if missing)
 ##
+## Local copy of the shared data (since 2026-11-06). The pipeline never
+## reads the pCloud folder directly: its data/ folder is copied once to
+## a local folder (default ~/WMed_EwE_data/EwE Western Med 2026; set
+## local_data_dir in config.local.R or WMED_LOCAL_DATA_DIR), and
+## pcloud_dir then points to that copy. Nothing is ever written to the
+## shared folder, so a run cannot change or corrupt it, and the shared
+## data can later move to another server (only the copy step changes).
+## wmed_sync_local_data() copies new or changed files only; run by
+## run_pipeline_demo.R when the copy is missing, and by the
+## "Update local data" button of the page. WMED_USE_SHARED_DATA=1 reads
+## the shared folder directly (not recommended).
+##
 ## Used by run_pipeline_demo.R, 01-05 (when run on their own) and
 ## WMed-EwEbuilder.qmd.
 ## =================================================================
@@ -87,9 +99,49 @@ local({
 .wmed_read_config <- function(f) {
   e <- new.env()
   ok <- tryCatch({ sys.source(f, envir = e); TRUE }, error = function(err) FALSE)
-  if (!ok) return(list(out_dir = NA_character_, pcloud_dir = NA_character_))
+  if (!ok) return(list(out_dir = NA_character_, pcloud_dir = NA_character_, local_data_dir = NA_character_))
   get1 <- function(n) if (exists(n, envir = e, inherits = FALSE)) as.character(get(n, envir = e))[1] else NA_character_
-  list(out_dir = get1("out_dir"), pcloud_dir = get1("pcloud_dir"))
+  list(out_dir = get1("out_dir"), pcloud_dir = get1("pcloud_dir"), local_data_dir = get1("local_data_dir"))
+}
+
+## --- Local copy of the shared data ----------------------------------------
+.wmed_local_default <- function() file.path(.wmed_home(), "WMed_EwE_data", .wmed_pcloud_name)
+## a usable copy: data/ with the FG table in it
+wmed_local_data_ok <- function(d) !is.null(d) && !is.na(d) && file.exists(file.path(d, "data", "FG_WMed_2026.csv"))
+## Copies <shared_dir>/data to <local_dir>/data: files missing locally,
+## of another size, or newer in the shared folder. Read-only on the
+## shared side. Local files that are not in the shared folder (caches
+## written by the runs) are kept. Returns a one-row summary.
+wmed_sync_local_data <- function(shared_dir, local_dir = .wmed_local_default(), subdirs = "data", progress = NULL) {
+  if (is.na(shared_dir) || !dir.exists(shared_dir)) stop("Shared data folder not found: ", shared_dir)
+  if (normalizePath(shared_dir, mustWork = FALSE) == normalizePath(local_dir, mustWork = FALSE)) stop("The local copy cannot be the shared folder itself.")
+  n_new <- 0L; n_upd <- 0L; n_same <- 0L; bytes <- 0
+  for (sd in subdirs) {
+    src <- file.path(shared_dir, sd)
+    if (!dir.exists(src)) next
+    f <- list.files(src, recursive = TRUE, all.files = FALSE, no.. = TRUE)
+    f <- f[!grepl("(^|/)(\\.DS_Store|~\\$|\\.~lock)", f)]
+    si <- file.info(file.path(src, f), extra_cols = FALSE)
+    keep <- !is.na(si$isdir) & !si$isdir
+    f <- f[keep]; si <- si[keep, , drop = FALSE]
+    dst <- file.path(local_dir, sd, f)
+    di <- file.info(dst, extra_cols = FALSE)
+    is_new <- is.na(di$size)
+    is_upd <- !is_new & (di$size != si$size | si$mtime > di$mtime + 1)
+    todo <- which(is_new | is_upd)
+    for (k in seq_along(todo)) {
+      i <- todo[k]
+      dir.create(dirname(dst[i]), recursive = TRUE, showWarnings = FALSE)
+      ok <- file.copy(file.path(src, f[i]), dst[i], overwrite = TRUE, copy.date = TRUE)
+      if (!isTRUE(ok)) warning("Not copied: ", f[i])
+      if (is.function(progress) && (k %% 50 == 0 || k == length(todo))) progress(k, length(todo), f[i])
+    }
+    n_new <- n_new + sum(is_new); n_upd <- n_upd + sum(is_upd); n_same <- n_same + sum(!is_new & !is_upd)
+    bytes <- bytes + sum(si$size[todo], na.rm = TRUE)
+  }
+  writeLines(c(paste("shared:", shared_dir), paste("synced:", format(Sys.time(), "%Y-%m-%d %H:%M"))),
+             file.path(local_dir, "LOCAL_COPY_INFO.txt"))
+  data.frame(new = n_new, updated = n_upd, unchanged = n_same, MB_copied = round(bytes / 1e6, 1), local_dir = local_dir)
 }
 
 wmed_find_paths <- function(git_dir = NULL) {
@@ -112,6 +164,13 @@ wmed_find_paths <- function(git_dir = NULL) {
                              `pCloud Drive (Windows)` = file.path("P:", .wmed_pcloud_name),
                              `pCloud Drive (Linux)` = file.path("~/pCloudDrive", .wmed_pcloud_name),
                              `pCloud Drive (volume)` = file.path("/Volumes/pCloud Drive", .wmed_pcloud_name)))
+  ## Local copy: used instead of the shared folder whenever it exists
+  shared <- pc
+  lc_cand <- c(vapply(cfg, function(x) x[["local_data_dir"]], ""), Sys.getenv("WMED_LOCAL_DATA_DIR"), .wmed_local_default())
+  lc_cand <- .wmed_expand(lc_cand[!is.na(lc_cand) & nzchar(lc_cand)])
+  local_dir <- sub("/+$", "", lc_cand[1])
+  use_shared <- identical(Sys.getenv("WMED_USE_SHARED_DATA"), "1")
+  if (!use_shared && wmed_local_data_ok(local_dir)) pc <- list(path = local_dir, from = "local copy of the shared data")
   od <- pick("out_dir", c(env = Sys.getenv("WMED_OUT_DIR")))
   if (is.na(od$path)) {
     od <- list(path = file.path(.wmed_home(), "WMed_EwE_output"), from = "default (~/WMed_EwE_output)")
@@ -120,6 +179,8 @@ wmed_find_paths <- function(git_dir = NULL) {
   ok <- !is.na(git_dir) && file.exists(file.path(git_dir, "scripts", "01_biomass.R")) && !is.na(pc$path) && dir.exists(od$path)
   list(git_dir = git_dir, pcloud_dir = pc$path, out_dir = od$path,
        pcloud_from = pc$from, out_from = od$from, ok = ok,
+       shared_dir = shared$path, local_data_dir = local_dir,
+       using_local_copy = identical(pc$path, local_dir), use_shared = use_shared,
        problem = if (ok) "" else paste0(
          if (is.na(git_dir) || !file.exists(file.path(git_dir, "scripts", "01_biomass.R"))) "WMed_EwE repo not found. " else "",
          if (is.na(pc$path)) paste0("pCloud folder '", .wmed_pcloud_name, "' not found (is pCloud Drive running?). ",
@@ -141,17 +202,20 @@ wmed_set_paths <- function(git_dir = NULL, quiet = FALSE) {
 }
 
 ## Saves this computer's folders to config.local.R (git-ignored)
-wmed_save_local_config <- function(git_dir, out_dir = NULL, pcloud_dir = NULL) {
+wmed_save_local_config <- function(git_dir, out_dir = NULL, pcloud_dir = NULL, local_data_dir = NULL) {
   f <- file.path(git_dir, "config.local.R")
-  old <- if (file.exists(f)) .wmed_read_config(f) else list(out_dir = NA, pcloud_dir = NA)
+  old <- if (file.exists(f)) .wmed_read_config(f) else list(out_dir = NA, pcloud_dir = NA, local_data_dir = NA)
   out_dir <- if (is.null(out_dir)) old$out_dir else out_dir
   pcloud_dir <- if (is.null(pcloud_dir)) old$pcloud_dir else pcloud_dir
+  local_data_dir <- if (is.null(local_data_dir)) old$local_data_dir else local_data_dir
+  if (!is.null(local_data_dir) && !is.na(local_data_dir)) local_data_dir <- gsub("\\\\", "/", local_data_dir)
   ## "/" in the saved paths: a Windows path with "\" inside "..." is not valid R
   if (!is.na(out_dir)) out_dir <- gsub("\\\\", "/", out_dir)
   if (!is.na(pcloud_dir)) pcloud_dir <- gsub("\\\\", "/", pcloud_dir)
   writeLines(c("## config.local.R - folders on THIS computer (not committed; see wmed_paths.R).",
                if (!is.na(out_dir)) sprintf('out_dir    <- "%s"', out_dir),
-               if (!is.na(pcloud_dir)) sprintf('pcloud_dir <- "%s"', pcloud_dir)), f)
+               if (!is.na(pcloud_dir)) sprintf('pcloud_dir <- "%s"', pcloud_dir),
+               if (!is.null(local_data_dir) && !is.na(local_data_dir)) sprintf('local_data_dir <- "%s"', local_data_dir)), f)
   invisible(f)
 }
 

@@ -1,5 +1,5 @@
 ## WMed-EwEbuilder - building Ecopath with Ecosim inputs for the Western Mediterranean
-## (biomass, fisheries, P/B, Q/B, traits and diets). This file: 05_validation.R
+## (biomass, fisheries, P/B, Q/B, traits and diets). This file: 05_diagnostics.R
 ## PNG resolution of every plot (dots per inch). 300 keeps small labels
 ## (FG names, diet heatmap) sharp when zoomed in; 150 = old, smaller files.
 ## Every saved plot: white background and text no smaller than the sizes
@@ -116,7 +116,7 @@ while (sink.number() > 0) sink()
 ## grepping/filtering rather than paging through.
 
 ## =================================================================
-## NOTATION, EQUATIONS AND DATA SOURCES (05_validation.R)
+## NOTATION, EQUATIONS AND DATA SOURCES (05_diagnostics.R)
 ## -----------------------------------------------------------------
 ## Reference model: Western Mediterranean 1995 Ecopath model
 ## (Coll & Steenbeek; WMed_EwE.xlsx "estimates" sheet, model area
@@ -147,9 +147,9 @@ invisible(lapply(pkgs, library, character.only = TRUE))
 if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
     exists("pcloud_dir", envir = .GlobalEnv, inherits = FALSE) &&
     exists("git_dir", envir = .GlobalEnv, inherits = FALSE)) {
-  message("[05_validation.R] Using pre-set out_dir/pcloud_dir/git_dir from calling environment:\n  out_dir  = ", out_dir, "\n  pcloud_dir = ", pcloud_dir, "\n  git_dir  = ", git_dir)
+  message("[05_diagnostics.R] Using pre-set out_dir/pcloud_dir/git_dir from calling environment:\n  out_dir  = ", out_dir, "\n  pcloud_dir = ", pcloud_dir, "\n  git_dir  = ", git_dir)
   if (!dir.exists(out_dir)) {
-    stop("[05_validation.R] out_dir was pre-set by the calling script but doesn't exist on this machine: \"",
+    stop("[05_diagnostics.R] out_dir was pre-set by the calling script but doesn't exist on this machine: \"",
          out_dir, "\". Fix it in the driver script (e.g. run_pipeline_demo.R) before sourcing this file.")
   }
 } else if (isTRUE(local({   # run on its own: folders from wmed_paths.R (config.local.R, config.R, or the standard pCloud place)
@@ -183,7 +183,7 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
 ## --- Run log (plain text, for sharing/debugging) ------------------------
 ## One log per script per day (YYYYMMDD_<script>_log.txt): a rerun on the
 ## same day overwrites it; the run start time is the first line.
-.run_log_path <- file.path(out_dir, paste0(format(Sys.Date(), "%Y%m%d"), "_05_validation_log.txt"))
+.run_log_path <- file.path(out_dir, paste0(format(Sys.Date(), "%Y%m%d"), "_05_diagnostics_log.txt"))
 .run_log_con  <- file(.run_log_path, open = "wt")
 sink(.run_log_con, split = TRUE)  # stdout (cat/print): teed to console + file
 cat("Run started:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
@@ -244,7 +244,7 @@ if (!exists("OLD_WMED_WORKBOOK_PATH", envir = .GlobalEnv, inherits = FALSE)) {
     OLD_WMED_WORKBOOK_PATH <- rstudioapi::selectFile(caption = "Select WMed_EwE.xlsx", filter = "Excel Files (*.xlsx)")
     if (is.null(OLD_WMED_WORKBOOK_PATH) || OLD_WMED_WORKBOOK_PATH == "") stop("No old-workbook file selected.")
   } else {
-    stop("[05_validation.R] OLD_WMED_WORKBOOK_PATH not set, the expected path within pcloud_dir (",
+    stop("[05_diagnostics.R] OLD_WMED_WORKBOOK_PATH not set, the expected path within pcloud_dir (",
          pcloud_default, ") doesn't exist, and RStudio isn't available for an interactive picker.",
          " Set OLD_WMED_WORKBOOK_PATH explicitly before sourcing this file.")
   }
@@ -310,7 +310,7 @@ read_validation_reference <- function(filename, required_cols = NULL) {
   dt
 }
 
-message("\n[05_validation.R] STEP A - comparing new pipeline output against the old West Med workbook's '",
+message("\n[05_diagnostics.R] STEP A - comparing new pipeline output against the old West Med workbook's '",
         OLD_WMED_ESTIMATES_SHEET, "' sheet (", OLD_WMED_WORKBOOK_PATH, ").")
 
 ## =================================================================
@@ -320,7 +320,7 @@ message("\n[05_validation.R] STEP A - comparing new pipeline output against the 
 ## would see.
 ## =================================================================
 if (!file.exists(ECOPATH_WORKBOOK_PATH)) {
-  stop("[05_validation.R] ", ECOPATH_WORKBOOK_PATH, " doesn't exist yet - run 01_biomass.R (and ideally",
+  stop("[05_diagnostics.R] ", ECOPATH_WORKBOOK_PATH, " doesn't exist yet - run 01_biomass.R (and ideally",
        " 02_fisheries.R/03_pbqb-traits.R too) first.")
 }
 wb_sheets <- openxlsx::getSheetNames(ECOPATH_WORKBOOK_PATH)
@@ -330,21 +330,21 @@ wb_sheets <- openxlsx::getSheetNames(ECOPATH_WORKBOOK_PATH)
 .current_files <- function(paths) {
   paths <- paths[file.exists(paths)]
   old <- difftime(file.mtime(ECOPATH_WORKBOOK_PATH), file.mtime(paths), units = "hours") > 24
-  if (any(old)) message("[05_validation.R] ignoring ", sum(old), " file(s) left over from an older run: ",
+  if (any(old)) message("[05_diagnostics.R] ignoring ", sum(old), " file(s) left over from an older run: ",
                         paste(basename(paths[old]), collapse = ", "))
   paths[!old]
 }
 
 read_sheet_safe <- function(sheet_name, needed_cols) {
   if (!sheet_name %in% wb_sheets) {
-    message("[05_validation.R] '", sheet_name, "' not found in the workbook yet - skipping that metric",
+    message("[05_diagnostics.R] '", sheet_name, "' not found in the workbook yet - skipping that metric",
             " (run the script that writes it first).")
     return(NULL)
   }
   dt <- as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, sheet = sheet_name))
   missing <- setdiff(needed_cols, names(dt))
   if (length(missing) > 0) {
-    message("[05_validation.R] '", sheet_name, "' is missing expected column(s): ", paste(missing, collapse = ", "),
+    message("[05_diagnostics.R] '", sheet_name, "' is missing expected column(s): ", paste(missing, collapse = ", "),
             " (found: ", paste(names(dt), collapse = ", "), ") - skipping that metric.")
     return(NULL)
   }
@@ -361,12 +361,12 @@ read_fleet_wide_total <- function(sheet_name, total_col) {
   if (is.null(dt)) return(NULL)
   fleet_cols <- setdiff(names(dt), c("FG_num", "FG_name", "Reference"))
   if (length(fleet_cols) == 0) {
-    message("[05_validation.R] '", sheet_name, "' has no fleet columns - skipping that metric.")
+    message("[05_diagnostics.R] '", sheet_name, "' has no fleet columns - skipping that metric.")
     return(NULL)
   }
   dt[, (fleet_cols) := lapply(.SD, function(v) suppressWarnings(as.numeric(v))), .SDcols = fleet_cols]
   dt[, (total_col) := rowSums(.SD, na.rm = TRUE), .SDcols = fleet_cols]
-  message("[05_validation.R] '", sheet_name, "': FG total = sum across ", length(fleet_cols), " fleet column(s).")
+  message("[05_diagnostics.R] '", sheet_name, "': FG total = sum across ", length(fleet_cols), " fleet column(s).")
   dt[, c("FG_num", "FG_name", total_col), with = FALSE]
 }
 new_L    <- read_fleet_wide_total("Ecopath_L",  "Landings_t_km2_broad")
@@ -383,7 +383,7 @@ if (!is.null(new_PBQB)) {
 }
 
 if (length(new_metrics) == 0) {
-  stop("[05_validation.R] None of Ecopath_B/Ecopath_L/Ecopath_Di/Ecopath_PBQB have the expected columns yet -",
+  stop("[05_diagnostics.R] None of Ecopath_B/Ecopath_L/Ecopath_Di/Ecopath_PBQB have the expected columns yet -",
        " nothing to validate. Run the upstream scripts first.")
 }
 
@@ -395,17 +395,17 @@ if (length(new_metrics) == 0) {
 ## resolved is reported (not guessed).
 ## =================================================================
 if (!file.exists(OLD_WMED_WORKBOOK_PATH)) {
-  stop("[05_validation.R] OLD_WMED_WORKBOOK_PATH ('", OLD_WMED_WORKBOOK_PATH, "') doesn't exist - check the",
+  stop("[05_diagnostics.R] OLD_WMED_WORKBOOK_PATH ('", OLD_WMED_WORKBOOK_PATH, "') doesn't exist - check the",
        " path (it needs to be reachable from wherever this script actually runs).")
 }
 old_sheets <- openxlsx::getSheetNames(OLD_WMED_WORKBOOK_PATH)
 if (!OLD_WMED_ESTIMATES_SHEET %in% old_sheets) {
-  stop("[05_validation.R] Sheet '", OLD_WMED_ESTIMATES_SHEET, "' not found in ", OLD_WMED_WORKBOOK_PATH,
+  stop("[05_diagnostics.R] Sheet '", OLD_WMED_ESTIMATES_SHEET, "' not found in ", OLD_WMED_WORKBOOK_PATH,
        " - sheets actually present: ", paste(old_sheets, collapse = ", "),
        ". Set OLD_WMED_ESTIMATES_SHEET to the right one and re-run.")
 }
 old_raw <- as.data.table(openxlsx::read.xlsx(OLD_WMED_WORKBOOK_PATH, sheet = OLD_WMED_ESTIMATES_SHEET))
-message("[05_validation.R] Old workbook '", OLD_WMED_ESTIMATES_SHEET, "' sheet columns found: ",
+message("[05_diagnostics.R] Old workbook '", OLD_WMED_ESTIMATES_SHEET, "' sheet columns found: ",
         paste(names(old_raw), collapse = ", "))
 
 old_col_aliases <- list(
@@ -430,7 +430,7 @@ if (is.na(col_name)) {
   ## the error itself (not just what was tried), since a real failure
   ## here can be an invisible character (e.g. a non-breaking space) in
   ## the header that looks identical to "Group name" on the console.
-  stop("[05_validation.R] Could not find a group-name column in the old '", OLD_WMED_ESTIMATES_SHEET,
+  stop("[05_diagnostics.R] Could not find a group-name column in the old '", OLD_WMED_ESTIMATES_SHEET,
        "' sheet (tried: ", paste(old_col_aliases$group_name, collapse = ", "), "). Columns actually found in",
        " the file: ", paste(names(old_raw), collapse = " | "), ". If one of those looks like it should have",
        " matched (e.g. \"Group name\"), it likely contains an invisible character (non-breaking space, etc.)",
@@ -457,7 +457,7 @@ old_dt <- data.table(
 for (metric in c("biomass", "pb", "qb", "landings", "discards")) {
   col <- resolve_col(names(old_raw), old_col_aliases[[metric]])
   old_dt[[metric]] <- if (!is.na(col)) parse_num_eu(old_raw[[col]]) else NA_real_
-  if (is.na(col)) message("[05_validation.R] Old sheet has no recognizable '", metric, "' column - that metric",
+  if (is.na(col)) message("[05_diagnostics.R] Old sheet has no recognizable '", metric, "' column - that metric",
                           " will be skipped in the comparison (tried: ", paste(old_col_aliases[[metric]], collapse = ", "), ").")
 }
 old_dt <- old_dt[!is.na(Old_FG_name) & trimws(Old_FG_name) != ""]
@@ -488,11 +488,11 @@ if (n_overridden > 0) {
   old_dt[!is.na(pb_override), pb := pb_override]
   old_dt[!is.na(qb_override), qb := qb_override]
   old_dt[, c("biomass_override", "pb_override", "qb_override") := NULL]
-  message("[05_validation.R] Applied manually-corrected biomass/PB/QB for ", n_overridden,
+  message("[05_diagnostics.R] Applied manually-corrected biomass/PB/QB for ", n_overridden,
           " marine-mammal/seabird row(s) in the old estimates sheet (overriding the sheet's own, likely",
           " decimal-corrupted, values) - see old_estimates_manual_overrides above for the exact figures used.")
 } else {
-  message("[05_validation.R] Note: none of the 7 manually-corrected marine-mammal/seabird group names",
+  message("[05_diagnostics.R] Note: none of the 7 manually-corrected marine-mammal/seabird group names",
           " matched a row in this run's old estimates sheet - check old_estimates_manual_overrides' names",
           " against Old_FG_name above if that's unexpected.")
 }
@@ -545,12 +545,12 @@ if (file.exists(crosswalk_path)) {
     old_dt[hit, norm_name := normalize_name(xw$New_FG_name[match(norm_name, xw$norm_name)])]
     dup <- old_dt[, .N, by = norm_name][N > 1, norm_name]
     old_dt <- rbindlist(list(old_dt[!norm_name %in% dup], .combine_old(old_dt[norm_name %in% dup])), use.names = TRUE, fill = TRUE)
-    message("[05_validation.R] Old->new FG crosswalk applied to ", sum(hit), " old group(s) (", basename(crosswalk_path),
+    message("[05_diagnostics.R] Old->new FG crosswalk applied to ", sum(hit), " old group(s) (", basename(crosswalk_path),
             "); combined old rows: ", paste(old_dt[grepl(" + ", Old_FG_name, fixed = TRUE), Old_FG_name], collapse = "; "),
             if (length(split_targets)) paste0("; split new FGs compared as sums: ", paste(split_targets, collapse = "; ")) else "", ".")
   }
 } else {
-  message("[05_validation.R] No ", crosswalk_path, " - old groups split/merged differently from the 2026 FGs stay unmatched.")
+  message("[05_diagnostics.R] No ", crosswalk_path, " - old groups split/merged differently from the 2026 FGs stay unmatched.")
 }
 
 ## Sanity check for the "lost decimal point" problem described
@@ -564,7 +564,7 @@ suspect_numeric_corruption <- function(colvals, raw_colname, typical_max) {
   if (length(v) < 5) return(invisible(NULL))
   frac_too_big <- mean(v > typical_max)
   if (frac_too_big > 0.5) {
-    message("[05_validation.R] WARNING: old sheet column '", raw_colname, "' - ", round(100 * frac_too_big),
+    message("[05_diagnostics.R] WARNING: old sheet column '", raw_colname, "' - ", round(100 * frac_too_big),
             "% of its numeric values exceed a plausible upper bound (", typical_max, ") for this metric.",
             " This looks like the known 'missing decimal point' issue in WMed_EwE.xlsx (values typed with a",
             " comma decimal, e.g. 0,322207, that got stored as a whole number, e.g. 322207, somewhere upstream",
@@ -606,7 +606,7 @@ if (nrow(still_unmatched) > 0) {
     ## agrep, so ties are reported, not silently picked) to avoid a
     ## many-to-one false match.
     if (length(hit_idx) > 1) {
-      message("[05_validation.R] '", still_unmatched$Old_FG_name[i], "' fuzzy-matched MORE than one new FG (",
+      message("[05_diagnostics.R] '", still_unmatched$Old_FG_name[i], "' fuzzy-matched MORE than one new FG (",
               paste(new_fg_lookup$FG_name[hit_idx], collapse = " / "), ") - left UNMATCHED rather than guessing",
               " which one is right.")
       return(NULL)
@@ -615,7 +615,7 @@ if (nrow(still_unmatched) > 0) {
   })
   fuzzy_matched <- rbindlist(fuzzy_rows[!vapply(fuzzy_rows, is.null, logical(1))], fill = TRUE)
   if (nrow(fuzzy_matched) > 0) {
-    message("[05_validation.R] ", nrow(fuzzy_matched), " old FG name(s) matched a new FG only via fuzzy matching",
+    message("[05_diagnostics.R] ", nrow(fuzzy_matched), " old FG name(s) matched a new FG only via fuzzy matching",
             " (not an exact name match) - double-check these are really the same group:")
     print(fuzzy_matched[, .(Old_FG_name, FG_name)])
   }
@@ -627,7 +627,7 @@ if (nrow(still_unmatched) > 0) {
 
 if (nrow(still_unmatched) > 0) {
   fwrite(still_unmatched[, .(Old_FG_name)], file.path(csv_out_dir, "old_workbook_unmatched_fg_names_REVIEW.csv"))
-  message("[05_validation.R] ", nrow(still_unmatched), " old FG name(s) could not be matched to any new FG at all",
+  message("[05_diagnostics.R] ", nrow(still_unmatched), " old FG name(s) could not be matched to any new FG at all",
           " (exact or fuzzy) - see old_workbook_unmatched_fg_names_REVIEW.csv. Common causes: the old model used",
           " a different FG breakdown entirely (e.g. one combined group split into several new ones, or vice",
           " versa), or a genuinely renamed group this fuzzy match is too conservative to catch.")
@@ -677,7 +677,7 @@ comparison_dt[metric %in% c("Biomass", "Landings", "Discards"),
               `:=`(old_value_on_new_area = old_value * OLD_MODEL_AREA_KM2 / NEW_MODEL_AREA_KM2,
                    old_total_t = old_value * OLD_MODEL_AREA_KM2, new_total_t = new_value * NEW_MODEL_AREA_KM2)]
 comparison_dt[, ratio_same_total := new_value / old_value_on_new_area]
-message("[05_validation.R] Model areas: old ", format(OLD_MODEL_AREA_KM2, big.mark = ","), " km2, new ",
+message("[05_diagnostics.R] Model areas: old ", format(OLD_MODEL_AREA_KM2, big.mark = ","), " km2, new ",
         format(round(NEW_MODEL_AREA_KM2), big.mark = ","), " km2 - old densities also shown on the new area",
         " (old_value_on_new_area, ratio_same_total = new / old in total tonnes).")
 fwrite(comparison_dt, file.path(csv_out_dir, "comparison_with_old_westmed_estimates_REVIEW.csv"))
@@ -731,7 +731,7 @@ fwrite(bio_cmp, file.path(csv_out_dir, "biomass_vs_old_model_REVIEW.csv"))
 p_bio <- tryCatch(.bio_pair_plot("old_B_t_km2_on_new_area", "Ecopath B: new pipeline vs old WMed 1995 model (same total tonnes)",
                                  paste0("Both in t/km2 of the new model area (", format(round(NEW_MODEL_AREA_KM2), big.mark = ","),
                                         " km2); old = published value x 846,002 / new area. Right: ratio new/old.")),
-                  error = function(e) { message("[05_validation.R] biomass comparison plot skipped - ", conditionMessage(e)); NULL })
+                  error = function(e) { message("[05_diagnostics.R] biomass comparison plot skipped - ", conditionMessage(e)); NULL })
 p_bio_pub <- tryCatch(.bio_pair_plot("old_B_t_km2_old_area", "Ecopath B as published: each model on its own area",
                                      "Old model t/km2 of 846,002 km2; new pipeline t/km2 of the new model area."),
                       error = function(e) NULL)
@@ -741,7 +741,7 @@ p_bio_pub <- tryCatch(.bio_pair_plot("old_B_t_km2_old_area", "Ecopath B as publi
 ## biomass_vs_old_model_REVIEW.csv.
 
 n_flagged <- comparison_dt[flag != "Within review range", .N]
-message("\n[05_validation.R] comparison_with_old_westmed_estimates_REVIEW.csv written: ", nrow(comparison_dt),
+message("\n[05_diagnostics.R] comparison_with_old_westmed_estimates_REVIEW.csv written: ", nrow(comparison_dt),
         " FG x metric row(s), ", n_flagged, " flagged (ratio outside ", VALIDATION_RATIO_LOW, "-",
         VALIDATION_RATIO_HIGH, "x, a value that appeared/disappeared, or a zero that became nonzero).",
         " A flag here is a REVIEW PROMPT, not proof the new value is wrong - many of the pipeline's own fixes",
@@ -770,11 +770,11 @@ p_comparison <- tryCatch({
                            "x. Biomass is t/km2 of each model's own area (comparison_with_old_westmed_estimates_REVIEW.csv)"),
          x = "WMed 1995 model", y = "This model", color = NULL) +
     theme_minimal(base_size = 8) + theme(legend.position = "bottom")
-}, error = function(e) { message("[05_validation.R] comparison plot skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R] comparison plot skipped - ", conditionMessage(e)); NULL })
 if (!is.null(p_comparison)) {
   ggsave(file.path(plot_dir, "comparison_with_old_westmed_estimates.png"), p_comparison,
          width = 10, height = 8, dpi = PLOT_DPI, bg = "white", limitsize = FALSE)
-  message("[05_validation.R] Saved: comparison_with_old_westmed_estimates.png (in ", plot_dir, ")")
+  message("[05_diagnostics.R] Saved: comparison_with_old_westmed_estimates.png (in ", plot_dir, ")")
 }
 
 ## =================================================================
@@ -804,7 +804,7 @@ summary_rows <- lapply(seq_len(nrow(known_review_files)), function(i) {
 })
 validation_summary <- rbindlist(summary_rows)
 fwrite(validation_summary, file.path(csv_out_dir, "validation_summary_ALL.csv"))
-message("\n[05_validation.R] STEP B - validation_summary_ALL.csv written (", nrow(validation_summary),
+message("\n[05_diagnostics.R] STEP B - validation_summary_ALL.csv written (", nrow(validation_summary),
         " known checks indexed). Console summary:")
 print(validation_summary[, .(check, status)])
 
@@ -872,7 +872,7 @@ validation_plots[["02_pbqb_plausibility"]] <- tryCatch({
     labs(title = "PB/QB plausibility by functional group", subtitle = "Dashed = QB=PB (impossible boundary); dotted = typical 0.05-0.3 P/Q band",
          x = "PB_FG (log scale)", y = "QB_FG (log scale)", color = NULL) +
     theme_minimal(base_size = 9) + theme(legend.position = "bottom", legend.text = element_text(size = 6))
-}, error = function(e) { message("[05_validation.R plot] PB/QB plausibility skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] PB/QB plausibility skipped - ", conditionMessage(e)); NULL })
 
 ## 2) Diet matrix column sum (should be 1 for every predator FG).
 validation_plots[["03_diet_column_sum"]] <- tryCatch({
@@ -888,7 +888,7 @@ validation_plots[["03_diet_column_sum"]] <- tryCatch({
     labs(title = "Diet matrix columns NOT summing to 1", subtitle = "Every predator FG's diet column should sum to 1 (EwE's own 'Sum to one' convention) - dashed line = 1",
          x = "Column sum", y = NULL) +
     theme_minimal(base_size = 9)
-}, error = function(e) { message("[05_validation.R plot] diet column sum skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] diet column sum skipped - ", conditionMessage(e)); NULL })
 
 ## 3) Diet cannibalism (self-prey fraction should stay under ~0.1).
 validation_plots[["04_diet_cannibalism"]] <- tryCatch({
@@ -902,7 +902,7 @@ validation_plots[["04_diet_cannibalism"]] <- tryCatch({
     labs(title = "Cannibalism (self-prey) fraction above the ~0.1 guideline", subtitle = "EwE User Guide: avoid a group's own diet fraction of itself going much above 0.1",
          x = "Self-prey fraction of diet", y = NULL) +
     theme_minimal(base_size = 9)
-}, error = function(e) { message("[05_validation.R plot] diet cannibalism skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] diet cannibalism skipped - ", conditionMessage(e)); NULL })
 
 ## 4) EcoBase biomass EVALUATION (reference only, per the project
 ## owner - "ecobase biomass should be evaluated but it shouldnt be
@@ -929,7 +929,7 @@ validation_plots[["05_ecobase_fallback_plausibility"]] <- tryCatch({
          subtitle = "EcoBase is evaluated for context but never applied to Ecopath_B - a human decides whether to add a real cited row",
          x = "EcoBase candidate Biomass_t_km2 (log scale)", y = "FG_num / Group", color = "Plausible vs. known densities") +
     theme_minimal(base_size = 9) + theme(legend.position = "bottom")
-}, error = function(e) { message("[05_validation.R plot] EcoBase evaluation skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] EcoBase evaluation skipped - ", conditionMessage(e)); NULL })
 
 ## 5) How much of each FG's total biomass rides on an even-split
 ## (no real per-species measurement) species-level assumption.
@@ -946,7 +946,7 @@ validation_plots[["06_species_even_split_biomass_at_risk"]] <- tryCatch({
          subtitle = "No real per-species density/literature measurement exists for these species within their FG",
          x = "FG total Biomass_t_km2", y = NULL, fill = "n species") +
     theme_minimal(base_size = 9)
-}, error = function(e) { message("[05_validation.R plot] species even-split skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] species even-split skipped - ", conditionMessage(e)); NULL })
 
 ## 5b) EcoBase-sourced rows excluded from a manual-cited biomass CSV -
 ## any row someone (or an older pipeline version) put into
@@ -963,7 +963,7 @@ validation_plots[["05b_ecobase_sourced_rows_excluded"]] <- tryCatch({
   lines <- paste0(d$Group, " (", d$Year, ", from ", d$source_file, "): ", d$Source_citation)
   plot_text_list(lines, "EcoBase-sourced row(s) excluded from Ecopath_B - need a real citation",
                  "These carried an EcoBase citation in a manual-cited biomass CSV and were pulled out rather than incorporated - EcoBase is reference-only in this pipeline")
-}, error = function(e) { message("[05_validation.R plot] ecobase-sourced rows excluded skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] ecobase-sourced rows excluded skipped - ", conditionMessage(e)); NULL })
 
 ## 6) Temporal-baseline mismatches (any manual-cited CSV with a
 ## Collection_year column differing from the Ecopath target Year) -
@@ -986,7 +986,7 @@ validation_plots[["07_temporal_mismatch"]] <- tryCatch({
          subtitle = "Positive = measured AFTER the Ecopath baseline year; flagged, not numerically corrected",
          x = "Gap (years)", y = NULL, fill = "Source file") +
     theme_minimal(base_size = 9) + theme(legend.position = "bottom")
-}, error = function(e) { message("[05_validation.R plot] temporal mismatch skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] temporal mismatch skipped - ", conditionMessage(e)); NULL })
 
 ## 7) Fleet-level landings coverage - which FGs get most of their
 ## landings from the "Target countries - fleet not resolved" residual
@@ -1005,7 +1005,7 @@ validation_plots[["08_fleet_coverage"]] <- tryCatch({
          subtitle = "The rest sits in Ecopath_L/Di's 'Target countries - fleet not resolved' column, not lost - just coarser fleet/gear detail",
          x = "Named-fleet share", y = NULL, fill = "< 50% named") +
     theme_minimal(base_size = 9) + theme(legend.position = "bottom")
-}, error = function(e) { message("[05_validation.R plot] fleet coverage skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] fleet coverage skipped - ", conditionMessage(e)); NULL })
 
 ## 8) FG(s) with no Ecopath_B biomass at all, and old-workbook FG names
 ## that couldn't be matched - simple text-list pages (no numeric axis to
@@ -1015,7 +1015,7 @@ validation_plots[["09_fg_missing_ecopath_b"]] <- tryCatch({
   if (nrow(d) == 0) stop("no FG missing Ecopath_B")
   plot_text_list(paste0(d$FG_num, " - ", d$FG_name), "FG(s) with NO Ecopath_B biomass at all",
                  "Every biomass source (survey, stock assessment, EcoBase, manual-cited literature) came back empty for these")
-}, error = function(e) { message("[05_validation.R plot] fg_missing_ecopath_B skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] fg_missing_ecopath_B skipped - ", conditionMessage(e)); NULL })
 
 validation_plots[["10_old_workbook_unmatched_names"]] <- tryCatch({
   path <- file.path(csv_out_dir, "old_workbook_unmatched_fg_names_REVIEW.csv")
@@ -1023,7 +1023,7 @@ validation_plots[["10_old_workbook_unmatched_names"]] <- tryCatch({
   if (nrow(d) == 0) stop("every old FG name matched")
   plot_text_list(d$Old_FG_name, "Old-workbook FG names that couldn't be matched to any new FG",
                  "Neither an exact nor a fuzzy name match - check for a renamed or split/merged group")
-}, error = function(e) { message("[05_validation.R plot] old-workbook unmatched names skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] old-workbook unmatched names skipped - ", conditionMessage(e)); NULL })
 
 ## Per project decision ("i am missing a plot with other validation like
 ## the biomass of FG relative to old model"): p_comparison (now
@@ -1076,7 +1076,7 @@ validation_plots[["11_zooplankton_total_field_check"]] <- tryCatch({
              "Check Ecopath's estimated salp B stays below this"))
   chk[, z_eff_m := z_eff]
   fwrite(chk, file.path(csv_out_dir, "zooplankton_total_field_check_REVIEW.csv"))
-  message("[05_validation.R] Zooplankton field check (z_eff = ", round(z_eff), " m): field ", signif(chk$t_km2[2], 2), "-",
+  message("[05_diagnostics.R] Zooplankton field check (z_eff = ", round(z_eff), " m): field ", signif(chk$t_km2[2], 2), "-",
           signif(chk$t_km2[3], 2), " t/km2 (mean ", signif(chk$t_km2[1], 2), "); model FGs 68+69+71+72 = ", signif(model_total, 3),
           " t/km2; salp upper bound ", signif(chk$t_km2[5], 3), " t/km2.")
   ggplot(chk[c(1, 4, 5)], aes(x = t_km2, y = quantity)) +
@@ -1086,7 +1086,7 @@ validation_plots[["11_zooplankton_total_field_check"]] <- tryCatch({
          subtitle = paste0("Shaded = field range 2-17 mg DM/m3 over z_eff = ", round(z_eff), " m, DW:WW 0.1-0.2 (ASSUMPTION)"),
          x = "t WW/km2 of model area", y = NULL) +
     theme_minimal(base_size = 9)
-}, error = function(e) { message("[05_validation.R plot] zooplankton field check skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] zooplankton field check skipped - ", conditionMessage(e)); NULL })
 
 ## 11b) Phytoplankton B and P/B: every source side by side.
 ##  - Ecopath inputs now in the workbook (Ecopath_B, Ecopath_PBQB; B from
@@ -1120,7 +1120,7 @@ validation_plots[["11b_phytoplankton_sources"]] <- tryCatch({
   env <- if (file.exists(env_f)) fread(env_f) else NULL
   if (!is.null(env)) rows$env <- data.table(group = sub("Phytoplankton", "", env$TargetGroup), B = env$Biomass_t_km2, PB = env$PB,
                                             source = paste0("Copernicus (B ", env$B_year[1], ", P/B ", env$PB_npp_years[1], ")"))
-  else message("[05_validation.R] Phytoplankton sources: no environment/ecopath_phytoplankton_B_PB.csv yet - run 06_environment.R to add Copernicus.")
+  else message("[05_diagnostics.R] Phytoplankton sources: no environment/ecopath_phytoplankton_B_PB.csv yet - run 06_environment.R to add Copernicus.")
   ## old 1995 model
   if (exists("comparison_dt") && nrow(comparison_dt)) {
     old <- comparison_dt[FG_num %in% phy_fg$FG_num & metric %in% c("Biomass", "PB"), .(FG_num, metric, old_value)]
@@ -1137,7 +1137,7 @@ validation_plots[["11b_phytoplankton_sources"]] <- tryCatch({
                         by = source])
   cmp[, P_t_km2_yr := B * PB]
   fwrite(cmp, file.path(csv_out_dir, "phytoplankton_sources_REVIEW.csv"))
-  message("[05_validation.R] Phytoplankton sources (total B t/km2 | P/B): ",
+  message("[05_diagnostics.R] Phytoplankton sources (total B t/km2 | P/B): ",
           paste(cmp[group == "Total", sprintf("%s %s | %s", source, signif(B, 3), signif(PB, 3))], collapse = "; "))
   cmp[, group := factor(group, levels = c("Large", "Small", "Total"))]
   p_b <- ggplot(cmp[is.finite(B)], aes(x = B, y = source, colour = group)) +
@@ -1167,7 +1167,7 @@ validation_plots[["11b_phytoplankton_sources"]] <- tryCatch({
   p + patchwork::plot_annotation(title = "Phytoplankton: Ecopath inputs vs ISIMIP, Copernicus and the old 1995 model",
                                  subtitle = paste0("Copernicus (06_environment.R): MedBFM 0-200 m; before 1999 PISCES scaled to MedBFM month by month.\n",
                                                    "Large/Small from satellite size classes, same P/B for both. B in t WW/km2 (C:WW 1:9)."))
-}, error = function(e) { message("[05_validation.R plot] phytoplankton sources skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] phytoplankton sources skipped - ", conditionMessage(e)); NULL })
 
 ## 12) Ecosim time series: new Ecosim_ts vs the old model's "timeseries"
 ## sheet (WMed_EwE.xlsx). Series are matched by target FG (old names
@@ -1218,10 +1218,10 @@ ecosim_ts_cmp <- tryCatch({
             by = .(kind, fg_new)]
   summ[, flag := fifelse(is.na(r) | r < 0, "opposite or no common trend - review", fifelse(r < 0.5, "weak agreement", "agrees"))]
   fwrite(summ[order(kind, r)], file.path(csv_out_dir, "ecosim_ts_vs_old_model_REVIEW.csv"))
-  message("[05_validation.R] Ecosim_ts vs old model: ", summ[kind == "Biomass", .N], " biomass and ", summ[kind == "Catch", .N],
+  message("[05_diagnostics.R] Ecosim_ts vs old model: ", summ[kind == "Biomass", .N], " biomass and ", summ[kind == "Catch", .N],
           " catch series compared (>= 5 common years); r < 0 for ", summ[r < 0, .N], " of them - see ecosim_ts_vs_old_model_REVIEW.csv.")
   list(m = m, summ = summ)
-}, error = function(e) { message("[05_validation.R] Ecosim_ts vs old model skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R] Ecosim_ts vs old model skipped - ", conditionMessage(e)); NULL })
 for (.k in c("Biomass", "Catch")) {
   validation_plots[[paste0("12_ecosim_ts_vs_old_", tolower(.k))]] <- tryCatch({
     if (is.null(ecosim_ts_cmp)) stop("no comparison")
@@ -1240,7 +1240,7 @@ for (.k in c("Biomass", "Catch")) {
            subtitle = "Each series divided by its mean over the common years; panels sorted by correlation r (lowest first)",
            x = NULL, y = "Relative value", colour = NULL) +
       theme_minimal(base_size = 7) + theme(legend.position = "bottom", strip.text = element_text(size = 5.5))
-  }, error = function(e) { message("[05_validation.R plot] Ecosim ", .k, " vs old skipped - ", conditionMessage(e)); NULL })
+  }, error = function(e) { message("[05_diagnostics.R plot] Ecosim ", .k, " vs old skipped - ", conditionMessage(e)); NULL })
 }
 
 ## =================================================================
@@ -1261,9 +1261,9 @@ f_hi <- tryCatch({
   fp <- file.path(out_dir, "fisheries", "F_by_fg.csv"); if (!file.exists(fp)) stop("F_by_fg.csv not found")
   x <- fread(fp)[is.finite(F) & F > 1][order(-F)]
   fwrite(x, file.path(csv_out_dir, "F_above_1_REVIEW.csv")); x
-}, error = function(e) { message("[05_validation.R] F > 1 check skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R] F > 1 check skipped - ", conditionMessage(e)); NULL })
 .add_summary_row("Fishing mortality above 1 (F_above_1_REVIEW.csv)", file.path(csv_out_dir, "F_above_1_REVIEW.csv"), if (is.null(f_hi)) NA_integer_ else nrow(f_hi))
-if (!is.null(f_hi) && nrow(f_hi)) message("[05_validation.R] F > 1 for ", nrow(f_hi), " FG(s): ", paste(sprintf("%s (%.2f)", f_hi$FG_name, f_hi$F), collapse = ", "))
+if (!is.null(f_hi) && nrow(f_hi)) message("[05_diagnostics.R] F > 1 for ", nrow(f_hi), " FG(s): ", paste(sprintf("%s (%.2f)", f_hi$FG_name, f_hi$F), collapse = ", "))
 
 ## (a2) Where does a high F come from? F by country (the catch data are by
 ## country; MEDITS biomass is by GSA, grouped to the country of each GSA).
@@ -1331,7 +1331,7 @@ validation_plots[["12b_F_by_country"]] <- tryCatch({
   fwrite(r[, .(FG_num, FG_name, B_source, Country, F_model = F, catch_t = C_t, catch_share, B_share, F_country, note)],
          file.path(csv_out_dir, "F_by_country_REVIEW.csv"))
   top <- r[is.finite(F_country) & catch_share >= 0.05][order(-F_country)][1:min(.N, 8)]
-  message("[05_validation.R] F by country (F_by_country_REVIEW.csv): highest - ",
+  message("[05_diagnostics.R] F by country (F_by_country_REVIEW.csv): highest - ",
           paste(sprintf("%s in %s %.2g (model F %.2g; %.0f%% of catch, %.0f%% of biomass)", top$FG_name, top$Country, top$F_country, top$F,
                         100 * top$catch_share, 100 * top$B_share), collapse = "; "))
   d <- copy(r)
@@ -1355,7 +1355,7 @@ validation_plots[["12b_F_by_country"]] <- tryCatch({
                            "their biomass share is imputed from the surveyed GSAs. Table: validation/F_by_country_REVIEW.csv"),
          x = NULL, y = NULL) +
     theme_minimal(base_size = 9) + theme(panel.grid = element_blank(), legend.position = "right")
-}, error = function(e) { message("[05_validation.R plot] F by country skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] F by country skipped - ", conditionMessage(e)); NULL })
 
 ## (b) Time series assessment: every Ecosim_ts series (biomass B_, catch L_,
 ## effort...) described by years with data, first/last year, longest gap,
@@ -1377,7 +1377,7 @@ ts_assess <- tryCatch({
   a[flag == "", flag := "ok"]
   fwrite(a[order(flag == "ok", type, target)], file.path(csv_out_dir, "ecosim_ts_assessment_REVIEW.csv"))
   list(a = a, ts = ts)
-}, error = function(e) { message("[05_validation.R] Time series assessment skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R] Time series assessment skipped - ", conditionMessage(e)); NULL })
 .add_summary_row("Ecosim time series assessment (ecosim_ts_assessment_REVIEW.csv)", file.path(csv_out_dir, "ecosim_ts_assessment_REVIEW.csv"),
                  if (is.null(ts_assess)) NA_integer_ else ts_assess$a[flag != "ok", .N])
 validation_plots[["13_ecosim_ts_assessment"]] <- tryCatch({
@@ -1393,7 +1393,7 @@ validation_plots[["13_ecosim_ts_assessment"]] <- tryCatch({
     ## page; the PNG is drawn taller with larger labels (STEP C below)
     theme(legend.position = "bottom", axis.text.y = element_text(size = 5), plot.title = element_text(size = 12),
           plot.subtitle = element_text(size = 8))
-}, error = function(e) { message("[05_validation.R plot] Time series assessment skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] Time series assessment skipped - ", conditionMessage(e)); NULL })
 
 ## (c) Unsurveyed FGs vs other models: this model's Ecopath_B (t WW/km2 of
 ## model area) next to the old 1995 Western Med model and other
@@ -1416,7 +1416,7 @@ other_cmp <- tryCatch({
   long <- long[is.finite(B) & B > 0]
   long[, ratio_to_ours := B / long[model == "This model (GSAs 1-12)"][match(long$FG_name, FG_name), B]]
   fwrite(long[order(FG_name, model)], file.path(csv_out_dir, "unsurveyed_fg_vs_other_models_REVIEW.csv")); long
-}, error = function(e) { message("[05_validation.R] Unsurveyed FGs vs other models skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R] Unsurveyed FGs vs other models skipped - ", conditionMessage(e)); NULL })
 .add_summary_row("Unsurveyed FGs vs other models (unsurveyed_fg_vs_other_models_REVIEW.csv)", file.path(csv_out_dir, "unsurveyed_fg_vs_other_models_REVIEW.csv"),
                  if (is.null(other_cmp)) NA_integer_ else other_cmp[model != "This model (GSAs 1-12)" & (ratio_to_ours > 10 | ratio_to_ours < 0.1), .N])
 validation_plots[["14_unsurveyed_fg_vs_other_models"]] <- tryCatch({
@@ -1426,7 +1426,7 @@ validation_plots[["14_unsurveyed_fg_vs_other_models"]] <- tryCatch({
     labs(title = "Unsurveyed FGs: this model vs other Mediterranean EwE models",
          subtitle = "t WW/km2 of each model's own area (log scale) - a small coastal model has more seagrass/coastal FGs per km2; see unsurveyed_fg_vs_other_models_REVIEW.csv",
          x = "Biomass (t WW/km2, log)", y = NULL, colour = NULL) + theme_minimal(base_size = 7) + theme(legend.position = "bottom")
-}, error = function(e) { message("[05_validation.R plot] Unsurveyed vs other models skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] Unsurveyed vs other models skipped - ", conditionMessage(e)); NULL })
 
 ## (d) PREBAL (Link 2010): before balancing, log biomass, P/B and Q/B
 ## should fall smoothly with trophic level (TL). Groups far off the
@@ -1468,7 +1468,7 @@ prebal <- tryCatch({
     .cons <- setdiff(.no_diet, c(.qb0, .prod))
     if (length(.cons)) {
       tl_dt[FG_num %in% .cons, TL := NA_real_]
-      message("[05_validation.R] PREBAL: ", length(.cons), " consumer FG(s) with an empty diet left out (their TL would be 1): ",
+      message("[05_diagnostics.R] PREBAL: ", length(.cons), " consumer FG(s) with an empty diet left out (their TL would be 1): ",
               paste(bb[FG_num %in% .cons, paste(FG_num, FG_name)], collapse = ", "))
     }
   }
@@ -1487,11 +1487,11 @@ prebal <- tryCatch({
   slopes[, pct_change_per_TL := round(100 * (10^slope_log10_per_TL - 1), 1)]
   fwrite(long[order(metric, -flag, FG_num)], file.path(csv_out_dir, "prebal_REVIEW.csv"))
   fwrite(slopes, file.path(csv_out_dir, "prebal_slopes.csv"))
-  message("[05_validation.R] PREBAL slopes (% change per TL): ",
+  message("[05_diagnostics.R] PREBAL slopes (% change per TL): ",
           paste(slopes$metric, slopes$pct_change_per_TL, sep = " ", collapse = "; "),
           ". Flagged groups (|residual| > 2 SD): ", long[flag == TRUE, .N], ".")
   list(long = long, slopes = slopes)
-}, error = function(e) { message("[05_validation.R] PREBAL skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R] PREBAL skipped - ", conditionMessage(e)); NULL })
 .add_summary_row("PREBAL: log B, P/B, Q/B vs trophic level (prebal_REVIEW.csv)", file.path(csv_out_dir, "prebal_REVIEW.csv"),
                  if (is.null(prebal)) NA_integer_ else prebal$long[flag == TRUE, .N])
 validation_plots[["15_prebal"]] <- tryCatch({
@@ -1513,7 +1513,7 @@ validation_plots[["15_prebal"]] <- tryCatch({
          x = "Trophic level (from Ecopath_diet)", y = NULL, colour = NULL) +
     theme_minimal(base_size = 8) + theme(legend.position = "bottom")
   p
-}, error = function(e) { message("[05_validation.R plot] PREBAL skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] PREBAL skipped - ", conditionMessage(e)); NULL })
 
 ## (e) Data pedigree (data-quality index per FG and input), using the EwE
 ## pedigree categories (Christensen & Walters 2004; EwE User Guide). Each
@@ -1622,15 +1622,15 @@ pedigree <- tryCatch({
     openxlsx::addWorksheet(.wb, "Pedigree")
     openxlsx::writeData(.wb, "Pedigree", .w[order(FG_num)])
     openxlsx::saveWorkbook(.wb, ECOPATH_WORKBOOK_PATH, overwrite = TRUE)
-    message("[05_validation.R] Pedigree sheet written to ", basename(ECOPATH_WORKBOOK_PATH), " (columns B, L, Di, PB, QB, Diet; index 0-1).")
-  }, error = function(e) message("[05_validation.R] Pedigree sheet not written - ", conditionMessage(e)))
+    message("[05_diagnostics.R] Pedigree sheet written to ", basename(ECOPATH_WORKBOOK_PATH), " (columns B, L, Di, PB, QB, Diet; index 0-1).")
+  }, error = function(e) message("[05_diagnostics.R] Pedigree sheet not written - ", conditionMessage(e)))
   ## Overall pedigree index P = (1/n) * sum_i sum_j I_ij / J_i  (mean over FGs of the mean index over inputs)
   fg_mean <- allp[is.finite(index), .(mean_index = mean(index)), by = .(FG_num, FG_name)]
-  message("[05_validation.R] Pedigree: overall index = ", round(mean(fg_mean$mean_index), 2),
+  message("[05_diagnostics.R] Pedigree: overall index = ", round(mean(fg_mean$mean_index), 2),
           " (0 = no local data, 1 = all local high-precision); unclassified sources: ",
           allp[category == "Not classified - add a rule", .N], " (see pedigree_REVIEW.csv).")
   allp
-}, error = function(e) { message("[05_validation.R] Pedigree skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R] Pedigree skipped - ", conditionMessage(e)); NULL })
 .add_summary_row("Data pedigree per FG and input (pedigree_REVIEW.csv)", file.path(csv_out_dir, "pedigree_REVIEW.csv"),
                  if (is.null(pedigree)) NA_integer_ else pedigree[category == "Not classified - add a rule" | (is.finite(index) & index < 0.3), .N])
 ## (f) Custom region: FGs whose biomass was borrowed from the Western Med run
@@ -1640,7 +1640,7 @@ if (file.exists(.cust_p)) {
   .add_summary_row("Custom region: biomass borrowed from the Western Med run (custom_fg_biomass_from_westmed_REVIEW.csv)", .cust_p,
                    if (is.null(.cust)) NA_integer_ else .cust[grepl("^REVIEW", review), .N])
   if (!is.null(.cust) && any(grepl("^REVIEW", .cust$review)))
-    message("[05_validation.R] Custom region smaller than a GSA: ", .cust[grepl("^REVIEW", review), .N],
+    message("[05_diagnostics.R] Custom region smaller than a GSA: ", .cust[grepl("^REVIEW", review), .N],
             " FG(s) use the Western Med density per km2 and may be biased - review custom_fg_biomass_from_westmed_REVIEW.csv.")
 }
 validation_plots[["16_pedigree"]] <- tryCatch({
@@ -1655,7 +1655,7 @@ validation_plots[["16_pedigree"]] <- tryCatch({
          subtitle = "0 = estimated by Ecopath / no data; 0.2 = other model; 0.4-0.5 = indirect or empirical; 0.7 = sampling or national statistics; 1 = local detailed data. Grey = no landings or discards.",
          x = NULL, y = NULL, fill = "Index") + theme_minimal(base_size = 6)
   p
-}, error = function(e) { message("[05_validation.R plot] Pedigree skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] Pedigree skipped - ", conditionMessage(e)); NULL })
 
 fwrite(validation_summary, file.path(csv_out_dir, "validation_summary_ALL.csv"))
 
@@ -1687,7 +1687,7 @@ validation_plots[["18_discard_rate_vs_somfi"]] <- tryCatch({
   fwrite(cmp[order(vessel_group, Country != "All countries", Country)], file.path(csv_out_dir, "discard_rate_vs_somfi2025_REVIEW.csv"))
   .add_summary_row("Discard rate by vessel group vs GFCM SoMFi 2025 (all countries outside 0.5-2x)",
                    file.path(csv_out_dir, "discard_rate_vs_somfi2025_REVIEW.csv"), cmp[flag == TRUE, .N])
-  message("[05_validation.R] Discard rate vs SoMFi 2025 (", min(fl$Year), "-", max(fl$Year), "): ",
+  message("[05_diagnostics.R] Discard rate vs SoMFi 2025 (", min(fl$Year), "-", max(fl$Year), "): ",
           paste(cmp[Country == "All countries", sprintf("%s %.1f%% (SoMFi %g%%)", vessel_group, model_rate_pct, somfi_rate_pct)], collapse = "; "), ".")
   cmp[, vessel_group := factor(vessel_group, levels = ref$vessel_group)]
   cmp[, Country := factor(Country, levels = c("All countries", sort(setdiff(unique(Country), "All countries"))))]
@@ -1703,7 +1703,7 @@ validation_plots[["18_discard_rate_vs_somfi"]] <- tryCatch({
          subtitle = paste0("Share of the catch discarded, ", min(fl$Year), "-", max(fl$Year), ", from the fleet table (02). Red line: SoMFi 2025 average 2015-2025 (Figure 22)"),
          x = NULL, y = "Discards (% of catch)") +
     theme_minimal(base_size = 8) + theme(axis.text.x = element_text(angle = 35, hjust = 1))
-}, error = function(e) { message("[05_validation.R plot] discard rate vs SoMFi skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] discard rate vs SoMFi skipped - ", conditionMessage(e)); NULL })
 
 ## 17) Other Ecopath models of the area (reference models): B, P/B, Q/B
 ## Every CSV in pcloud_dir/data/validation_reference_models/ is one model
@@ -1722,7 +1722,7 @@ validation_plots[["18_discard_rate_vs_somfi"]] <- tryCatch({
 .ref_dir <- file.path(pcloud_dir, "data", "validation_reference_models")
 .ref_files <- if (dir.exists(.ref_dir)) list.files(.ref_dir, "\\.csv$", full.names = TRUE, ignore.case = TRUE) else character(0)
 .ref_files <- .ref_files[!grepl("_crosswalk\\.csv$", .ref_files, ignore.case = TRUE)]   # crosswalks are not models
-if (!length(.ref_files)) message("[05_validation.R] Reference models: none (put CSVs in ", .ref_dir, " to compare B, P/B and Q/B with other models).")
+if (!length(.ref_files)) message("[05_diagnostics.R] Reference models: none (put CSVs in ", .ref_dir, " to compare B, P/B and Q/B with other models).")
 for (.rf in .ref_files) local({
   mdl <- sub("\\.csv$", "", basename(.rf), ignore.case = TRUE)
   res <- tryCatch({
@@ -1769,7 +1769,7 @@ for (.rf in .ref_files) local({
     if ("cw_name" %in% names(rr)) {                               # crosswalk by name -> this run's FG numbers
       rr[!is.na(cw_name), FG_num := nw$FG_num[match(normalize_name(cw_name), normalize_name(nw$FG_name))]]
       .lost <- rr[!is.na(cw_name) & is.na(FG_num), unique(cw_name)]
-      if (length(.lost)) message("[05_validation.R] Reference model ", mdl, ": crosswalk FG name(s) not in this run's FGs: ",
+      if (length(.lost)) message("[05_diagnostics.R] Reference model ", mdl, ": crosswalk FG name(s) not in this run's FGs: ",
                                  paste(.lost, collapse = ", "), " - fix WMed_FG_name in ", basename(cw_f), ".")
     }
     hit <- is.na(rr$FG_num) & !rr$ref_group %in% no_counterpart   # not in the crosswalk: match the names
@@ -1789,7 +1789,7 @@ for (.rf in .ref_files) local({
     if (length(unm)) fwrite(data.table(model = mdl, reference_group_not_matched = unm), file.path(csv_out_dir, paste0("reference_model_", mdl, "_unmatched_REVIEW.csv")))
     .add_summary_row(paste0("Reference model ", mdl, ": B, P/B, Q/B ratio outside 0.5-2"),
                      file.path(csv_out_dir, paste0("reference_model_", mdl, "_comparison_REVIEW.csv")), long[flag == TRUE, .N])
-    message("[05_validation.R] Reference model ", mdl, ": ", uniqueN(cmp$FG_num), " FG(s) compared (", length(no_counterpart),
+    message("[05_diagnostics.R] Reference model ", mdl, ": ", uniqueN(cmp$FG_num), " FG(s) compared (", length(no_counterpart),
             " of its groups have no counterpart in the crosswalk), ", long[flag == TRUE, .N],
             " value(s) outside 0.5-2x", if (length(unm)) paste0("; ", length(unm), " of its group(s) not matched to an FG (",
             paste(head(unm, 8), collapse = ", "), if (length(unm) > 8) ", ..." else "", ") - add a WMed_FG_num column") else "", ".")
@@ -1810,7 +1810,7 @@ for (.rf in .ref_files) local({
            subtitle = "Log scales. Line = equal values, dashed = 2x and 0.5x. Biomass is t/km2 of each model's own area (reference_model_*_comparison_REVIEW.csv)",
            x = paste(mdl, "(reference)"), y = "This model") +
       theme_minimal(base_size = 8) + theme(legend.position = "bottom")
-  }, error = function(e) { message("[05_validation.R plot] reference model ", mdl, " skipped - ", conditionMessage(e)); NULL })
+  }, error = function(e) { message("[05_diagnostics.R plot] reference model ", mdl, " skipped - ", conditionMessage(e)); NULL })
   if (!is.null(res)) validation_plots[[paste0("17_reference_model_", mdl)]] <<- res
 })
 
@@ -1880,16 +1880,16 @@ f_diag <- tryCatch({
       top_country, top_country_F, 100 * top_country_catch_share, fifelse(top_country_imputed %in% TRUE, ", biomass imputed", "")))]
   setorder(d, -F)
   fwrite(d, file.path(csv_out_dir, "F_above_1_diagnosis_REVIEW.csv"))
-  message("[05_validation.R] F > 1 diagnosis (F_above_1_diagnosis_REVIEW.csv):\n",
+  message("[05_diagnostics.R] F > 1 diagnosis (F_above_1_diagnosis_REVIEW.csv):\n",
           paste(sprintf("  %s (F %.2f): %s", d$FG_name, d$F, d$suggestion), collapse = "\n"))
   d
-}, error = function(e) { message("[05_validation.R] F > 1 diagnosis skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R] F > 1 diagnosis skipped - ", conditionMessage(e)); NULL })
 validation_plots[["12c_F_above_1_diagnosis"]] <- tryCatch({
   if (is.null(f_diag)) stop("no diagnosis")
   plot_text_list(sprintf("%s (F = %.2f): %s", f_diag$FG_name, f_diag$F, f_diag$suggestion),
                  title = "FGs with F > 1: biomass too low or catch too high?",
                  subtitle = "Evidence: other models' biomass, survey coverage of the FG's species, catch not identified to species, F by country (F_above_1_diagnosis_REVIEW.csv)")
-}, error = function(e) { message("[05_validation.R plot] F > 1 diagnosis page skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] F > 1 diagnosis page skipped - ", conditionMessage(e)); NULL })
 
 ## 19) The PREBAL outliers next to other models: every FG x metric flagged
 ## by PREBAL (|residual| > 2 SD, prebal_REVIEW.csv) with the value of
@@ -1929,7 +1929,7 @@ validation_plots[["15b_prebal_outliers_vs_other_models"]] <- tryCatch({
   all_src[, ratio_this_to_source := fifelse(source == "This model", NA_real_, this / value)]
   fwrite(all_src[order(metric, FG_num, source != "This model", source)], file.path(csv_out_dir, "prebal_outliers_vs_other_models_REVIEW.csv"))
   n_ref <- all_src[source != "This model", uniqueN(paste(FG_num, metric))]
-  message("[05_validation.R] PREBAL outliers vs other models: ", fl[, .N], " FG x metric flagged, ", n_ref,
+  message("[05_diagnostics.R] PREBAL outliers vs other models: ", fl[, .N], " FG x metric flagged, ", n_ref,
           " with a value in at least one other model (prebal_outliers_vs_other_models_REVIEW.csv).")
   labs_map <- c(B = "Biomass (t/km2)", PB = "P/B (1/year)", QB = "Q/B (1/year)")
   pd <- copy(all_src)[, panel := factor(labs_map[metric], levels = labs_map)]
@@ -1946,7 +1946,7 @@ validation_plots[["15b_prebal_outliers_vs_other_models"]] <- tryCatch({
          subtitle = "Groups > 2 SD from the PREBAL line. Close to the others = the group is like that; far from all of them = check the value (prebal_outliers_vs_other_models_REVIEW.csv)",
          x = NULL, y = NULL) +
     theme_minimal(base_size = 8) + theme(legend.position = "bottom")
-}, error = function(e) { message("[05_validation.R plot] PREBAL outliers vs other models skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] PREBAL outliers vs other models skipped - ", conditionMessage(e)); NULL })
 
 ## 21) Multistanza groups next to the other models: for every stanza FG
 ## (pbqb-traits/multistanza_parameters.csv, from 01 and 03), this
@@ -2001,7 +2001,7 @@ validation_plots[["15c_multistanza_vs_other_models"]] <- tryCatch({
   fwrite(all_src[order(Species, FG_num, metric, source != "This model", source)], file.path(csv_out_dir, "multistanza_vs_other_models_REVIEW.csv"))
   .add_summary_row("Multistanza groups: B, P/B, Q/B outside 0.5-2x of another model",
                    file.path(csv_out_dir, "multistanza_vs_other_models_REVIEW.csv"), all_src[flag == TRUE, .N])
-  message("[05_validation.R] Multistanza groups vs other models: ", uniqueN(fgs$FG_num), " stanza FG(s), ",
+  message("[05_diagnostics.R] Multistanza groups vs other models: ", uniqueN(fgs$FG_num), " stanza FG(s), ",
           all_src[!grepl("^This model", source), uniqueN(source)], " other model(s); ", all_src[flag == TRUE, .N],
           " value(s) outside 0.5-2x (multistanza_vs_other_models_REVIEW.csv).")
   labs_map <- c(B = "Biomass (t/km2)", PB = "P/B or Z (1/year)", QB = "Q/B (1/year)")
@@ -2022,7 +2022,7 @@ validation_plots[["15c_multistanza_vs_other_models"]] <- tryCatch({
          subtitle = "Triangles = this model (Ecopath input and the alternative sources: survey, stock assessment, Z per stanza); circles = other models (multistanza_vs_other_models_REVIEW.csv)",
          x = NULL, y = NULL) +
     theme_minimal(base_size = 8) + theme(legend.position = "bottom")
-}, error = function(e) { message("[05_validation.R plot] Multistanza groups vs other models skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] Multistanza groups vs other models skipped - ", conditionMessage(e)); NULL })
 
 ## 22) All models side by side: every FG with a value in at least one
 ## other model - this model, the 1995 Western Med model (comparison_dt;
@@ -2081,11 +2081,11 @@ all_models_cmp <- tryCatch({
   fwrite(wide, file.path(csv_out_dir, "all_models_comparison_REVIEW.csv"))
   .add_summary_row("All models: B, P/B, Q/B outside 0.5-2x of the other models' median",
                    file.path(csv_out_dir, "all_models_comparison_REVIEW.csv"), st[flag == TRUE, .N])
-  message("[05_validation.R] All models side by side: ", uniqueN(keyf$FG_num), " FG(s) with a value in at least one other model (",
+  message("[05_diagnostics.R] All models side by side: ", uniqueN(keyf$FG_num), " FG(s) with a value in at least one other model (",
           paste(setdiff(unique(pd$source), "This model"), collapse = ", "), "); ", st[flag == TRUE, .N],
           " FG x metric outside 0.5-2x of the other models' median (all_models_comparison_REVIEW.csv).")
   list(oth = oth, labs_map = labs_map)
-}, error = function(e) { message("[05_validation.R plot] All models side by side skipped - ", conditionMessage(e)); NULL })
+}, error = function(e) { message("[05_diagnostics.R plot] All models side by side skipped - ", conditionMessage(e)); NULL })
 ## Point plot per metric (same layout as biomass_vs_old_model_by_fg):
 ## one row per FG, the new pipeline and each other model as points on a
 ## log axis, their values printed on the right, then the change of the
@@ -2151,7 +2151,7 @@ if (!is.null(all_models_cmp)) for (.m in c("B", "PB", "QB")) {
   validation_plots[[paste0("15d_all_models_", .m)]] <- tryCatch(
     .all_models_pair_plot(all_models_cmp$oth, .m, paste0(.ttl, ": new pipeline vs the 1995 Western Med model and the NW Med model, by FG"),
                           paste0(all_models_cmp$labs_map[[.m]], ", log scale")),
-    error = function(e) { message("[05_validation.R plot] All models comparison (", .m, ") skipped - ", conditionMessage(e)); NULL })
+    error = function(e) { message("[05_diagnostics.R plot] All models comparison (", .m, ") skipped - ", conditionMessage(e)); NULL })
 }
 
 
@@ -2177,7 +2177,7 @@ fg_pb_qb_with_f_path <- file.path(PBQB_CSV_DIR, "fg_pb_qb_weighted_with_F.csv")
 fg_pb_qb_path <- file.path(PBQB_CSV_DIR, "fg_pb_qb_weighted.csv")
 
 if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || file.exists(fg_pb_qb_path))) {
-  message("[05_validation.R] Skipping PB/QB/F validation plots - species_pb_qb_by_taxon_group.csv and/or",
+  message("[05_diagnostics.R] Skipping PB/QB/F validation plots - species_pb_qb_by_taxon_group.csv and/or",
           " fg_pb_qb_weighted*.csv not found in ", PBQB_CSV_DIR, " (run 03_pbqb-traits.R first).")
 } else {
   results_pb_qb <- fread(species_pb_qb_path)
@@ -2207,7 +2207,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
       labs(title = "PB vs. QB by functional group", subtitle = "Point size = FG biomass; color = dominant dispatch group (fish/mammal/seabird/invertebrate)",
            x = "PB_FG (/year)", y = "QB_FG (/year)", color = NULL) +
       theme_minimal(base_size = 8) + theme(legend.position = "bottom")
-  }, error = function(e) { message("[05_validation.R plot] FG PB/QB scatter skipped - ", conditionMessage(e)); NULL })
+  }, error = function(e) { message("[05_diagnostics.R plot] FG PB/QB scatter skipped - ", conditionMessage(e)); NULL })
   if (!is.null(p_fg_pb_qb)) ggsave(file.path(plot_dir, "fg_pb_qb_scatter.png"), p_fg_pb_qb, width = 11, height = 9, dpi = PLOT_DPI, bg = "white")
   
   ## --- Fishing mortality (F) by FG (F_by_fg.png). F isn't one single ---
@@ -2235,7 +2235,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
            subtitle = "F = (mean catch / model area) / Ecopath_B, FG level (02_fisheries.R F_by_fg.csv); FGs with F = 0 not shown",
            x = expression(F~(year^-1)), y = NULL, fill = NULL) +
       theme_minimal(base_size = 7) + theme(legend.position = "bottom")
-  }, error = function(e) { message("[05_validation.R plot] F by FG skipped - ", conditionMessage(e)); NULL })
+  }, error = function(e) { message("[05_diagnostics.R plot] F by FG skipped - ", conditionMessage(e)); NULL })
   if (!is.null(p_f_by_fg)) {
     ggsave(file.path(plot_dir, "F_by_fg.png"), p_f_by_fg,
            width = 10, height = max(8, 0.16 * nrow(p_f_by_fg$data)), dpi = PLOT_DPI, bg = "white", limitsize = FALSE)
@@ -2260,7 +2260,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
            subtitle = "Dashed lines = typical 0.05-0.3 review band, not a hard cutoff",
            x = "P/Q", y = NULL, color = NULL) +
       theme_minimal(base_size = 7) + theme(legend.position = "bottom")
-  }, error = function(e) { message("[05_validation.R plot] P/Q ratio skipped - ", conditionMessage(e)); NULL })
+  }, error = function(e) { message("[05_diagnostics.R plot] P/Q ratio skipped - ", conditionMessage(e)); NULL })
   if (!is.null(p_pq_ratio)) {
     ggsave(file.path(plot_dir, "PQ_ratio_by_fg.png"), p_pq_ratio,
            width = 10, height = max(8, 0.16 * nrow(p_pq_ratio$data)), dpi = PLOT_DPI, bg = "white", limitsize = FALSE)
@@ -2272,7 +2272,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
   ## --- highlighted distinctly from the rest. ----------------------------
   fish_results <- results_pb_qb[dispatch_group == "fish"]
   if (nrow(fish_results) == 0) {
-    message("[05_validation.R plot] fish PB/QB method comparison skipped - no dispatch_group == 'fish' rows in species_pb_qb_by_taxon_group.csv")
+    message("[05_diagnostics.R plot] fish PB/QB method comparison skipped - no dispatch_group == 'fish' rows in species_pb_qb_by_taxon_group.csv")
   } else {
     fish_results[, FG_label := paste0(FG, "_", FG_name)]
     fish_fg_label_order <- unique(fish_results[, .(FG, FG_label)])[order(FG)]$FG_label
@@ -2358,7 +2358,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
       ggsave(fpath, p_combined_i, width = width_in, height = page_height, dpi = dpi)
       saved <- c(saved, fpath)
     }
-    message("[05_validation.R plot] Saved: ", paste(basename(saved), collapse = ", "))
+    message("[05_diagnostics.R plot] Saved: ", paste(basename(saved), collapse = ", "))
     invisible(saved)
   }
   
@@ -2367,7 +2367,7 @@ if (!file.exists(species_pb_qb_path) || !(file.exists(fg_pb_qb_with_f_path) || f
   all_qb_method_cols <- setdiff(grep("^QB_", names(results_pb_qb), value = TRUE), c(exclude_cols, grep("_source$", names(results_pb_qb), value = TRUE)))
   
   if (length(all_pb_method_cols) == 0 && length(all_qb_method_cols) == 0) {
-    message("[05_validation.R plot] FG_PB_QB_comparison skipped - no PB_*/QB_* method columns found in species_pb_qb_by_taxon_group.csv")
+    message("[05_diagnostics.R plot] FG_PB_QB_comparison skipped - no PB_*/QB_* method columns found in species_pb_qb_by_taxon_group.csv")
   } else {
     species_pb_long <- melt(results_pb_qb[, c("Species", "FG", "FG_name", "dispatch_group", "Biomass", ..all_pb_method_cols)],
                             id.vars = c("Species", "FG", "FG_name", "dispatch_group", "Biomass"), variable.name = "method", value.name = "PB")
@@ -2443,7 +2443,7 @@ for (png_path in existing_pngs) {
       xlim(0, 1) + ylim(0, 1) +
       labs(caption = paste0("(already produced by an earlier pipeline script: ", basename(png_path), ")")) +
       theme_void() + theme(plot.caption = element_text(size = 7, colour = "grey50"))
-  }, error = function(e) { message("[05_validation.R plot] could not embed ", png_path, " - ", conditionMessage(e)); NULL })
+  }, error = function(e) { message("[05_diagnostics.R plot] could not embed ", png_path, " - ", conditionMessage(e)); NULL })
 }
 
 ## FG_PB_QB_comparison_*.png - the final, chosen PB/QB-by-FG figure(s),
@@ -2458,18 +2458,18 @@ for (png_path in pb_qb_comparison_pngs) {
       xlim(0, 1) + ylim(0, 1) +
       labs(caption = paste0("(already produced by an earlier pipeline script: ", basename(png_path), ")")) +
       theme_void() + theme(plot.caption = element_text(size = 7, colour = "grey50"))
-  }, error = function(e) { message("[05_validation.R plot] could not embed ", png_path, " - ", conditionMessage(e)); NULL })
+  }, error = function(e) { message("[05_diagnostics.R plot] could not embed ", png_path, " - ", conditionMessage(e)); NULL })
 }
 embedded_png_pages <- embedded_png_pages[!sapply(embedded_png_pages, is.null)]
 if (length(embedded_png_pages) > 0) {
-  message("[05_validation.R] Embedding ", length(embedded_png_pages), " already-existing validation PNG(s) from",
+  message("[05_diagnostics.R] Embedding ", length(embedded_png_pages), " already-existing validation PNG(s) from",
           " earlier pipeline scripts into the compiled PDF too: ", paste(names(embedded_png_pages), collapse = ", "), ".")
 }
 validation_plots <- c(validation_plots, embedded_png_pages)
 
 VALIDATION_PLOTS_PDF <- file.path(plot_dir, "validation_plots_ALL.pdf")
 if (length(validation_plots) == 0) {
-  message("\n[05_validation.R] STEP C - no validation plot could be built (every source REVIEW csv was either",
+  message("\n[05_diagnostics.R] STEP C - no validation plot could be built (every source REVIEW csv was either",
           " missing or empty) - nothing written to ", VALIDATION_PLOTS_PDF, ".")
 } else {
   pdf(VALIDATION_PLOTS_PDF, width = 11, height = 8)   # same open-loop-close PDF pattern 02_fisheries.R's own validation_plots list uses
@@ -2519,14 +2519,14 @@ if (length(validation_plots) == 0) {
                     limitsize = FALSE, readable = readable),
              error = function(e) NULL)
   }
-  message("\n[05_validation.R] STEP C - ", length(validation_plots), " page(s) written to '", VALIDATION_PLOTS_PDF,
+  message("\n[05_diagnostics.R] STEP C - ", length(validation_plots), " page(s) written to '", VALIDATION_PLOTS_PDF,
           "' (one PDF, every check this script could build a plot for, plus the standalone validation PNGs already",
           " produced by 01-04_*.R) and as individual PNGs under '", plot_dir, "'. A check missing from this PDF",
           " either had nothing to flag (clean) or its source REVIEW csv doesn't exist yet - see the message above",
           " naming which one and why, and validation_summary_ALL.csv for the full checklist either way.")
 }
 
-message("\n[05_validation.R] Done. Three files to look at first: ",
+message("\n[05_diagnostics.R] Done. Three files to look at first: ",
         "validation_plots_ALL.pdf (a compiled page per check - start here), ",
         "comparison_with_old_westmed_estimates_REVIEW.csv (old vs. new, by FG), and ",
         "validation_summary_ALL.csv (a plain-text index of every check, in one place).")

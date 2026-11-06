@@ -1729,8 +1729,14 @@ dedupe_lookup <- function(lookup_dt, key_col, source_label) {
 ## way, so no correction is more appropriate than any resolved q.
 ## =================================================================
 
+## After the taxonomic levels: (6b) species still without q take the mean
+## q of the species of their own FG that have one; (6c) then the mean q of
+## a similar group of FGs (q_similar_groups: named list of regexes on
+## FG_name, e.g. small pelagics = sardine|anchovy|...), so "Other small
+## pelagic fish" gets the q of sardine/anchovy when it has none. The
+## resolved q of every species is returned as attr(dt, "q_by_species").
 apply_catchability_correction <- function(dt, catchability_table, default_q = 1, species_taxonomy = NULL,
-                                          exempt_fg_names = NULL, exempt_species = NULL) {
+                                          exempt_fg_names = NULL, exempt_species = NULL, q_similar_groups = NULL) {
   dt <- copy(dt)
   required <- c("ScientificName", "q")
   missing <- setdiff(required, names(catchability_table))
@@ -1881,6 +1887,31 @@ apply_catchability_correction <- function(dt, catchability_table, default_q = 1,
             " can't be resolved and will fall back to default_q. Pass species_taxonomy to enable them.")
   }
   
+  ## 6b. FG fallback: mean q of the FG's species that have one
+  if ("FG_name" %in% names(dt)) {
+    sp_q <- unique(dt[!is.na(q_resolved) & !is.na(FG_name), .(FG_name, ScientificName, q_resolved)])
+    fg_q <- sp_q[, .(q_fg = mean(q_resolved)), by = FG_name]
+    dt <- merge(dt, fg_q, by = "FG_name", all.x = TRUE)
+    n_fg <- dt[is.na(q_resolved) & !is.na(q_fg), uniqueN(ScientificName)]
+    dt[is.na(q_resolved) & !is.na(q_fg), `:=`(q_resolved = q_fg, match_level = "FG mean (species of the same FG)")]
+    dt[, q_fg := NULL]
+    if (n_fg > 0) message(n_fg, " species took the mean q of their own FG.")
+    ## 6c. similar FGs (e.g. small pelagics share q)
+    if (length(q_similar_groups)) {
+      fg_q2 <- unique(dt[!is.na(q_resolved) & !is.na(FG_name) & match_level != "FG mean (species of the same FG)",
+                         .(FG_name, ScientificName, q_resolved)])[, .(q_fg = mean(q_resolved)), by = FG_name]
+      for (g in names(q_similar_groups)) {
+        re <- q_similar_groups[[g]]
+        q_g <- fg_q2[grepl(re, FG_name, ignore.case = TRUE), mean(q_fg)]
+        if (!is.finite(q_g)) next
+        hit <- is.na(dt$q_resolved) & !is.na(dt$FG_name) & grepl(re, dt$FG_name, ignore.case = TRUE)
+        if (any(hit)) {
+          message(dt[hit, uniqueN(ScientificName)], " species took the mean q of the similar FGs '", g, "' (", signif(q_g, 3), ").")
+          dt[hit, `:=`(q_resolved = q_g, match_level = paste0("similar FGs (", g, ")"))]
+        }
+      }
+    }
+  }
   ## 7. exemptions - override everything above, always q=1
   n_exempt <- 0
   if (!is.null(exempt_fg_names) && "FG_name" %in% names(dt)) {
@@ -1908,9 +1939,12 @@ apply_catchability_correction <- function(dt, catchability_table, default_q = 1,
   message("\nCatchability match level breakdown (distinct species):")
   print(unique(dt[, .(ScientificName, match_level)])[, .N, by = match_level][order(-N)])
   
+  q_by_species <- unique(dt[!is.na(ScientificName), c(intersect(c("FG_num", "FG_name"), names(dt)), "ScientificName", "q_resolved", "match_level"), with = FALSE],
+                         by = c(intersect(c("FG_num", "FG_name"), names(dt)), "ScientificName"))
   dt[, Density := Density / q_resolved]
   dt[, Biomass := Biomass / q_resolved]
   dt[, c("q_resolved", "match_level") := NULL]
+  attr(dt, "q_by_species") <- q_by_species
   message("\nCatchability correction applied - Density and Biomass divided by q",
           " (species-specific where available, default_q = ", default_q, " otherwise).")
   dt
@@ -3594,19 +3628,26 @@ plot_outlier_diagnostic <- function(dt_before, flagged_outliers, top_n_species =
                          .(ScientificName, AreaID, SampleID, Density)]
   plot_data[, log_density := log1p(Density)]
   
-  flagged_pts <- unique(flagged_outliers[ScientificName %in% species_to_show,
-                                         .(ScientificName, AreaID, SampleID,
-                                           log_density = log1p(flagged_density))])
-  
+  fo <- copy(as.data.table(flagged_outliers))
+  if (!"was_dropped" %in% names(fo)) fo[, was_dropped := TRUE]
+  flagged_pts <- unique(fo[ScientificName %in% species_to_show,
+                           .(ScientificName, AreaID, SampleID, log_density = log1p(flagged_density),
+                             status = fifelse(was_dropped %in% TRUE, "outlier removed", "outlier flagged, kept"))])
+  plot_data[, status := "haul kept"]
+  plot_data <- plot_data[!paste(ScientificName, SampleID) %in% paste(flagged_pts$ScientificName, flagged_pts$SampleID)]
+  pts <- rbind(plot_data[, .(ScientificName, log_density, status)], flagged_pts[, .(ScientificName, log_density, status)])
+  pts[, status := factor(status, levels = c("haul kept", "outlier flagged, kept", "outlier removed"))]
   ggplot(plot_data, aes(x = ScientificName, y = log_density)) +
-    geom_boxplot(outlier.shape = NA, fill = "grey90", color = "grey40") +
-    geom_jitter(width = 0.15, alpha = 0.25, size = 0.8, color = "steelblue") +
-    geom_point(data = flagged_pts, color = "firebrick", size = 2.2, shape = 17) +
+    geom_boxplot(outlier.shape = NA, fill = "grey92", color = "grey55") +
+    geom_jitter(data = pts, aes(colour = status, size = status, alpha = status), width = 0.15, height = 0, shape = 16) +
+    scale_colour_manual(values = c("haul kept" = "steelblue", "outlier flagged, kept" = "darkorange", "outlier removed" = "firebrick"), drop = FALSE, name = NULL) +
+    scale_size_manual(values = c("haul kept" = 0.8, "outlier flagged, kept" = 2, "outlier removed" = 2), drop = FALSE, name = NULL) +
+    scale_alpha_manual(values = c("haul kept" = 0.3, "outlier flagged, kept" = 0.9, "outlier removed" = 0.9), drop = FALSE, name = NULL) +
     coord_flip() +
     labs(title = "Sample-level outlier diagnostic",
-         subtitle = "Grey box-plots: all hauls of the species (log1p density). Red triangles: flagged hauls - judged against the same species x GSA x stratum x year, so a red point can sit inside the all-years box.",
+         subtitle = "Box-plots: all hauls of the species (log1p density). Each haul is a point; red = outlier removed.\nOutliers are judged against the same species x GSA x stratum x year, so a red point can sit inside the all-years box.",
          x = NULL, y = "log1p(Density)") +
-    theme_minimal(base_size = 11)
+    theme_minimal(base_size = 11) + theme(legend.position = "bottom")
 }
 
 ## =================================================================
@@ -4166,6 +4207,36 @@ finalize_ecopath_ecosim_summary_sheets <- function(out_path, year_ecopath,
     }
     add_block(ecosim_b, "B")
     add_block(ecosim_l, "L")
+
+    ## Catches and discards: EU countries only, from the first FDI year
+    ## (02_fisheries.R, ecosim_eu_catch_share.csv). Values before
+    ## ECOSIM_CATCH_START_YEAR are blank. ECOSIM_CATCH_SCALING:
+    ## "absolute" (default) = EU catch in t/km2 of the model area;
+    ## "relative" = index, 1 in the first year with data.
+    eu_sh <- read_sheet("ecosim_eu_catch_share", fisheries_csv_dir)
+    c_start <- get0("ECOSIM_CATCH_START_YEAR", envir = .GlobalEnv, ifnotfound = 2014)
+    c_scal  <- get0("ECOSIM_CATCH_SCALING", envir = .GlobalEnv, ifnotfound = "absolute")
+    yr_rows <- length(meta_labels) + seq_along(years)
+    .eu_apply <- function(col, fg_num, share_col) {
+      v <- suppressWarnings(as.numeric(combined[[col]][yr_rows]))
+      if (!is.null(eu_sh) && share_col %in% names(eu_sh)) {
+        sh <- eu_sh[FG_num == fg_num][match(years, Year), get(share_col)]
+        v <- v * ifelse(is.finite(sh), sh, NA_real_)
+      }
+      v[is.na(years) | years < c_start] <- NA_real_
+      v[!is.na(v) & v <= 0] <- NA_real_
+      meta <- combined[[col]][seq_along(meta_labels)]
+      if (identical(c_scal, "relative")) {
+        i1 <- which(is.finite(v))[1]
+        if (!is.na(i1)) { v <- v / v[i1]; meta[4] <- "relative" }
+      }
+      combined[, (col) := c(meta, ifelse(is.na(v), NA_character_, as.character(v)))]
+    }
+    for (col in grep("^L_fg_", names(combined), value = TRUE)) {
+      .eu_apply(col, suppressWarnings(as.numeric(sub("^L_fg_([0-9]+).*$", "\\1", col))), "share_L")
+    }
+    if (is.null(eu_sh)) message("finalize_ecopath_ecosim_summary_sheets(): ecosim_eu_catch_share.csv not found - Ecosim_ts catches are",
+                                " all countries (rerun 02_fisheries.R); still blank before ", c_start, ".")
     
     if (!is.null(cd_ts) && !"Discard_t_km2" %in% names(cd_ts)) {
       message("finalize_ecopath_ecosim_summary_sheets(): Catches_Discards_FG_ts.csv has no Discard_t_km2 column",
@@ -4183,6 +4254,7 @@ finalize_ecopath_ecosim_summary_sheets <- function(out_path, year_ecopath,
         col <- c(paste0("Di_", gsub("[^A-Za-z0-9]+", "", fg_name)), "Discards", "reference", "absolute",
                  "1", paste0(fg_num, ": ", fg_name), "", "Annual", as.character(ts_vals))
         combined[, (paste0("Di_fg_", fg_num)) := col]
+        .eu_apply(paste0("Di_fg_", fg_num), fg_num, "share_D")
       }
     }
     
@@ -4234,7 +4306,11 @@ finalize_ecopath_ecosim_summary_sheets <- function(out_path, year_ecopath,
                     "numeric Year cell. Falling back to raw kW-days for this fleet only (Scaling stays 'absolute').")
             ts_vals_rel <- ts_vals
           } else {
-            ref_value <- ts_vals[first_valid_idx]
+            ## reference: mean effort over the Ecopath years (1995 = mean of
+            ## YEAR_ECOPATH, as for biomass); first year with data if none
+            ref_ep <- mean(ts_vals[years %in% year_ecopath], na.rm = TRUE)
+            ref_value <- if (is.finite(ref_ep) && ref_ep > 0) ref_ep else ts_vals[first_valid_idx]
+            if (is.finite(ref_ep) && ref_ep > 0) first_valid_idx <- which(years %in% year_ecopath & !is.na(ts_vals))[1]
             if (years[first_valid_idx] != years[1]) {
               message("Effort fleet '", fl, "': relative-scaling reference is year ", years[first_valid_idx],
                       " (first year WITH data), not the series' first year ", years[1], ".")

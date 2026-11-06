@@ -117,10 +117,27 @@ output$fg_summary <- renderUI({
   if (!is.null(ft$error)) return(tags$div(class = "alert alert-danger py-2 small mb-0", ft$error))
   x <- data.table::copy(ft$data)
   has_group <- "FG_group" %in% names(x)
+  ## q: the FG file's own q column; where empty, the q the last run used
+  ## (biomass/catchability_q_by_species.csv)
+  .qf <- file.path(.inputs_run_dir(), "biomass", "catchability_q_by_species.csv")
+  if (file.exists(.qf)) {
+    .qs <- tryCatch(unique(data.table::fread(.qf)[, .(species = ScientificName, q_run = q_resolved)], by = "species"), error = function(e) NULL)
+    if (!is.null(.qs)) {
+      if (!"q" %in% names(x)) x[, q := NA_real_]
+      x[, q := suppressWarnings(as.numeric(q))]
+      x[, q_run := .qs$q_run[match(trimws(species), .qs$species)]]
+      x[is.na(q), q := q_run][, q_run := NULL]
+    }
+  }
+  has_q <- "q" %in% names(x)
   x[, FG_number := suppressWarnings(as.numeric(FG_number))]
   fg <- x[!is.na(FG_number), .(FG_name = paste(unique(FG_name), collapse = " / "),
                                FG_group = if (has_group) paste(unique(stats::na.omit(FG_group)), collapse = " / ") else NA_character_,
-                               n_species = data.table::uniqueN(species)), by = FG_number][order(FG_number)]
+                               n_species = data.table::uniqueN(species),
+                               q = if (has_q) { v <- suppressWarnings(as.numeric(q)); v <- v[is.finite(v)]
+                                                if (!length(v)) NA_character_ else if (length(unique(v)) == 1) format(v[1], digits = 3)
+                                                else paste0(format(min(v), digits = 2), "-", format(max(v), digits = 2)) } else NA_character_),
+          by = FG_number][order(FG_number)]
   ## Checks: one name per FG number, each species in one FG only, no gaps in the numbers
   multi_name <- fg[grepl(" / ", FG_name), FG_number]
   ## Multistanza: two or more FGs made of the same single species (e.g.
@@ -155,6 +172,36 @@ output$fg_summary <- renderUI({
   cov <- if (file.exists(.cov_f)) tryCatch(data.table::fread(.cov_f), error = function(e) NULL) else NULL
   has_cov <- !is.null(cov) && all(c("FG_num", "coverage", "coverage_survey") %in% names(cov))
   if (has_cov) fg <- merge(fg, cov[, .(FG_number = as.numeric(FG_num), coverage, coverage_survey, species_without_biomass)], by = "FG_number", all.x = TRUE)
+  ## Ecopath B of each FG in the last run (Ecopath_B sheet) and where it
+  ## comes from, read from its Reference column
+  .wbf <- file.path(.inputs_run_dir(), "ecopath_ecosim_inputs.xlsx")
+  eb <- if (file.exists(.wbf)) tryCatch(data.table::as.data.table(openxlsx::read.xlsx(.wbf, "Ecopath_B", check.names = FALSE, sep.names = " ")), error = function(e) NULL) else NULL
+  has_b <- !is.null(eb) && all(c("FG_num", "Biomass") %in% names(eb))
+  if (has_b) {
+    .src_class <- function(ref, b, ee) {
+      r <- tolower(sub(" \\|.*$", "", ifelse(is.na(ref), "", ref)))
+      out <- data.table::fcase(grepl("^manual density", r), "Manual density",
+                   grepl("^medias", r), "MEDIAS (acoustic survey)",
+                   grepl("^medits", r), "MEDITS (trawl survey)",
+                   grepl("stock assessment|iccat|gfcm saf|ram legacy|star", r), "Stock assessment",
+                   grepl("cobalt|isimip|copernicus|seapodym|maredat|plankton|phyto|detritus", r), "Plankton model / data",
+                   grepl("habitat|euseamap|emodnet|mediseh|meadow|seagrass|coralligenous|gorgonian", r), "Habitat map x density",
+                   grepl("abundance|sighting|accobams|forcada|megafauna|whale|dolphin|turtle|seabird|seal", r), "Megafauna survey (literature)",
+                   grepl("manual", r), "Manual density",
+                   nzchar(r), "Literature / other",
+                   default = NA_character_)
+      out[!is.finite(b) & is.finite(ee)] <- "Estimated by Ecopath (EE)"
+      out[!is.finite(b) & !is.finite(ee)] <- "No biomass"
+      out
+    }
+    .b <- suppressWarnings(as.numeric(eb$Biomass)); .ee <- if ("EE_input" %in% names(eb)) suppressWarnings(as.numeric(eb$EE_input)) else rep(NA_real_, nrow(eb))
+    ebx <- data.table::data.table(FG_number = as.numeric(eb$FG_num), B = .b,
+                      B_source = .src_class(if ("Reference" %in% names(eb)) as.character(eb$Reference) else NA_character_, .b, .ee),
+                      B_ref = if ("Reference" %in% names(eb)) as.character(eb$Reference) else NA_character_)
+    fg <- merge(fg, ebx, by = "FG_number", all.x = TRUE)
+    fg[is.na(B_source), B_source := "No biomass"]
+  }
+  .fmt_b2 <- function(v) ifelse(!is.finite(v), "-", ifelse(v >= 0.01, formatC(v, format = "fg", digits = 3), formatC(v, format = "e", digits = 2)))
   rows <- lapply(seq_len(nrow(fg)), function(i)
     tags$tr(class = if (!is.na(fg$stanza[i])) "wm-stanza" else NULL,
             title = if (!is.na(fg$stanza[i])) "Multistanza group: biomass, Z and the stanza split from the stock assessment" else NULL,
@@ -162,12 +209,22 @@ output$fg_summary <- renderUI({
             tags$td(fg$FG_name[i], if (!is.na(fg$stanza[i])) tags$span(class = "badge wm-stanza-badge ms-1", fg$stanza[i])), if (has_group) tags$td(fg$FG_group[i]), tags$td(fg$n_species[i]),
             if (has_cov) tags$td(title = if (!is.na(fg$species_without_biomass[i]) && nzchar(fg$species_without_biomass[i])) paste("No biomass:", fg$species_without_biomass[i]) else NULL,
                                  fg$coverage[i]),
-            if (has_cov) tags$td(fg$coverage_survey[i])))
+            if (has_cov) tags$td(fg$coverage_survey[i]),
+            if (has_b) tags$td(.fmt_b2(fg$B[i])),
+            if (has_b) tags$td(title = if (!is.na(fg$B_ref[i])) substr(fg$B_ref[i], 1, 400) else NULL,
+                               class = if (fg$B_source[i] %in% c("No biomass")) "text-danger" else NULL, fg$B_source[i]),
+            if (has_q) tags$td(if (is.na(fg$q[i])) "-" else fg$q[i])))
   tagList(
     fluidRow(
       stat("File", basename(ft$path), format(file.mtime(ft$path), "edited %d %b %Y, %H:%M")),
       stat("Functional groups", nrow(fg), paste0("FG ", min(fg$FG_number), "-", max(fg$FG_number))),
-      stat("Species", data.table::uniqueN(x$species)),
+      stat("Species", data.table::uniqueN(x$species),
+           if (sum(fg$n_species) != data.table::uniqueN(x$species))
+             paste0(sum(fg$n_species), " FG entries: ", sum(fg$n_species) - data.table::uniqueN(x$species),
+                    " species counted in more than one FG (e.g. multistanza)") else NULL),
+      if (has_b) stat("FGs with Ecopath B (last run)", paste0(fg[is.finite(B), .N], "/", nrow(fg)),
+                      paste0(fg[B_source == "Estimated by Ecopath (EE)", .N], " estimated by Ecopath (EE), ",
+                             fg[B_source == "No biomass", .N], " without biomass")),
       if (has_cov) stat("With biomass (last run)", paste0(sum(cov$n_with_biomass), "/", sum(cov$n_species_fg_file)),
                         paste0(sum(cov$n_observed_survey), " observed in the surveys; ", format(file.mtime(.cov_f), "%d %b %H:%M")))),
     if (length(warn)) tags$div(class = "alert alert-warning py-2 small mt-2 mb-2", lapply(warn, function(w) tags$div(w))),
@@ -185,7 +242,10 @@ output$fg_summary <- renderUI({
       tags$table(class = "table table-sm table-striped",
         tags$thead(tags$tr(tags$th("FG_number"), tags$th("FG_name"), if (has_group) tags$th("FG_group"), tags$th("N species"),
                            if (has_cov) tags$th(title = "Species with biomass in the last run / species in the FG file (hover a value for the species without biomass)", "With biomass"),
-                           if (has_cov) tags$th(title = "Species observed by MEDITS/MEDIAS in the Ecopath years / species in the FG file", "Observed in survey"))),
+                           if (has_cov) tags$th(title = "Species observed by MEDITS/MEDIAS in the Ecopath years / species in the FG file", "Observed in survey"),
+                           if (has_b) tags$th(title = "Ecopath B of the FG in the last run (Ecopath_B sheet, mean of the Ecopath years)", "B (t/km\u00b2)"),
+                           if (has_b) tags$th(title = "Where the FG's Ecopath B comes from (hover a value for the full reference)", "B source"),
+                           if (has_q) tags$th(title = "Catchability q of the FG's species (column q of the FG file; range when they differ)", "q"))),
         tags$tbody(rows))))
 })
 
@@ -793,8 +853,17 @@ output$folders <- renderUI({
   tagList(
     tags$table(class = "table table-sm mb-2", style = "font-size:.85rem;",
       row("Repo (git_dir)", .paths$git_dir, "this page's folder", dir.exists(file.path(.paths$git_dir, "scripts"))),
-      row("pCloud data (pcloud_dir)", .paths$pcloud_dir, .paths$pcloud_from, !is.na(.paths$pcloud_dir)),
+      row("Shared data (pCloud, read-only)", .paths$shared_dir, "copied from, never read by the run", !is.na(.paths$shared_dir) || isTRUE(.paths$using_local_copy)),
+      row("Data used by the run (pcloud_dir)", .paths$pcloud_dir, .paths$pcloud_from, isTRUE(.paths$using_local_copy) || isTRUE(.paths$use_shared)),
       row("Outputs (out_dir)", .paths$out_dir, .paths$out_from, dir.exists(.paths$out_dir))),
+    tags$div(class = "d-flex align-items-center gap-2 mb-2",
+      actionButton("sync_local", if (isTRUE(.paths$using_local_copy)) "Update local data" else "Make local copy of the data",
+                   class = "btn-sm btn-outline-primary", icon = icon("download")),
+      tags$small(class = "text-muted", if (isTRUE(.paths$using_local_copy)) {
+        inf <- file.path(.paths$local_data_dir, "LOCAL_COPY_INFO.txt")
+        paste0("The run reads the local copy ", if (file.exists(inf)) paste0("(", sub("^synced: ", "last ", grep("^synced", readLines(inf), value = TRUE)[1]), ")") else "",
+               ". Update it after the shared data change; only new or changed files are copied.")
+      } else "No local copy yet: the first run makes it (~2.5 GB), or click here. The pCloud folder is then never read or written by a run.")),
     if (is.na(.paths$pcloud_dir)) tags$div(class = "alert alert-danger py-2 small",
       "The pCloud folder '", .wmed_pcloud_name, "' was not found on this computer. Is pCloud Drive running? ",
       "Otherwise paste its path below and save."),
@@ -805,6 +874,20 @@ output$folders <- renderUI({
         column(5, textInput("set_out", "Output folder", value = .show_path(.paths$out_dir), width = "100%")),
         column(2, tags$label(HTML("&nbsp;")), actionButton("save_folders", "Save", class = "btn-outline-primary w-100"))),
       tags$div(class = "wm-help", "Saved in config.local.R in the repo, for this computer only (not committed). Reopen the page after saving.")))
+})
+observeEvent(input$sync_local, {
+  if (is.na(.paths$shared_dir) || !dir.exists(.paths$shared_dir)) {
+    showNotification("Shared (pCloud) folder not found - start pCloud Drive, then try again.", type = "error"); return() }
+  id <- showNotification("Copying new or changed files from the shared folder ...", duration = NULL, type = "message")
+  res <- tryCatch(withProgress(message = "Local data copy", value = 0,
+                    wmed_sync_local_data(.paths$shared_dir, .paths$local_data_dir,
+                                         progress = function(k, n, f) setProgress(k / n, detail = sprintf("%d / %d files", k, n)))),
+                  error = function(e) e)
+  removeNotification(id)
+  if (inherits(res, "error")) { showNotification(paste("Copy failed:", conditionMessage(res)), type = "error", duration = NULL); return() }
+  showNotification(sprintf("Local copy up to date: %d new, %d updated, %d unchanged files (%s MB copied).%s",
+                           res$new, res$updated, res$unchanged, res$MB_copied,
+                           if (!isTRUE(.paths$using_local_copy)) " Reopen the page so it uses the copy." else ""), duration = NULL)
 })
 observeEvent(input$save_folders, {
   pc <- path.expand(trimws(input$set_pcloud)); od <- path.expand(trimws(input$set_out))
@@ -855,7 +938,8 @@ output$dl_info <- renderUI({
   out <- list()
   out[[1]] <- row("Repository", !is.na(.git_dir) && file.exists(file.path(.git_dir, "scripts", "01_biomass.R")), .show_path(.git_dir))
   pc <- .paths$pcloud_dir
-  out[[2]] <- row("Shared data (pCloud)", !is.na(pc) && dir.exists(pc), if (is.na(pc)) "not found" else .show_path(pc),
+  out[[2]] <- row("Data folder (local copy)", isTRUE(.paths$using_local_copy) || (!is.na(pc) && dir.exists(pc)),
+                  if (is.na(pc)) "not found" else paste0(.show_path(pc), if (isTRUE(.paths$using_local_copy)) " (local copy)" else " (shared folder - a local copy is made on the first run)"),
                   "Start pCloud Drive, or set the folder above (card 0).")
   out[[3]] <- row("FG table", !is.na(pc) && file.exists(file.path(pc, "data", "FG_WMed_2026.csv")),
                   if (is.na(pc)) "-" else .show_path(file.path(pc, "data", "FG_WMed_2026.csv")), "Check that pCloud has finished syncing the data folder.")
@@ -1340,7 +1424,18 @@ output$dl_fg_template <- downloadHandler(
   content = function(file) {
     f <- fg_path()
     if (is.null(f) || is.na(f) || !file.exists(f)) stop("FG table not found - is pCloud Drive running?")
-    file.copy(f, file)
+    ## with a q column: the file's own q where filled in, else the q the
+    ## last run used for that species (catchability_q_by_species.csv)
+    x <- tryCatch(data.table::fread(f), error = function(e) NULL)
+    qf <- file.path(.inputs_run_dir(), "biomass", "catchability_q_by_species.csv")
+    if (!is.null(x) && file.exists(qf) && "species" %in% names(x)) {
+      qs <- unique(data.table::fread(qf)[, .(species = ScientificName, q_run = q_resolved)], by = "species")
+      if (!"q" %in% names(x)) x[, q := NA_real_]
+      x[, q := suppressWarnings(as.numeric(q))]
+      x[, q_run := qs$q_run[match(trimws(species), qs$species)]]
+      x[is.na(q), q := q_run][, q_run := NULL]
+      data.table::fwrite(x, file, sep = if (grepl(";", readLines(f, n = 1))) ";" else ",")
+    } else file.copy(f, file)
   })
 output$dl_catch_template <- downloadHandler(
   filename = function() basename(.catch_default),

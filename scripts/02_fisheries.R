@@ -901,12 +901,40 @@ match_bare_rank_to_fg <- function(query_clean, taxonomy_ref) {
 ## species, falling back to an equal split across candidates otherwise
 ## (never drops a query to zero rows just because biomass data happens
 ## to be thin for every candidate FG).
+## When none of the candidate FGs has survey biomass among the matched
+## species (e.g. NEI groups of unsurveyed or rarely caught taxa), the split
+## uses the candidate FGs' own Ecopath biomass (biomass_by_fg_ecopath_detail.csv
+## from 01_biomass.R, incl. literature / unsurveyed FGs); an equal split is
+## only the last resort when no candidate FG has any biomass at all.
+.nei_fg_b_cache <- NULL
+.nei_fg_b <- function() {
+  if (is.null(.nei_fg_b_cache)) {
+    b <- data.table(FG_num = integer(), B = numeric())
+    f <- file.path(BIOMASS_CSV_DIR, "biomass_by_fg_ecopath_detail.csv")
+    if (file.exists(f)) {
+      x <- tryCatch(fread(f), error = function(e) NULL)
+      bc <- if (!is.null(x)) grep("^Biomass_[0-9]{4}_[0-9]{4}$", names(x), value = TRUE)[1] else NA_character_
+      if (!is.null(x) && !is.na(bc) && "FG_num" %in% names(x))
+        b <- x[, .(FG_num = as.integer(FG_num), B = suppressWarnings(as.numeric(get(bc))))][is.finite(B) & B > 0]
+    }
+    .nei_fg_b_cache <<- b
+  }
+  .nei_fg_b_cache
+}
 split_by_biomass <- function(fg_weights) {
   total <- sum(fg_weights$fg_biomass, na.rm = TRUE)
   if (total > 0) {
     fg_weights[, Split_weight := fg_biomass / total]
   } else {
-    fg_weights[, Split_weight := 1 / .N]
+    b <- .nei_fg_b()
+    w <- b$B[match(fg_weights$FG_num, b$FG_num)]; w[is.na(w)] <- 0
+    if (sum(w) > 0) {
+      fg_weights[, Split_weight := w / sum(w)]
+      fg_weights[, matched_rank := paste0(matched_rank, " (split by FG Ecopath B)")]
+    } else {
+      fg_weights[, Split_weight := 1 / .N]
+      fg_weights[, matched_rank := paste0(matched_rank, " (equal split - no biomass for any candidate FG)")]
+    }
   }
   fg_weights[, .(FG_num, FG_name, Split_weight, matched_rank)]
 }
@@ -2093,7 +2121,10 @@ fleet_prop[is.na(fleet_split_source) | fleet_split_source == "", fleet_split_sou
              "SAU (country x FG x gear, mapped to FleetType via GEAR_TO_FLEETTYPE)"]  # label the remaining rows as coming from the primary SAU mapping
 message("\n[Fleet split] fleet_prop: ", nrow(fleet_prop), " Country x FG x FleetType share row(s).")
 
-## --- GFCM Fleet Register vessel-count override (Morocco/Algeria) -----
+## --- GFCM Fleet Register shares (Morocco/Algeria/Tunisia) -----------
+## (Original note below describes the old hand-made count table; the
+## vessel-level parser and the rule for when the register is used are
+## further down, "Vessel-level register".)
 ## Real registered-vessel counts by gear exist
 ## for every FLEET_REGISTER country in GFCM-FleetRegister.xlsx
 ## (pcloud_dir/data/Complementary data/GFCM-FleetRegister.xlsx, sheet
@@ -2154,27 +2185,112 @@ parse_gfcm_fleet_register <- function(path, sheet) {
   rbindlist(out)
 }
 
-gfcm_fleet_register <- parse_gfcm_fleet_register(GFCM_FLEET_REGISTER_XLSX, GFCM_FLEET_REGISTER_SHEET)
+## --- Vessel-level register (current GFCM file, one row per vessel) ------
+## The GFCM-FleetRegister.xlsx now in pCloud is the GFCM register export
+## itself (77,000 vessels, 46 columns: Country, Operational status,
+## GSA 1, Fishing gear 1, Engine Power (kW), ...), not the hand-made
+## count table the parser above was written for - that parser read it as
+## Excel dates and Romania rows, so the override never applied. Shares
+## per Country x FleetType from the registered vessels of the model GSAs
+## (GSA 1 in FILTER_AREAS, or GSA not reported: most Algerian trawlers
+## have none; all of the country's vessels if no GSA matches). All
+## registered vessels, not only those flagged active: the activity flag
+## is "No" for 135 of 141 Moroccan trawlers and 62 of 65 purse seiners,
+## which would leave these fleets ~2 % of the catch
+## (FLEET_REGISTER_ACTIVE_ONLY = TRUE to use the flag),
+## weighted by engine power (FLEET_REGISTER_SHARE_BASIS = "kW", default;
+## "vessels" = vessel count). kW, not counts: 2,974 Moroccan handliners
+## vs 141 trawlers would give trawlers 4 % of the catch by count, 41 % by kW.
+## Gear (FAO ISSCFG code, "Fishing gear 1") -> FleetType of that country:
+##   TB/OTB/PTB/TBB/OTT/TBN/TBS -> bottom trawls, else trawls (nei);
+##   TM/OTM/PTM -> midwater trawls, else trawls (nei); TX -> bottom
+##   trawls, else trawls (nei); PS/PS1/PS2/LA -> purse seiners;
+##   LL/LLS/LLD -> longlines; NK/MIS (gear not known) -> left out;
+##   any other gear (trammel, gillnets, hand lines, pots, diving...) -> Artisanal.
+if (!exists("FLEET_REGISTER_SHARE_BASIS", envir = .GlobalEnv, inherits = FALSE)) FLEET_REGISTER_SHARE_BASIS <- "kW"
+if (!exists("FLEET_REGISTER_ACTIVE_ONLY", envir = .GlobalEnv, inherits = FALSE)) FLEET_REGISTER_ACTIVE_ONLY <- FALSE
+parse_gfcm_fleet_register_vessels <- function(path, sheet, countries, gsas, types_ref, active_only = FALSE) {
+  if (!file.exists(path)) return(data.table())
+  hdr <- tryCatch(names(readxl::read_excel(path, sheet = sheet, n_max = 0)), error = function(e) character(0))
+  if (!all(c("Country", "Fishing gear 1") %in% hdr)) return(NULL)   # not the vessel-level layout
+  x <- suppressWarnings(as.data.table(readxl::read_excel(path, sheet = sheet, .name_repair = "minimal")))
+  x <- x[trimws(Country) %in% countries]
+  if (!nrow(x)) return(data.table())
+  st <- intersect(c("Operational status (Activity indicator)"), names(x))
+  if (isTRUE(active_only) && length(st)) x <- x[is.na(get(st)) | tolower(trimws(get(st))) != "no"]
+  x[, gsa := suppressWarnings(as.numeric(get("GSA 1")))]
+  x[, kW := suppressWarnings(as.numeric(get("Engine Power (kW)")))]
+  x[, code := toupper(trimws(get("Fishing gear 1")))]
+  x[, in_model := gsa %in% gsas | is.na(gsa)]
+  x <- x[, if (any(in_model)) .SD[in_model == TRUE] else .SD, by = Country]
+  grp <- data.table::fcase(x$code %in% c("TB", "OTB", "PTB", "TBB", "OTT", "TBN", "TBS"), "bottom",
+                           x$code %in% c("TM", "OTM", "PTM"), "midwater",
+                           x$code == "TX", "trawl_nei",
+                           x$code %in% c("PS", "PS1", "PS2", "LA"), "purse",
+                           x$code %in% c("LL", "LLS", "LLD"), "longline",
+                           x$code %in% c("NK", "MIS", "", NA), "unknown",
+                           default = "artisanal")
+  x[, grp := grp]
+  x <- x[grp != "unknown"]
+  ## gear group -> this country's FleetType name
+  pick_type <- function(cty, g) {
+    ty <- unique(types_ref[Country == cty, FleetType]); lt <- tolower(ty)
+    hit <- function(p) { i <- grep(p, lt); if (length(i)) ty[i[1]] else NA_character_ }
+    out <- switch(g,
+      bottom    = hit("bottom trawl"), midwater = hit("midwater"), trawl_nei = hit("bottom trawl"),
+      purse     = hit("purse"), longline = hit("longline"), artisanal = hit("artisanal"), NA_character_)
+    if (is.na(out) && g %in% c("bottom", "midwater", "trawl_nei")) out <- hit("trawl")
+    if (is.na(out)) out <- hit("artisanal")
+    out
+  }
+  map <- unique(x[, .(Country, grp)])
+  map[, FleetType := mapply(pick_type, Country, grp)]
+  x <- merge(x, map, by = c("Country", "grp"))
+  x <- x[!is.na(FleetType)]
+  x[, kW_f := fifelse(is.finite(kW), kW, median(kW, na.rm = TRUE)), by = .(Country, FleetType)]   # missing kW: median of the same fleet
+  x[!is.finite(kW_f), kW_f := 0]
+  out <- x[, .(N_vessels = .N, kW = sum(kW_f), GSA = paste(sort(unique(gsa[is.finite(gsa)])), collapse = ",")), by = .(Country, FleetType)]
+  out[, share_vessels := N_vessels / sum(N_vessels), by = Country]
+  out[, share_kW := if (sum(kW) > 0) kW / sum(kW) else share_vessels, by = Country]
+  out[order(Country, -share_kW)]
+}
+
+gfcm_fleet_register <- parse_gfcm_fleet_register_vessels(GFCM_FLEET_REGISTER_XLSX, GFCM_FLEET_REGISTER_SHEET,
+                                                         GFCM_FLEET_REGISTER_OVERRIDE_COUNTRIES, FILTER_AREAS, fleet_types_ref,
+                                                         active_only = FLEET_REGISTER_ACTIVE_ONLY)
+if (is.null(gfcm_fleet_register)) {   # older hand-made count table
+  gfcm_fleet_register <- parse_gfcm_fleet_register(GFCM_FLEET_REGISTER_XLSX, GFCM_FLEET_REGISTER_SHEET)
+  if (nrow(gfcm_fleet_register)) {
+    gfcm_fleet_register <- gfcm_fleet_register[Country %in% GFCM_FLEET_REGISTER_OVERRIDE_COUNTRIES & is.finite(N_vessels)]
+    gfcm_fleet_register[, `:=`(kW = NA_real_, share_vessels = N_vessels / sum(N_vessels)), by = Country]
+    gfcm_fleet_register[, share_kW := share_vessels]
+  }
+}
+fleet_register_share <- data.table(Country = character(), FleetType = character(), prop_register = numeric())
 if (nrow(gfcm_fleet_register) == 0) {
   message("\n[Fleet split] GFCM-FleetRegister.xlsx not found/empty at '", GFCM_FLEET_REGISTER_XLSX,
-          "' - Morocco/Algeria keep whatever fleet_prop tier they'd otherwise fall into (see message above).")
+          "' (or none of ", paste(GFCM_FLEET_REGISTER_OVERRIDE_COUNTRIES, collapse = "/"), " in it) - no register shares.")
 } else {
   fwrite(gfcm_fleet_register, file.path(csv_out_dir, "gfcm_fleet_register_vessel_counts.csv"))
-  vessel_share <- gfcm_fleet_register[Country %in% GFCM_FLEET_REGISTER_OVERRIDE_COUNTRIES]
-  vessel_share[, prop_fleet_vessels := N_vessels / sum(N_vessels), by = Country]
-  n_before <- fleet_prop[Country %in% GFCM_FLEET_REGISTER_OVERRIDE_COUNTRIES, .N]
-  fleet_prop[vessel_share, `:=`(
-    prop_fleet = i.prop_fleet_vessels,
-    fleet_split_source = GFCM_FLEET_REGISTER_SOURCE_LABEL
-  ), on = c("Country", "FleetType")]
-  n_overridden <- fleet_prop[Country %in% GFCM_FLEET_REGISTER_OVERRIDE_COUNTRIES & fleet_split_source == GFCM_FLEET_REGISTER_SOURCE_LABEL, .N]
-  untouched <- unique(fleet_prop[Country %in% GFCM_FLEET_REGISTER_OVERRIDE_COUNTRIES & fleet_split_source != GFCM_FLEET_REGISTER_SOURCE_LABEL, .(Country, FleetType)])
-  message("\n[Fleet split] GFCM Fleet Register vessel-count override: ", n_overridden, " of ", n_before,
-          " Country x FG x FleetType row(s) for ", paste(GFCM_FLEET_REGISTER_OVERRIDE_COUNTRIES, collapse = "/"),
-          " now use real registered-vessel-count shares instead of a flat/borrowed fallback.",
-          if (nrow(untouched) > 0) paste0(" ", nrow(untouched), " Country x FleetType combo(s) weren't in the",
-                                          " register and kept their previous fallback: ",
-                                          paste(paste(untouched$Country, untouched$FleetType, sep = ": "), collapse = "; "), ".") else "")
+  fleet_register_share <- gfcm_fleet_register[, .(Country, FleetType,
+                                                  prop_register = if (identical(FLEET_REGISTER_SHARE_BASIS, "vessels")) share_vessels else share_kW)]
+  GFCM_FLEET_REGISTER_SOURCE_LABEL <- paste0("GFCM Fleet Register (active vessels of the model GSAs by gear, share of ",
+                                             if (identical(FLEET_REGISTER_SHARE_BASIS, "vessels")) "vessel count" else "engine power kW",
+                                             "; same for every FG and year)")
+  ## Used ONLY where SAU has no gear data for that Country x FG (the SAU
+  ## country-level mix fallback or nothing at all): an FG-specific SAU
+  ## gear split (e.g. sardine -> purse seiners) is better than a fleet-
+  ## wide share. Also the tier before the equal share in the top-up below.
+  fleet_prop <- merge(fleet_prop, fleet_register_share, by = c("Country", "FleetType"), all.x = TRUE)
+  .use_reg <- fleet_prop[, .(use = Country[1] %in% fleet_register_share$Country &
+                               (all(is.na(prop_fleet)) | any(grepl("country-level mix|equal share", fleet_split_source)))), by = .(Country, FG_num)][use == TRUE]
+  fleet_prop[.use_reg, on = c("Country", "FG_num"), `:=`(prop_fleet = fifelse(is.na(prop_register), 0, prop_register),
+                                                        fleet_split_source = GFCM_FLEET_REGISTER_SOURCE_LABEL)]
+  fleet_prop[, prop_register := NULL]
+  message("\n[Fleet split] GFCM Fleet Register (", FLEET_REGISTER_SHARE_BASIS, " shares) used for ", nrow(.use_reg),
+          " Country x FG pair(s) with no FG-specific SAU gear data (", paste(unique(.use_reg$Country), collapse = ", "), "). Shares: ",
+          paste(gfcm_fleet_register[, paste0(Country, " ", FleetType, " ", round(100 * (if (identical(FLEET_REGISTER_SHARE_BASIS, "vessels")) share_vessels else share_kW)), "%")],
+                collapse = "; "), " -> gfcm_fleet_register_vessel_counts.csv.")
 }
 
 ## Same mapping, but keeping Year - SAU's own real year-by-year fleet
@@ -6255,6 +6371,13 @@ if (nrow(missing_cfy) > 0) {
   }
   if (!"prop_fleet" %in% names(fleet_prop_topup)) fleet_prop_topup[, prop_fleet := NA_real_]
   if (!"fleet_split_source" %in% names(fleet_prop_topup)) fleet_prop_topup[, fleet_split_source := NA_character_]
+  if (exists("fleet_register_share") && nrow(fleet_register_share) > 0) {   # GFCM Fleet Register share (e.g. Tunisia, no SAU data)
+    fleet_prop_topup <- merge(fleet_prop_topup, fleet_register_share, by = c("Country", "FleetType"), all.x = TRUE)
+    fleet_prop_topup[is.na(fleet_split_source) & Country %in% fleet_register_share$Country,
+                     `:=`(prop_fleet = fifelse(is.na(prop_register), 0, prop_register),
+                          fleet_split_source = paste0("catch-preservation top-up: ", GFCM_FLEET_REGISTER_SOURCE_LABEL))]
+    fleet_prop_topup[, prop_register := NULL]
+  }
   fleet_prop_topup[is.na(fleet_split_source), `:=`(prop_fleet = 1 / .N,
                                                    fleet_split_source = "catch-preservation top-up: equal share across this country's fleet types (last resort)"),
                    by = .(Country, FG_num, Year)]
@@ -7197,7 +7320,7 @@ if (!file.exists(SPECIES_DENSITY_PATH)) {
     ## than the "not applicable" it actually is. F is only computed
     ## where there is a real, nonzero matched catch; every zero-catch
     ## FG gets F = NA here, which then drops out of the F_by_fg plot
-    ## (05_validation.R filters to !is.na(F_for_plot) when it builds
+    ## (05_diagnostics.R filters to !is.na(F_for_plot) when it builds
     ## F_by_fg.png from this file) instead of plotting as F = 0.
     F = fifelse(!is.na(Catch_t_avg) & Catch_t_avg > 0,
                 (Catch_t_avg * .kc(FG_num) / Total_Area_km2) / Biomass_density_avg, NA_real_)
@@ -7723,6 +7846,44 @@ sheets_to_write$Catches_Discards_FG_ts <- catches_discards_fg[, .(Year, FG_num, 
 ## be saved as csv files, not kept in the final output excel file.
 ## Every table above (native/intermediate - none of these are among the
 ## 9 final target sheets) is written as CSV only, never to the workbook.
+## --- Ecosim catch/discard series: EU countries only --------------------
+## Ecosim_ts carries catches and discards only for the EU countries
+## (ECOSIM_CATCH_COUNTRIES, default Spain, France, Italy) and only from
+## ECOSIM_CATCH_START_YEAR (default 2014, the first STECF FDI year);
+## earlier years are blank and non-EU countries have no series (their
+## catch before FDI is reconstructed, not reported per fleet). The FG
+## series of Catches_Discards_FG_ts (with every FG-level correction:
+## stock-assessment catch, hake stanzas, ...) is multiplied by the EU
+## share of that FG and year:
+##   s_L(f,y) = sum_EU L_c,f,y / sum_all L_c,f,y   (catches)
+##   s_D(f,y) = sum_EU D_c,f,y / sum_all D_c,f,y   (discards)
+## from the country table (catch_with_discards). Missing share: the FG's
+## mean share over the other years, then the year's share over all FGs.
+## finalize_ecopath_ecosim_summary_sheets() reads ecosim_eu_catch_share.csv.
+if (!exists("ECOSIM_CATCH_COUNTRIES", envir = .GlobalEnv, inherits = FALSE)) ECOSIM_CATCH_COUNTRIES <- c("Spain", "France", "Italy")
+if (!exists("ECOSIM_CATCH_START_YEAR", envir = .GlobalEnv, inherits = FALSE)) ECOSIM_CATCH_START_YEAR <- 2014
+if (exists("catch_with_discards") && nrow(catch_with_discards) > 0) {
+  .cw <- catch_with_discards[, .(L = sum(Landings_t, na.rm = TRUE), D = sum(Discard_t, na.rm = TRUE),
+                                  L_eu = sum(Landings_t[Country %in% ECOSIM_CATCH_COUNTRIES], na.rm = TRUE),
+                                  D_eu = sum(Discard_t[Country %in% ECOSIM_CATCH_COUNTRIES], na.rm = TRUE)), by = .(FG_num, Year)]
+  .sh <- CJ(FG_num = unique(catches_discards_fg$FG_num), Year = unique(catches_discards_fg$Year))
+  .sh <- merge(.sh, .cw[, .(FG_num, Year, share_L = fifelse(L > 0, L_eu / L, NA_real_), share_D = fifelse(D > 0, D_eu / D, NA_real_))],
+               by = c("FG_num", "Year"), all.x = TRUE)
+  .yr <- .cw[, .(yL = sum(L_eu) / sum(L), yD = if (sum(D) > 0) sum(D_eu) / sum(D) else NA_real_), by = Year]
+  .sh[, how := fifelse(is.na(share_L), "FG mean over years", "FG x year")]
+  .sh[, `:=`(share_L = fifelse(is.na(share_L), mean(share_L, na.rm = TRUE), share_L),
+             share_D = fifelse(is.na(share_D), mean(share_D, na.rm = TRUE), share_D)), by = FG_num]
+  .sh <- merge(.sh, .yr, by = "Year", all.x = TRUE)
+  .sh[!is.finite(share_L), `:=`(share_L = yL, how = "all FGs that year")]
+  .sh[!is.finite(share_D), share_D := fifelse(is.finite(yD), yD, share_L)]
+  .sh[, c("yL", "yD") := NULL]
+  .sh[, `:=`(countries = paste(ECOSIM_CATCH_COUNTRIES, collapse = ", "), start_year = ECOSIM_CATCH_START_YEAR)]
+  sheets_to_write$ecosim_eu_catch_share <- .sh[order(FG_num, Year)]
+  message("\n[Ecosim catches] Ecosim_ts catch/discard series = EU countries (", paste(ECOSIM_CATCH_COUNTRIES, collapse = ", "),
+          ") from ", ECOSIM_CATCH_START_YEAR, "; EU share of the catch ", ECOSIM_CATCH_START_YEAR, "+: ",
+          round(100 * .yr[Year >= ECOSIM_CATCH_START_YEAR, sum(yL * 1) / .N], 1), "% (mean over years) -> ecosim_eu_catch_share.csv.")
+}
+
 write_native_sheets_csv(sheets_to_write, csv_out_dir)  # write/replace all these tables as CSV, never in the workbook - lands in output/fisheries/
 
 ## Ecopath_L/Ecopath_Di were already written directly to the workbook

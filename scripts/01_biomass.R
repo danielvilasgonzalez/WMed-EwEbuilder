@@ -1220,6 +1220,27 @@ if (length(still_missing_taxonomy) > 0) {
 ## loaded, not just whatever GSAs FILTER_AREAS happens to be set to.
 snapshot_full_extent_species(dt, species_taxonomy, "MEDITS", csv_out_dir)
 
+## Primary producers (macroalgae, seagrasses, phytoplankton) cannot grow
+## below the photic zone: survey records of them deeper than
+## PRIMARY_PRODUCER_MAX_DEPTH (100 m) are detritus (dead leaves, drifting
+## algae). Their biomass is set to 0 (the haul itself stays, so sample
+## counts are unchanged); listed in primary_producers_below_100m_REVIEW.csv.
+if (!exists("PRIMARY_PRODUCER_MAX_DEPTH", envir = .GlobalEnv, inherits = FALSE)) PRIMARY_PRODUCER_MAX_DEPTH <- 100
+.pp_re <- "phytoplankton|macroalga|seagrass|posidonia|cymodocea|seaweed|macrophyt"
+if (all(c("FG_name", "Depth", "Biomass") %in% names(dt))) {
+  .pp_deep <- !is.na(dt$FG_name) & grepl(.pp_re, dt$FG_name, ignore.case = TRUE) &
+    is.finite(dt$Depth) & dt$Depth > PRIMARY_PRODUCER_MAX_DEPTH & is.finite(dt$Biomass) & dt$Biomass > 0
+  if (any(.pp_deep)) {
+    fwrite(dt[.pp_deep, .(n_records = .N, biomass_t = sum(Biomass, na.rm = TRUE), max_depth_m = max(Depth)),
+              by = .(FG_name, ScientificName)][order(-biomass_t)],
+           file.path(csv_out_dir, "primary_producers_below_100m_REVIEW.csv"))
+    message("[Primary producers] ", sum(.pp_deep), " survey record(s) of primary producers deeper than ", PRIMARY_PRODUCER_MAX_DEPTH,
+            " m set to 0 (detritus, not living plants/algae): ",
+            paste(dt[.pp_deep, unique(FG_name)], collapse = ", "), " - primary_producers_below_100m_REVIEW.csv.")
+    dt[.pp_deep, Biomass := 0]
+  }
+}
+
 .wm_tick("before STEP 5")
 ## =================================================================
 ## STEP 5: densities (biomass/effort), mean/sum across species within
@@ -1305,6 +1326,15 @@ if (!isTRUE(APPLY_CATCHABILITY)) {
   CATCHABILITY_TABLE <- if (all(c("ScientificName", "q") %in% names(catchability_raw))) catchability_raw[, .(ScientificName, q = as.numeric(q))] else
     catchability_raw[, .(ScientificName = species, q = q_FACTOR)]
   message("Loaded catchability table: ", nrow(CATCHABILITY_TABLE), " entries from ", CATCHABILITY_CSV_PATH)
+  ## A "q" column in the FG file (FG_WMed_2026.csv) wins over the
+  ## catchability table for the species where it is filled in.
+  if ("q" %in% names(fg_raw)) {
+    .fq <- unique(fg_raw[, .(ScientificName = trimws(species), q = suppressWarnings(as.numeric(q)))][is.finite(q) & q > 0 & q <= 1], by = "ScientificName")
+    if (nrow(.fq)) {
+      CATCHABILITY_TABLE <- rbind(.fq, CATCHABILITY_TABLE[!ScientificName %in% .fq$ScientificName])
+      message("[Catchability] ", nrow(.fq), " species q taken from the 'q' column of the FG file (wins over ", basename(CATCHABILITY_CSV_PATH), ").")
+    }
+  }
   ## species_taxonomy (built above, right after Step 4) is what makes
   ## the genus/order/class/phylum-level entries in this table (e.g.
   ## "Isopoda", "Cirolana spp", "Hydrozoa", "Cnidaria") actually
@@ -1313,8 +1343,53 @@ if (!isTRUE(APPLY_CATCHABILITY)) {
   ## relative already in the table) for anything still unmatched after
   ## that - see apply_catchability_correction()'s own header comment
   ## for the full explanation of the matching order.
+  ## Species with no q at species or taxonomic level take the mean q of
+  ## their FG, then of a similar group of FGs (Q_SIMILAR_GROUPS, regex on
+  ## FG_name), before the default q = 1.
+  if (!exists("Q_SIMILAR_GROUPS", envir = .GlobalEnv, inherits = FALSE))
+    Q_SIMILAR_GROUPS <- list(`small pelagics` = "sardine|anchovy|sardinella|small pelagic|sprat",
+                             `medium pelagics` = "mackerel|medium pelagic|horse mackerel",
+                             `cephalopods` = "cephalopod|squid|octopus|cuttlefish",
+                             `shrimps and prawns` = "shrimp|prawn",
+                             `lobsters and crabs` = "lobster|decapod|crab",
+                             `sharks and rays` = "shark|ray|skate|torpedo|catshark",
+                             `demersal fish` = "demersal|hake|anglerfish|conger|pandora|seabream|sparidae|dentex|mullet|flatfish|scorpaenidae|labridae|groupers|salema|poor cod|blue whiting")
+  .dt_noq <- dt[, .(FG_name, Year, Density)]
   dt <- apply_catchability_correction(dt, CATCHABILITY_TABLE, default_q = 1, species_taxonomy = species_taxonomy,
-                                      exempt_fg_names = EXEMPT_FG_NAMES)
+                                      exempt_fg_names = EXEMPT_FG_NAMES, q_similar_groups = Q_SIMILAR_GROUPS)
+  ## q of every species (catchability_q_by_species.csv: the value used and
+  ## how it was found) and the effect of q on each FG's survey density in
+  ## the Ecopath years (catchability_effect_by_fg.csv + figure)
+  .qbs <- attr(dt, "q_by_species")
+  if (!is.null(.qbs)) {
+    fwrite(.qbs[order(FG_name, ScientificName)], file.path(csv_out_dir, "catchability_q_by_species.csv"))
+    .qfg <- .qbs[, .(n_species = .N, q_mean = mean(q_resolved), q_min = min(q_resolved), q_max = max(q_resolved),
+                     n_default = sum(match_level == "default_q")), by = .(FG_name)]
+    .yrs <- if (exists("YEAR_ECOPATH")) YEAR_ECOPATH else unique(dt$Year)
+    .eff <- merge(.dt_noq[Year %in% .yrs, .(B_without_q = sum(Density, na.rm = TRUE)), by = FG_name],
+                  dt[Year %in% .yrs, .(B_with_q = sum(Density, na.rm = TRUE)), by = FG_name], by = "FG_name")
+    .eff[, ratio := fifelse(B_without_q > 0, B_with_q / B_without_q, NA_real_)]
+    .eff <- merge(.eff, .qfg, by = "FG_name", all.x = TRUE)
+    fwrite(.eff[order(-ratio)], file.path(csv_out_dir, "catchability_effect_by_fg.csv"))
+    tryCatch({
+      .pd <- .eff[is.finite(ratio) & B_without_q > 0]
+      .pd[, FG_name := factor(FG_name, levels = .pd[order(ratio), FG_name])]
+      .pl <- melt(.pd, id.vars = c("FG_name", "ratio"), measure.vars = c("B_without_q", "B_with_q"), variable.name = "series", value.name = "B")
+      .pl[, series := factor(series, levels = c("B_without_q", "B_with_q"), labels = c("without q (raw survey)", "with q (B / q)"))]
+      p_q <- ggplot(.pl, aes(B, FG_name)) +
+        geom_line(aes(group = FG_name), colour = "grey75") +
+        geom_point(aes(colour = series), size = 2) +
+        geom_text(data = .pd, aes(x = B_with_q, y = FG_name, label = paste0("x", signif(ratio, 2))), hjust = -0.3, size = 2.6, colour = "grey30") +
+        scale_x_log10() + scale_colour_manual(values = c("without q (raw survey)" = "grey55", "with q (B / q)" = "#1b7f9e"), name = NULL) +
+        labs(title = "Survey density with and without catchability (q), by FG",
+             subtitle = paste0("Sum of haul densities in the Ecopath years (", paste(range(.yrs), collapse = "-"),
+                               "), log scale; label = with / without q. catchability_effect_by_fg.csv, q per species in catchability_q_by_species.csv"),
+             x = "Density (survey units, log scale)", y = NULL) +
+        theme_minimal(base_size = 9) + theme(legend.position = "bottom")
+      ggsave(file.path(plot_dir, "survey_catchability_effect.png"), p_q, width = 10, height = max(5, 0.18 * nrow(.pd) + 1.5), dpi = PLOT_DPI, bg = "white")
+    }, error = function(e) message("[Catchability] figure skipped - ", conditionMessage(e)))
+  }
+  rm(.dt_noq)
 } else {
   message("CATCHABILITY_CSV_PATH not found at '", CATCHABILITY_CSV_PATH, "' - skipping catchability",
           " correction entirely. Update the path above to your actual file location.")
@@ -2930,7 +3005,23 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
   ## source in the multistanza parameters table further down.
   ms_survey_series <- if (exists("multistanza_fg_pairs") && nrow(multistanza_fg_pairs) > 0)
     copy(fg_index_regional_combined[FG_num %in% c(multistanza_fg_pairs$FG_num_juv, multistanza_fg_pairs$FG_num_adult)]) else NULL
-  if (!exists("HAKE_STANZA_FROM_ASSESSMENT")) HAKE_STANZA_FROM_ASSESSMENT <- TRUE
+  ## Which source sets the stanza biomasses (MULTISTANZA_B_SOURCE):
+  ##   "medits_tc"  (default) - the MEDITS TC.csv length/maturity split of
+  ##                the survey biomass above (a direct measure of the
+  ##                standing stock's juvenile:adult structure); the stock
+  ##                assessment is used only when that split is missing,
+  ##                and is always kept as a reference column in
+  ##                Ecopath_multistanza;
+  ##   "assessment" - the stock-assessment SSB route below.
+  if (!exists("MULTISTANZA_B_SOURCE", envir = .GlobalEnv, inherits = FALSE)) MULTISTANZA_B_SOURCE <- "medits_tc"
+  .ms_tc_ok <- exists("multistanza_source_label") && grepl("^MEDITS TC", multistanza_source_label) &&
+    exists("multistanza_biomass_split_applied") && nrow(multistanza_biomass_split_applied) > 0 &&
+    "Merluccius merluccius" %in% multistanza_biomass_split_applied$ScientificName
+  if (!exists("HAKE_STANZA_FROM_ASSESSMENT", envir = .GlobalEnv, inherits = FALSE))
+    HAKE_STANZA_FROM_ASSESSMENT <- identical(MULTISTANZA_B_SOURCE, "assessment") || !.ms_tc_ok
+  message("[Hake stanzas] stanza biomass from ", if (isTRUE(HAKE_STANZA_FROM_ASSESSMENT)) "the stock assessment" else
+          "the MEDITS TC length/maturity split (stock assessment kept as reference in Ecopath_multistanza)",
+          " (MULTISTANZA_B_SOURCE = \"", MULTISTANZA_B_SOURCE, "\"", if (!.ms_tc_ok) "; MEDITS TC split not available" else "", ").")
   ## Source follows STOCK_ASSESSMENT_SOURCE ("GFCM" = the newest GFCM SAFs
   ## read from the GFCM website by 01b, gfcm_saf_stock_assessments_ALL.csv;
   ## "RAM" = RAM Legacy STECF XSA). Stocks: the GSA 1-5-6-7 unit, the unit
@@ -3287,6 +3378,115 @@ if (nrow(.rk_tab))
           " avoids their habitat): ", paste0(.rk_tab$FG_name, " (", signif(.rk_tab$Ecopath_B_t_km2, 2), " t/km2)", collapse = "; "),
           ". Consider a literature density or letting Ecopath estimate B (ECOPATH_B_FROM_EE).")
 fwrite(fg_index_regional_combined, file.path(csv_out_dir, "survey_fg_annual_index_regional_combined.csv"))
+
+## --- Manual density override (user-supplied t/km2) -----------------------
+## Two optional CSVs (comma or semicolon separated) let the user replace
+## the density of a species, or of a whole FG, with a value of their own.
+## They take precedence over MEDITS/MEDIAS, stock assessments and the
+## unsurveyed (01b) estimates.
+##   MANUAL_DENSITY_ECOPATH_PATH: species, density_t_km2 [, reference]
+##     -> Ecopath B. The value is the species' density over the
+##        YEAR_ECOPATH years.
+##   MANUAL_DENSITY_ECOSIM_PATH:  species, year, density_t_km2 [, reference]
+##     -> Ecosim biomass series (one row per year).
+## "species" is a scientific name in the FG file, or an FG name (then the
+## value is the whole FG). A species' value replaces only that species'
+## share of its FG: FG density = FG density - survey density of the
+## species + manual density. With an Ecopath value and no Ecosim rows the
+## species' own survey trend is rescaled so its YEAR_ECOPATH mean equals
+## the manual value; a species with no survey data then adds the value as
+## a flat contribution to every year the FG has data. Every change is
+## listed in manual_density_override_applied.csv.
+.md_read <- function(p) {
+  if (is.null(p) || !nzchar(p) || !file.exists(p)) return(NULL)
+  x <- tryCatch(fread(p), error = function(e) { message("[Manual density] could not read ", p, ": ", conditionMessage(e)); NULL })
+  if (is.null(x) || !nrow(x)) return(NULL)
+  setnames(x, tolower(trimws(names(x))))
+  if ("density" %in% names(x) && !"density_t_km2" %in% names(x)) setnames(x, "density", "density_t_km2")
+  if (!all(c("species", "density_t_km2") %in% names(x))) {
+    message("[Manual density] ", basename(p), " needs columns species, density_t_km2 - ignored."); return(NULL) }
+  x[, species := trimws(species)][, density_t_km2 := suppressWarnings(as.numeric(density_t_km2))]
+  x[!is.na(species) & nzchar(species) & is.finite(density_t_km2)]
+}
+.md_dir <- file.path(pcloud_dir, "data/Complementary data")
+if (!exists("MANUAL_DENSITY_ECOPATH_PATH", envir = .GlobalEnv, inherits = FALSE)) MANUAL_DENSITY_ECOPATH_PATH <- file.path(.md_dir, "manual_density_ecopath.csv")
+if (!exists("MANUAL_DENSITY_ECOSIM_PATH", envir = .GlobalEnv, inherits = FALSE))  MANUAL_DENSITY_ECOSIM_PATH  <- file.path(.md_dir, "manual_density_ecosim.csv")
+.md_ep <- .md_read(MANUAL_DENSITY_ECOPATH_PATH)
+.md_es <- .md_read(MANUAL_DENSITY_ECOSIM_PATH)
+if (!is.null(.md_es) && !"year" %in% names(.md_es)) { message("[Manual density] Ecosim CSV has no 'year' column - ignored."); .md_es <- NULL }
+if (!is.null(.md_es)) .md_es[, year := as.integer(year)]
+manual_density_log <- data.table()
+if (!is.null(.md_ep) || !is.null(.md_es)) {
+  .fgl <- unique(dataframe2[, .(FG_num, FG_name)])
+  .spl <- unique(dataframe2[, .(ScientificName, FG_num)])
+  .sp_d <- species_density_regional_combined[, .(sd = sum(mean_density, na.rm = TRUE)), by = .(ScientificName, FG_num, Year)]
+  .targets <- unique(c(if (!is.null(.md_ep)) .md_ep$species, if (!is.null(.md_es)) .md_es$species))
+  for (.t in .targets) {
+    .is_fg <- .t %in% .fgl$FG_name
+    .fgs <- if (.is_fg) .fgl[FG_name == .t, FG_num] else .spl[ScientificName == .t, FG_num]
+    if (!length(.fgs)) { message("[Manual density] '", .t, "' is neither a species nor an FG name in the FG file - skipped."); next }
+    .ep  <- if (!is.null(.md_ep)) .md_ep[species == .t, density_t_km2][1] else NA_real_
+    .es  <- if (!is.null(.md_es)) .md_es[species == .t, .(Year = year, v = density_t_km2)] else data.table(Year = integer(), v = numeric())
+    .ref <- c(if (!is.null(.md_ep) && "reference" %in% names(.md_ep)) .md_ep[species == .t, reference][1],
+              if (!is.null(.md_es) && "reference" %in% names(.md_es)) .md_es[species == .t, reference][1])
+    .ref <- .ref[!is.na(.ref) & nzchar(.ref)][1]
+    .src <- paste0("Manual density (", if (.is_fg) "FG" else "species", " override", if (!is.na(.ref)) paste0(": ", .ref), ")")
+    .fg <- .fgs[1]   # a multistanza species is applied to its first FG only
+    if (length(.fgs) > 1) message("[Manual density] '", .t, "' is in FGs ", paste(.fgs, collapse = ", "), " - applied to FG ", .fg, " only.")
+    .yrs <- sort(unique(c(fg_index_regional_combined[FG_num == .fg, Year], YEAR_ECOPATH, .es$Year)))
+    ## the species' (or FG's) current contribution per year
+    .cur <- if (.is_fg) fg_index_regional_combined[FG_num == .fg, .(Year, cur = mean_density)] else
+      .sp_d[ScientificName == .t & FG_num == .fg, .(Year, cur = sd)]
+    .new <- data.table(Year = .yrs)[.cur, cur := i.cur, on = "Year"]
+    .new[, new := cur]
+    if (is.finite(.ep)) {
+      .b0 <- .new[Year %in% YEAR_ECOPATH, mean(cur, na.rm = TRUE)]
+      if (is.finite(.b0) && .b0 > 0) .new[, new := cur * .ep / .b0] else
+        .new[, new := if (.is_fg) fifelse(Year %in% YEAR_ECOPATH, .ep, cur) else .ep]
+      .new[Year %in% YEAR_ECOPATH, new := .ep]
+    }
+    if (nrow(.es)) .new[.es, new := i.v, on = "Year"]
+    .new[, delta := new - fifelse(is.na(cur), 0, cur)]
+    .chg <- .new[is.finite(new) & (is.na(cur) | abs(delta) > 0)]
+    if (!nrow(.chg)) next
+    ## rows the FG table does not have yet (e.g. an Ecosim year)
+    .miss <- setdiff(.chg$Year, fg_index_regional_combined[FG_num == .fg, Year])
+    if (length(.miss)) {
+      .tmpl <- fg_index_regional_combined[FG_num == .fg][1]
+      if (!nrow(.tmpl) || is.na(.tmpl$FG_num)) .tmpl <- data.table(FG_num = .fg, FG_name = .fgl[FG_num == .fg, FG_name][1],
+                                                                FG_ECOLOGY_TYPE = NA_character_)
+      fg_index_regional_combined <- rbindlist(list(fg_index_regional_combined,
+        data.table(Year = .miss, FG_num = .fg, FG_name = .tmpl$FG_name, mean_density = NA_real_,
+                   biomass_source = NA_character_, FG_ECOLOGY_TYPE = .tmpl$FG_ECOLOGY_TYPE)), use.names = TRUE, fill = TRUE)
+    }
+    .old <- fg_index_regional_combined[FG_num == .fg & Year %in% .chg$Year, .(Year, old_fg = mean_density)]
+    if (.is_fg) {
+      fg_index_regional_combined[FG_num == .fg & Year %in% .chg$Year, mean_density := .chg$new[match(Year, .chg$Year)]]
+    } else {
+      fg_index_regional_combined[FG_num == .fg & Year %in% .chg$Year,
+                                 mean_density := pmax(0, fifelse(is.na(mean_density), 0, mean_density) + .chg$delta[match(Year, .chg$Year)])]
+      ## species table too, so the FG_spp sheets and 03 see the same value
+      species_density_regional_combined <- species_density_regional_combined[!(ScientificName == .t & FG_num == .fg & Year %in% .chg$Year)]
+      species_density_regional_combined <- rbindlist(list(species_density_regional_combined,
+        data.table(Year = .chg$Year, FG_num = .fg, FG_name = .fgl[FG_num == .fg, FG_name][1], ScientificName = .t, mean_density = .chg$new)),
+        use.names = TRUE, fill = TRUE)
+    }
+    fg_index_regional_combined[FG_num == .fg & Year %in% .chg$Year,
+                               biomass_source := paste0(.src, fifelse(is.na(biomass_source), "", paste0(" | ", sub("^Manual density[^|]*\\| ?", "", biomass_source))))]
+    .lg <- merge(.chg[, .(Year, species_before = cur, species_after = new)], .old, by = "Year", all.x = TRUE)
+    .lg <- merge(.lg, fg_index_regional_combined[FG_num == .fg, .(Year, fg_after = mean_density)], by = "Year", all.x = TRUE)
+    manual_density_log <- rbind(manual_density_log, data.table(target = .t, level = if (.is_fg) "FG" else "species",
+                                FG_num = .fg, FG_name = .fgl[FG_num == .fg, FG_name][1], .lg[, .(Year, species_before, species_after, fg_before = old_fg, fg_after)],
+                                in_ecopath_years = .lg$Year %in% YEAR_ECOPATH, source = .src), fill = TRUE)
+  }
+  setorder(fg_index_regional_combined, FG_num, Year)
+  if (nrow(manual_density_log)) {
+    fwrite(manual_density_log, file.path(csv_out_dir, "manual_density_override_applied.csv"))
+    message("[Manual density] ", uniqueN(manual_density_log$target), " species/FG override(s) applied to ",
+            uniqueN(manual_density_log$FG_num), " FG(s) - see manual_density_override_applied.csv.")
+  }
+} else message("[Manual density] no manual density CSV (", basename(MANUAL_DENSITY_ECOPATH_PATH), " / ",
+               basename(MANUAL_DENSITY_ECOSIM_PATH), ") - nothing overridden.")
 
 ## --- Ecosim_ts hygiene for non-survey FGs -----------------
 ## (1) Survey-exempt and non-living FGs (plankton, seagrass, corals,

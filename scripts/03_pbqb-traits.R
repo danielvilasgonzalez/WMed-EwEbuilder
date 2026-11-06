@@ -333,7 +333,7 @@ plot_dir <- file.path(out_dir, "plots", "pbqb-traits")
 if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
 ## The PB vs QB scatter, method-comparison plots, F by FG, and the P/Q
-## ratio plot all now live in 05_validation.R (built there from this
+## ratio plot all now live in 05_diagnostics.R (built there from this
 ## script's own species_pb_qb_by_taxon_group.csv/fg_pb_qb_weighted*.csv/
 ## plausibility_flag_REVIEW.csv/PQ_ratio_by_fg_REVIEW.csv), so this
 ## script no longer needs its own validation_plot_dir - every diagnostic
@@ -3382,12 +3382,12 @@ if (FG_YIELD_SOURCE == "fg_catch_csv" && exists("fg_yield_density")) {
 ## every other validation-only plot this script used to build here (the
 ## fish PB/QB methods-comparison plots, the FG_PB_QB_comparison dot-
 ## whisker plot, F_by_fg.png, PQ_ratio_by_fg.png) - now lives in
-## 05_validation.R instead, built there directly from
+## 05_diagnostics.R instead, built there directly from
 ## species_pb_qb_by_taxon_group.csv and fg_pb_qb_weighted.csv (both
 ## written just above), so every validation/QA plot's code sits in one
-## place (05_validation.R) rather than split across the two scripts that
+## place (05_diagnostics.R) rather than split across the two scripts that
 ## happen to also write the CSVs it reads. This script's own job stays
-## computing and exporting those CSVs; 05_validation.R's job is
+## computing and exporting those CSVs; 05_diagnostics.R's job is
 ## everything downstream of "is this plausible" - reading them back and
 ## plotting.
 
@@ -3477,7 +3477,7 @@ trim_workbook_to_final_sheets(ECOPATH_WORKBOOK_PATH)
 
 ## Fish PB/QB method-comparison plots (one point per method per species,
 ## faceted by FG, chosen method highlighted) also moved to
-## 05_validation.R - built there from species_pb_qb_by_taxon_group.csv's
+## 05_diagnostics.R - built there from species_pb_qb_by_taxon_group.csv's
 ## own PB_method/QB_method and per-method PB_*/QB_* columns, filtered to
 ## dispatch_group == "fish", the same data this block used in place.
 invisible(STAGE_PB$tick(tokens = list(stage_name = "Export CSVs")))
@@ -3828,7 +3828,7 @@ message("Saved: workbook sheet Ecopath_traits (", uniqueN(traits_reconciled$FG),
         " programmatically should use traits_ewe.csv instead of the Ecopath_traits sheet.")
 
 ## OUTPUT 2 (dot-whisker species/FG PB-QB comparison, FG_PB_QB_comparison*.png)
-## and the F-by-FG plot (F_by_fg.png) both moved to 05_validation.R -
+## and the F-by-FG plot (F_by_fg.png) both moved to 05_diagnostics.R -
 ## built there from species_pb_qb_by_taxon_group.csv and
 ## fg_pb_qb_weighted.csv/fg_pb_qb_weighted_with_F.csv, the same data
 ## this block used directly in memory. This script's job stops at
@@ -3885,7 +3885,7 @@ message("[PB/QB plausibility check] plausibility_flag_REVIEW.csv written (", nro
 ## PQ_ratio_by_fg_REVIEW.csv is still written HERE (the data check stays
 ## with the rest of this script's own QA computations, right alongside
 ## plausibility_flag_REVIEW.csv above) - only the PQ_ratio_by_fg.png
-## PLOT itself moved to 05_validation.R, which reads this CSV back and
+## PLOT itself moved to 05_diagnostics.R, which reads this CSV back and
 ## draws it there, consistent with every other validation plot.
 pq_dt <- tryCatch({
   d <- fg_weighted[!is.na(PB_FG) & !is.na(QB_FG) & QB_FG > 0, .(FG, FG_name, PB_FG, QB_FG)]
@@ -3898,7 +3898,7 @@ if (!is.null(pq_dt)) {
   n_flagged <- pq_dt[flag != "Within typical range", .N]
   message("[P/Q ratio check] ", n_flagged, " of ", nrow(pq_dt), " FG(s) fall outside the typical 0.05-0.3",
           " P/Q range - not necessarily wrong, but worth a second look (see PQ_ratio_by_fg_REVIEW.csv,",
-          " plotted in 05_validation.R's PQ_ratio_by_fg.png).")
+          " plotted in 05_diagnostics.R's PQ_ratio_by_fg.png).")
   fwrite(pq_dt, file.path(csv_out_dir, "PQ_ratio_by_fg_REVIEW.csv"))
 }
 

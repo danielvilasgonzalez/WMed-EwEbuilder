@@ -38,7 +38,7 @@ params:
   ## What the render reruns before building the HTML:
   ##   "all"        - the whole pipeline 01 -> 05 with the inputs above
   ##                  (about 10 min; the first run after a change needs internet)
-  ##   "validation" - only 05_validation.R (redraws the validation plots)
+  ##   "validation" - only 05_diagnostics.R (redraws the validation plots)
   ##   "none"       - nothing; uses the outputs already on disk
   regenerate: "none"
 server: shiny
@@ -52,6 +52,29 @@ execute:
                    # whether the .qmd's OWN code changed, not files it reads at render
                    # time) - so this doc always re-executes fully, every render
 ---
+
+<!--
+HOW TO OPEN THIS PAGE: click "Render" (RStudio: "Run Document"), or in the
+R console quarto::quarto_serve("WMed-EwEbuilder.qmd"). The page is an
+interactive Shiny document: it only works RENDERED. Do not run its code
+chunks one by one (Run, Ctrl/Cmd+Enter, Run All): most chunks are
+documentation that is never executed, they need objects from a pipeline
+run, and running them gives errors in the R session. To run the pipeline
+without the page: source("run_pipeline_demo.R").
+-->
+
+```{r}
+#| label: render-only-guard
+#| eval: true
+#| echo: false
+#| include: false
+## Run chunk by chunk in RStudio (not rendered): say so instead of failing
+## further down with errors about missing objects.
+if (interactive() && !isTRUE(getOption("knitr.in.progress")) && !isTRUE(getOption("shiny.testmode")))
+  stop("WMed-EwEbuilder.qmd must be RENDERED (click 'Render' / 'Run Document', or ",
+       "quarto::quarto_serve(\"WMed-EwEbuilder.qmd\")), not run chunk by chunk. ",
+       "To run only the pipeline: source(\"run_pipeline_demo.R\").", call. = FALSE)
+```
 
 ```{=html}
 <style>
@@ -427,10 +450,17 @@ The pipeline reads from three folders, found on each computer by
 
 - `git_dir`: the GitHub repository (code, `scripts/`, the workflow
   figure).
-- `pcloud_dir`: the shared pCloud folder `EwE Western Med 2026` (all
-  input data). Located from `config.local.R`, then `config.R`, then the
-  standard pCloud Drive place (macOS `~/pCloud Drive/`, Windows `P:/`,
-  Linux `~/pCloudDrive/`).
+- `pcloud_dir`: the input data, read from a **local copy** of the
+  shared pCloud folder `EwE Western Med 2026`. The first run (or the
+  "Make local copy of the data" button, Settings) copies its `data/`
+  folder (~2.5 GB) to `~/WMed_EwE_data/EwE Western Med 2026`
+  (`local_data_dir` in `config.local.R` or `WMED_LOCAL_DATA_DIR` to
+  change); every run then reads and writes only that copy, never the
+  shared folder, so a run cannot change the shared data. "Update local
+  data" copies only new or changed files. The shared folder is found
+  from `config.local.R`, then `config.R`, then the standard pCloud
+  Drive place (macOS `~/pCloud Drive/`, Windows `P:/`, Linux
+  `~/pCloudDrive/`).
 - `out_dir`: the outputs on your own computer (default
   `~/WMed_EwE_output`), plus the caches downloaded on the first run.
 
@@ -446,6 +476,7 @@ reference tables, each with a citation per row.
 | 01 | MEDIAS `abundance.csv`, `biomass.csv` | `data/Medits_Medias_JRC2026/2024_MEDBSsurvey/Acoustic/` | small pelagics acoustic biomass | yes |
 | 01 | `medits_reference_tables/` | `data/Complementary data/` | strata, manual species overrides, MEDIAS areas, unit factors | yes |
 | 01 | `catchability_factors_ecotrans_medits_2021_spp.csv` | `data/Complementary data/` | catchability q (`APPLY_CATCHABILITY`; or your own `CATCHABILITY_FILE`) | optional |
+| 01 | `manual_density_ecopath.csv`, `manual_density_ecosim.csv` | `data/Complementary data/` | user densities (t/km²) that override any other source | optional |
 | 01 | `small_pelagics_acoustic_pre_medias.csv`, `multistanza_reference_tables/` | `data/Complementary data/` | pre-MEDIAS acoustics; hake stanza parameters | yes |
 | 01, 02 | `fisheries/GFCM_SAF/` | `data/` | GFCM stock assessments (downloaded and cached here), hand-transcribed SAFs | yes |
 | 01, 02 | `fisheries/STAR_RAMLegacy/combined_medbs_star_ramlegacy.csv` | `data/` | RAM Legacy assessments (fill or `STOCK_ASSESSMENT_SOURCE = "RAM"`) | yes |
@@ -922,6 +953,37 @@ regardless of anything else resolved - for groups a bottom trawl isn't
 designed to sample representatively at all (pelagic, planktonic,
 seagrass/algae FGs), where "catchability" as a concept doesn't apply the
 same way.
+
+A species that still matches nothing takes the mean $q$ of the other
+species of **its own FG**, then the mean $q$ of a **similar FG**
+(`Q_SIMILAR_GROUPS`: e.g. any small pelagic without $q$ gets the mean
+of sardine, anchovy and the other small pelagics), and only then the
+default $q = 1$. A `q` column in `FG_WMed_2026.csv`, where filled in,
+replaces the table value for that species. Outputs:
+`catchability_q_by_species.csv` (the $q$ and how it was found, per
+species), `catchability_effect_by_fg.csv` and
+`plots/biomass/survey_catchability_effect.png` (FG biomass with and
+without $q$). The FG table of the app shows the $q$ of each FG, and its
+download adds a `q` column filled from the last run.
+
+### Manual density override
+
+Two optional CSVs in `data/Complementary data/` replace any density
+with a value of the user's own, in t/km², ahead of MEDITS, MEDIAS,
+stock assessments and the unsurveyed estimates (01b):
+
+| File | Columns | Feeds |
+|---|---|---|
+| `manual_density_ecopath.csv` | `species`, `density_t_km2`, optional `reference` | Ecopath B (the `YEAR_ECOPATH` years) |
+| `manual_density_ecosim.csv` | `species`, `year`, `density_t_km2`, optional `reference` | Ecosim biomass series |
+
+`species` is a scientific name in the FG file (replaces only that
+species' share of its FG) or an FG name (replaces the whole FG). With
+an Ecopath value and no Ecosim rows the species' own survey trend is
+rescaled to the new level. Each change is listed in
+`manual_density_override_applied.csv`; the FG keeps
+"Manual density" as its biomass source. Paths:
+`MANUAL_DENSITY_ECOPATH_PATH`, `MANUAL_DENSITY_ECOSIM_PATH`.
 
 ### Sample-level outlier detection
 
@@ -1534,6 +1596,21 @@ Ecosim fitting would read a 0 as an observed zero. `Ecopath_B` also
 carries `Biomass_1994_1996` (the value in `Biomass`) and the biomass of
 the first Ecosim year (`Biomass_1995`).
 
+**Scaling of the Ecosim series (`Ecosim_ts`).**
+
+| Series | Scaling | Years | Countries |
+|---|---|---|---|
+| Biomass (B) | relative: index = 1 in the first year (1995 = Ecopath B, the `YEAR_ECOPATH` mean) | all | — |
+| Catches (L), discards (Di) | absolute, t/km² of the model area (`ECOSIM_CATCH_SCALING = "relative"` for an index = 1 in the first year) | from `ECOSIM_CATCH_START_YEAR` (2014, first STECF FDI year); earlier years blank | EU only (`ECOSIM_CATCH_COUNTRIES`: Spain, France, Italy) |
+| Effort | relative: index = 1 at the `YEAR_ECOPATH` mean (1995) | all | per fleet |
+
+EU catch per FG and year = FG catch × EU share, $s_{f,y} = \sum_{EU} L_{c,f,y} / \sum_c L_{c,f,y}$
+(discards the same with $D$), so the FG corrections (stock-assessment
+catch, hake stanzas) are kept (`ecosim_eu_catch_share.csv`). Non-EU
+countries have no catch series: before FDI their catch is reconstructed,
+not reported per fleet. Note that absolute EU catches are below the
+model's total catch (Ecopath, all countries).
+
 ### Source priority per FG
 
 First available wins, per FG × year:
@@ -1600,10 +1677,20 @@ skips the online check.
   converted.
 :::
 
-### European hake stanzas from the stock assessment
+### European hake stanzas: MEDITS length split, assessment as reference
 
-Hake is the only multi-stanza species. MEDITS catches mostly juveniles,
-so the stanza biomasses come from the hake stock assessments: by default
+Hake is the only multi-stanza species. By default
+(`MULTISTANZA_B_SOURCE = "medits_tc"`) the hake survey biomass is split
+into juvenile and adult with the MEDITS length/maturity records
+(`TC.csv`, `YEAR_ECOPATH`, model GSAs): the juvenile share
+$p_{juv}$ is the biomass-weighted share of immature fish (maturity stage
+1), so $B_{juv} = p_{juv}\,B_{hake}$ and $B_{adult} = (1-p_{juv})\,B_{hake}$,
+for Ecopath and every Ecosim year (`multistanza_biomass_split_REVIEW.csv`).
+The stock assessment below stays in `Ecopath_multistanza` as a reference
+column, and is used for the stanza biomasses only when the `TC.csv`
+split is missing or with `MULTISTANZA_B_SOURCE = "assessment"`.
+
+The assessment route uses: by default
 the newest GFCM SAFs (GSAs 1-5-6-7 and the unit holding GSAs 9-11, GSAs
 8-9-10-11 since 2023, from `gfcm_saf_stock_assessments_ALL.csv`); with
 `STOCK_ASSESSMENT_SOURCE = "RAM"` the STECF XSA assessments in RAM
@@ -1788,7 +1875,11 @@ year.
     0.59, BFT 0.57, ALB 0.23; Spain BFT 0.95, SWO 0.89; France 1.
 6.  Fleet split: $C_l = C_{c,f,y}\,p_{l,c,f,y}$; $p$ from FDI (2014+),
     SAU hindcast bias-corrected to FDI (earlier), else FDI of the two nearest years,
-    else country mix, else equal share (flagged). Target-country
+    else the SAU country mix; Morocco, Algeria and Tunisia FGs with no
+    SAU gear data take the GFCM Fleet Register share of the country's
+    registered vessels in the model GSAs by gear, weighted by engine
+    power (kW) (`FLEET_REGISTER_SHARE_BASIS`; `gfcm_fleet_register_vessel_counts.csv`);
+    equal shares only when nothing else exists (flagged). Target-country
     catch whose fleet cannot be resolved goes to the residual column
     "Target countries - fleet not resolved" (renamed on 2026-10-07; it
     no longer holds other countries' catch).
@@ -1987,7 +2078,7 @@ wm_figure("fig-pb-qb-scatter", r"---(Chosen PB vs. QB by Functional Group.)---",
 #| label: show-fig-f-by-fg
 #| eval: true
 #| echo: false
-wm_figure("fig-f-by-fg", r"---(Fishing mortality F by Functional Group, 1994-1996.)---", "F_by_fg.png", r"---(05_validation.R)---")
+wm_figure("fig-f-by-fg", r"---(Fishing mortality F by Functional Group, 1994-1996.)---", "F_by_fg.png", r"---(05_diagnostics.R)---")
 ```
 
 Where a high F comes from: for each FG with $F \ge 0.5$, the F of each
@@ -2003,7 +2094,7 @@ low there. Table: `validation/F_by_country_REVIEW.csv`.
 #| label: show-fig-f-by-country
 #| eval: true
 #| echo: false
-wm_figure("fig-f-by-country", r"---(F by country for the FGs with F >= 0.5: red cells show where the catch is high for the biomass the survey sees.)---", "12b_F_by_country.png", r"---(05_validation.R)---")
+wm_figure("fig-f-by-country", r"---(F by country for the FGs with F >= 0.5: red cells show where the catch is high for the biomass the survey sees.)---", "12b_F_by_country.png", r"---(05_diagnostics.R)---")
 ```
 
 ------------------------------------------------------------------------
@@ -2124,9 +2215,9 @@ wm_figure("fig-diet-matrix-heatmap", r"---(Diet-composition matrix: prey FG in r
 
 ------------------------------------------------------------------------
 
-## Validation (`05_validation.R`) {#sec-validation}
+## Diagnostics (`05_diagnostics.R`) {#sec-validation}
 
-`05_validation.R` reads what 01–04 wrote; it does not change any input
+`05_diagnostics.R` reads what 01–04 wrote; it does not change any input
 sheet.
 
 ### Comparison with the 1995 Western Mediterranean model
@@ -2169,7 +2260,7 @@ cannibalism \> 0.1 (EwE User Guide); missing diets; EcoBase evaluations;
 FGs without Ecopath_B; even species splits; temporal mismatches; fleet
 coverage; zero-catch FGs; unmatched old FG names.
 
-Three more checks are written by `05_validation.R` itself and added to
+Three more checks are written by `05_diagnostics.R` itself and added to
 the same summary:
 
 - **Fishing mortality above 1** (`F_above_1_REVIEW.csv`): FGs with
@@ -2337,49 +2428,49 @@ Copernicus rows appear once 06 has run.
 #| label: show-fig-all-models-b
 #| eval: true
 #| echo: false
-wm_figure("fig-all-models-b", r"---(Biomass by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_B.png", r"---(05_validation.R)---")
+wm_figure("fig-all-models-b", r"---(Biomass by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_B.png", r"---(05_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-all-models-pb
 #| eval: true
 #| echo: false
-wm_figure("fig-all-models-pb", r"---(P/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_PB.png", r"---(05_validation.R)---")
+wm_figure("fig-all-models-pb", r"---(P/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_PB.png", r"---(05_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-all-models-qb
 #| eval: true
 #| echo: false
-wm_figure("fig-all-models-qb", r"---(Q/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_QB.png", r"---(05_validation.R)---")
+wm_figure("fig-all-models-qb", r"---(Q/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_QB.png", r"---(05_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-zooplankton-check
 #| eval: true
 #| echo: false
-wm_figure("fig-zooplankton-check", r"---(Total zooplankton: model vs. field (Fernández de Puelles et al. 2023).)---", "11_zooplankton_total_field_check.png", r"---(05_validation.R)---")
+wm_figure("fig-zooplankton-check", r"---(Total zooplankton: model vs. field (Fernández de Puelles et al. 2023).)---", "11_zooplankton_total_field_check.png", r"---(05_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-phyto-sources
 #| eval: true
 #| echo: false
-wm_figure("fig-phyto-sources", r"---(Phytoplankton B and P/B: Ecopath inputs vs ISIMIP, Copernicus (06) and the old 1995 model; total B per year, ISIMIP vs Copernicus.)---", "11b_phytoplankton_sources.png", r"---(05_validation.R, after 06_environment.R)---")
+wm_figure("fig-phyto-sources", r"---(Phytoplankton B and P/B: Ecopath inputs vs ISIMIP, Copernicus (06) and the old 1995 model; total B per year, ISIMIP vs Copernicus.)---", "11b_phytoplankton_sources.png", r"---(05_diagnostics.R, after 06_environment.R)---")
 ```
 
 ```{r}
 #| label: show-fig-prebal
 #| eval: true
 #| echo: false
-wm_figure("fig-prebal", r"---(PREBAL: log biomass, P/B and Q/B against trophic level; red = more than 2 SD from the line.)---", "15_prebal.png", r"---(05_validation.R)---")
+wm_figure("fig-prebal", r"---(PREBAL: log biomass, P/B and Q/B against trophic level; red = more than 2 SD from the line.)---", "15_prebal.png", r"---(05_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-pedigree
 #| eval: true
 #| echo: false
-wm_figure("fig-pedigree", r"---(Data pedigree index by FG and input.)---", "16_pedigree.png", r"---(05_validation.R)---")
+wm_figure("fig-pedigree", r"---(Data pedigree index by FG and input.)---", "16_pedigree.png", r"---(05_diagnostics.R)---")
 ```
 
 ```{r}
