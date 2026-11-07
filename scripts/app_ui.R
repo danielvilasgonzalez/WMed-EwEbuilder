@@ -223,28 +223,20 @@ tagList(
 
   ## Biomass data: surveys ---------------------------------------------------
   .card("2b", "Biomass data: surveys", "\U0001F4E5",
-    tags$div(class = "wm-help mb-2", "Biomass comes from the MEDITS trawl and MEDIAS acoustic surveys (2024 MEDBS data in the data folder) and, for groups they cannot measure, from literature and models (01b). Here you can replace the survey files with your own, or add any other survey that gives a density per species and year."),
-    fluidRow(
-      column(6,
-        tags$h6("Replace the MEDITS / MEDIAS files"),
-        tags$div(class = "wm-help", "Same exchange format as MEDITS (TA hauls, TB catch, TC lengths) and MEDIAS (abundance, biomass). Each file is recognised by its columns; a file not uploaded keeps the default."),
-        fileInput("survey_upload", NULL, multiple = TRUE, accept = ".csv", width = "100%",
-                  buttonLabel = "Upload survey files", placeholder = "TA.csv, TB.csv, TC.csv, abundance.csv, biomass.csv"),
-        uiOutput("survey_status"),
-        actionButton("survey_reset", "Use the default survey data", class = "btn-sm btn-outline-secondary")),
-      column(6,
-        tags$h6("Upload biomass from any survey (species, year, biomass)"),
+    tags$div(class = "wm-help mb-2", "Biomass comes from the MEDITS trawl and MEDIAS acoustic surveys (2024 MEDBS data) and, for groups they cannot measure, from literature and models (01b). Here you can upload biomass from any other survey."),
+    tags$div(
+        tags$h6("Upload biomass from any survey"),
         tags$div(class = "wm-help", "Any survey and any species: a csv with ",
                  tags$code("species"), " (scientific name), ", tags$code("year"), " and ", tags$code("biomass_t_km2"),
                  " (t wet weight per km\u00b2 of the model area); optionally ", tags$code("area_km2"),
                  " (when the biomass holds for a smaller area) and ", tags$code("reference"), ". ",
                  tags$strong("A species in this file takes its biomass only from it, in every year:"),
                  " its MEDITS/MEDIAS value is removed from its FG, the file's values are used in the years it gives, and in other years the species adds nothing. Ecopath B = the mean of its rows in the Ecopath years (if none, of its first three years). An FG name instead of a species replaces the whole FG."),
-        fileInput("other_survey_upload", NULL, accept = ".csv", width = "100%", buttonLabel = "Upload other survey",
+        fileInput("other_survey_upload", NULL, accept = ".csv", width = "100%", buttonLabel = "Upload survey biomass (csv)",
                   placeholder = "species, year, biomass_t_km2 [, area_km2, reference]"),
         uiOutput("other_survey_info"),
-        downloadButton("dl_other_survey_template", "Download an empty template", class = "btn-sm btn-outline-secondary"))),
-    tags$div(class = "wm-help mt-2", "Runs with your own survey data go to their own output folder (\u2026__survey-own), so the default results are kept.")),
+        downloadButton("dl_other_survey_template", "Download an empty template", class = "btn-sm btn-outline-secondary")),
+    tags$div(class = "wm-help mt-2", "Runs with an uploaded survey go to their own output folder (\u2026__survey-own), so the default results are kept.")),
 
   ## 2. Years and options --------------------------------------------------
   fluidRow(
