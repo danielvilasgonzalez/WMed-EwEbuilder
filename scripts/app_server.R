@@ -887,7 +887,7 @@ observeEvent(input$sync_local, {
   if (inherits(res, "error")) { showNotification(paste("Copy failed:", conditionMessage(res)), type = "error", duration = NULL); return() }
   showNotification(sprintf("Local copy up to date: %d new, %d updated, %d unchanged files (%s MB copied).%s",
                            res$new, res$updated, res$unchanged, res$MB_copied,
-                           if (!isTRUE(.paths$using_local_copy)) " Reopen the page so it uses the copy." else ""), duration = NULL)
+                           if (!isTRUE(.paths$using_local_copy)) " Refresh the page (reload in the browser) so it uses the copy." else ""), duration = NULL)
 })
 observeEvent(input$save_folders, {
   pc <- path.expand(trimws(input$set_pcloud)); od <- path.expand(trimws(input$set_out))

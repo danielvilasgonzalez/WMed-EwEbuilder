@@ -453,7 +453,7 @@ The pipeline reads from three folders, found on each computer by
 - `pcloud_dir`: the input data, read from a **local copy** of the
   shared pCloud folder `EwE Western Med 2026`. The first run (or the
   "Make local copy of the data" button, Settings) copies its `data/`
-  folder (~2.5 GB) to `~/WMed_EwE_data/EwE Western Med 2026`
+  folder (~2.5 GB) to `~/EwE Western Med 2026`
   (`local_data_dir` in `config.local.R` or `WMED_LOCAL_DATA_DIR` to
   change); every run then reads and writes only that copy, never the
   shared folder, so a run cannot change the shared data. "Update local

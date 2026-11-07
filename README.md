@@ -40,7 +40,7 @@ You don't need to edit any paths. `scripts/wmed_paths.R` finds the three folders
 | `pcloud_dir` | the shared data folder | `config.local.R` → `config.R` → environment variable `WMED_PCLOUD_DIR` → the standard pCloud Drive place (macOS `~/pCloud Drive/EwE Western Med 2026`, Windows `P:/EwE Western Med 2026`, Linux `~/pCloudDrive/EwE Western Med 2026`) |
 | `out_dir` | where the outputs go (your own computer) | `config.local.R` → `config.R` → `WMED_OUT_DIR` → `~/WMed_EwE_output` (created if missing) |
 
-**Local copy of the data.** The pipeline never reads the pCloud folder directly. The first run (or *Make local copy of the data* on the page, Settings) copies its `data/` folder (~2.5 GB) to `~/WMed_EwE_data/EwE Western Med 2026`, and `pcloud_dir` then points to that copy, so a run cannot change the shared data. *Update local data* copies only new or changed files. Another place: `local_data_dir` in `config.local.R` or the environment variable `WMED_LOCAL_DATA_DIR`.
+**Local copy of the data.** The pipeline never reads the pCloud folder directly. The first run (or *Make local copy of the data* on the page, Settings) copies its `data/` folder (~2.5 GB) to `~/EwE Western Med 2026`, and `pcloud_dir` then points to that copy, so a run cannot change the shared data. *Update local data* copies only new or changed files. Another place: `local_data_dir` in `config.local.R` or the environment variable `WMED_LOCAL_DATA_DIR`.
 
 If the pCloud folder is somewhere else, the page (card 0) or RStudio asks you to pick it once and saves your answer to `config.local.R`. To set the folders by hand, copy `config.R.example` to `config.local.R` and edit it. `config.R` and `config.local.R` are git-ignored, so your paths never reach other users.
 

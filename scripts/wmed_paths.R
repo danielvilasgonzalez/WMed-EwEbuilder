@@ -27,7 +27,7 @@
 ##
 ## Local copy of the shared data (since 2026-11-06). The pipeline never
 ## reads the pCloud folder directly: its data/ folder is copied once to
-## a local folder (default ~/WMed_EwE_data/EwE Western Med 2026; set
+## a local folder (default ~/EwE Western Med 2026; set
 ## local_data_dir in config.local.R or WMED_LOCAL_DATA_DIR), and
 ## pcloud_dir then points to that copy. Nothing is ever written to the
 ## shared folder, so a run cannot change or corrupt it, and the shared
@@ -105,7 +105,7 @@ local({
 }
 
 ## --- Local copy of the shared data ----------------------------------------
-.wmed_local_default <- function() file.path(.wmed_home(), "WMed_EwE_data", .wmed_pcloud_name)
+.wmed_local_default <- function() file.path(.wmed_home(), .wmed_pcloud_name)
 ## a usable copy: data/ with the FG table in it
 wmed_local_data_ok <- function(d) !is.null(d) && !is.na(d) && file.exists(file.path(d, "data", "FG_WMed_2026.csv"))
 ## Copies <shared_dir>/data to <local_dir>/data: files missing locally,
