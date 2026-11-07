@@ -168,8 +168,8 @@ observeEvent(input$other_survey_upload, {
   file.copy(input$other_survey_upload$datapath, dest, overwrite = TRUE)
   x <- tryCatch(data.table::fread(dest), error = function(e) NULL)
   if (!is.null(x)) data.table::setnames(x, tolower(trimws(names(x))))
-  if (is.null(x) || !all(c("species", "year") %in% names(x)) || !any(c("density_t_km2", "density") %in% names(x))) {
-    showNotification("The other-survey csv needs columns species, year and density_t_km2.", type = "error"); return() }
+  if (is.null(x) || !all(c("species", "year") %in% names(x)) || !any(c("biomass_t_km2", "biomass", "density_t_km2", "density") %in% names(x))) {
+    showNotification("The survey csv needs columns species (scientific name), year and biomass_t_km2.", type = "error"); return() }
   other_survey(normalizePath(dest))
   showNotification(sprintf("Other survey: %d rows, %d species, %s.", nrow(x), data.table::uniqueN(x$species),
                            paste(range(x$year, na.rm = TRUE), collapse = "-")), duration = 6)
@@ -181,6 +181,8 @@ output$other_survey_info <- renderUI({
            actionLink("other_survey_reset", "remove"))
 })
 observeEvent(input$other_survey_reset, other_survey(NA_character_))
+output$dl_other_survey_template <- downloadHandler("other_survey_template.csv", function(file)
+  writeLines(c("species,year,biomass_t_km2,area_km2,reference"), file))
 observeEvent(input$survey_reset, { survey_files(list()); showNotification("Default survey data (2024 MEDBS) will be used.", duration = 5) })
 output$survey_status <- renderUI({
   f <- survey_files()
@@ -568,7 +570,7 @@ config_code <- reactive({
     if (!is.na(fg_path())) sprintf("FG_SPECIES_FILE  <- \"%s\"   # species -> FG table", .fwd(fg_path())),
     sprintf("APPLY_CATCHABILITY <- %s   # MEDITS catchability correction", tf(input$catch_q)),
     if (isTRUE(input$catch_q) && !is.na(catch_path())) sprintf("CATCHABILITY_FILE <- \"%s\"   # uploaded catchability table", .fwd(catch_path())),
-    if (!is.na(other_survey())) sprintf("OTHER_SURVEY_FILE <- \"%s\"   # other survey: species, year, density_t_km2", .fwd(other_survey())),
+    if (!is.na(other_survey())) sprintf("OTHER_SURVEY_FILE <- \"%s\"   # biomass from any survey: species, year, biomass_t_km2", .fwd(other_survey())),
     if (!is.na(ecospace_depth())) sprintf("ECOSPACE_DEPTH_FILE <- \"%s\"   # Ecospace base map (06b)", .fwd(ecospace_depth())),
     if (7 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
     if (7 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
