@@ -11,8 +11,22 @@
 ## regridded onto it, cell for cell, ready to load in Ecospace
 ## (Spatial-temporal data framework, or Map > Import).
 ##
-## INPUT
-##   ECOSPACE_DEPTH_FILE   depth .asc (water depth in m; land = 0 or NODATA;
+## INPUT - the base map, either
+##   ECOSPACE_CELL_SIZE    a cell size in degrees (e.g. 1/12 = 5 arc-min):
+##                         06b MAKES the base map from the EMODnet
+##                         bathymetry (ECOSPACE_BATHY_FILE, 1 arc-min):
+##                           water fraction f = share of the bathymetry
+##                           cells below sea level in the map cell;
+##                           depth = mean depth of those cells when
+##                           f >= ECOSPACE_MIN_WATER_FRACTION (0.5), else 0 (land)
+##                         over ECOSPACE_EXTENT (xmin, xmax, ymin, ymax;
+##                         default the bounding box of the model GSAs),
+##                         cells outside the model GSAs = land
+##                         (ECOSPACE_CLIP_MODEL_AREA). It is written as
+##                         depth_used.asc: load THAT file as the Ecospace
+##                         depth map, so the drivers match it cell for cell.
+##   or (ECOSPACE_CELL_SIZE = NA, default)
+##   ECOSPACE_DEPTH_FILE   your depth .asc (water depth in m; land = 0 or NODATA;
 ##                         negative depths (bathymetry) are read as -depth)
 ##   <env>/<var>_monthly_native.tif   written by 06_environment.R (one layer
 ##                         per month, 1/24 deg). 06b does not download
@@ -43,7 +57,8 @@
 ##                                  cells filled from neighbours / map mean,
 ##                                  map mean, min, max
 ##   ecospace_driver_mean_maps.png  mean map of each variable (check)
-##   depth_used.asc                 the base map as read (depth > 0 = water)
+##   depth_used.asc                 the base map (depth > 0 = water; land 0) - the
+##                                  Ecospace depth map to use with these drivers
 ## =================================================================
 
 suppressPackageStartupMessages({ library(data.table); library(terra) })
@@ -59,6 +74,11 @@ if (!exists("out_dir", envir = .GlobalEnv, inherits = FALSE) || !exists("pcloud_
 ## --- Settings (set before sourcing to change) --------------------------
 .esp_default <- function(name, value) if (!exists(name, envir = .GlobalEnv, inherits = FALSE)) assign(name, value, envir = .GlobalEnv)
 .esp_default("ECOSPACE_DEPTH_FILE", file.path(pcloud_dir, "data", "Bathymetry", "depth_wmed.asc"))
+.esp_default("ECOSPACE_CELL_SIZE", NA_real_)                               # degrees; NA = the grid of ECOSPACE_DEPTH_FILE
+.esp_default("ECOSPACE_EXTENT", NULL)                                      # c(xmin, xmax, ymin, ymax); NULL = model GSAs' box
+.esp_default("ECOSPACE_BATHY_FILE", file.path(pcloud_dir, "data", "Bathymetry", "EMODnet_WMed_1arcmin.tif"))
+.esp_default("ECOSPACE_MIN_WATER_FRACTION", 0.5)
+.esp_default("ECOSPACE_CLIP_MODEL_AREA", TRUE)
 .esp_default("ECOSPACE_DRIVER_VARS", c("temp_surf", "temp_bot", "sal_surf", "npp", "phyto_c"))
 .esp_default("ECOSPACE_DRIVER_YEARS", if (exists("ENV_YEARS", envir = .GlobalEnv)) ENV_YEARS else
   if (exists("TS_YEARS", envir = .GlobalEnv)) TS_YEARS else NULL)          # NULL = every month 06 made
@@ -83,24 +103,61 @@ if (length(setdiff(ECOSPACE_DRIVER_VARS, vars)))
   .esp_msg("[06b] Not made by 06 yet (skipped): ", paste(setdiff(ECOSPACE_DRIVER_VARS, vars), collapse = ", "))
 
 ## --- Base map --------------------------------------------------------------
+.make_grid <- is.finite(suppressWarnings(as.numeric(ECOSPACE_CELL_SIZE))) && as.numeric(ECOSPACE_CELL_SIZE) > 0
+if (.make_grid) {
+  cs <- as.numeric(ECOSPACE_CELL_SIZE)
+  if (!file.exists(ECOSPACE_BATHY_FILE)) stop("[06b] Bathymetry not found: ", ECOSPACE_BATHY_FILE, call. = FALSE)
+  bathy <- terra::rast(ECOSPACE_BATHY_FILE); if (is.na(terra::crs(bathy)) || !nzchar(terra::crs(bathy))) terra::crs(bathy) <- "EPSG:4326"
+  ## model area: the run's GSAs (or the custom region's box)
+  .poly <- tryCatch({
+    if (exists("AREA_MODE", envir = .GlobalEnv) && identical(AREA_MODE, "custom") && exists("CUSTOM_BBOX", envir = .GlobalEnv)) {
+      b <- CUSTOM_BBOX; terra::as.polygons(terra::ext(b[["xmin"]], b[["xmax"]], b[["ymin"]], b[["ymax"]]), crs = "EPSG:4326")
+    } else {
+      g <- terra::vect(file.path(if (exists("git_dir", envir = .GlobalEnv)) git_dir else dirname(.this_dir_esp), "scripts", "gsa_boundaries_westmed.geojson"))
+      gs <- if (exists("MODEL_GSAS", envir = .GlobalEnv)) MODEL_GSAS else 1:12
+      g[g$gsa_num %in% gs, ]
+    }
+  }, error = function(e) NULL)
+  ex <- if (!is.null(ECOSPACE_EXTENT)) terra::ext(ECOSPACE_EXTENT) else if (!is.null(.poly)) terra::ext(.poly) else terra::ext(bathy)
+  ## snap the extent to whole cells
+  ex <- terra::ext(floor(ex$xmin / cs) * cs, ceiling(ex$xmax / cs) * cs, floor(ex$ymin / cs) * cs, ceiling(ex$ymax / cs) * cs)
+  tmpl <- terra::rast(ex, resolution = cs, crs = "EPSG:4326")
+  sea <- bathy < 0
+  dpos <- terra::ifel(sea, -bathy, NA)
+  m <- if (cs >= mean(terra::res(bathy))) "average" else "bilinear"
+  frac <- terra::project(sea * 1, tmpl, method = m)
+  dmean <- terra::project(dpos, tmpl, method = m)
+  depth <- terra::ifel(!is.na(frac) & frac >= ECOSPACE_MIN_WATER_FRACTION & !is.na(dmean), dmean, 0)
+  if (isTRUE(ECOSPACE_CLIP_MODEL_AREA) && !is.null(.poly)) {
+    inside <- terra::rasterize(.poly, tmpl, field = 1, touches = FALSE)
+    depth <- terra::ifel(is.na(inside), 0, depth)
+  }
+  names(depth) <- "depth"
+  .esp_msg(sprintf("[06b] Base map made at %.4g deg (%.3g arc-min) from %s: water = >= %d%% of the cell below sea level%s.",
+                   cs, cs * 60, basename(ECOSPACE_BATHY_FILE), round(100 * ECOSPACE_MIN_WATER_FRACTION),
+                   if (isTRUE(ECOSPACE_CLIP_MODEL_AREA) && !is.null(.poly)) ", outside the model area = land" else ""))
+} else {
 if (!file.exists(ECOSPACE_DEPTH_FILE)) stop("[06b] Ecospace depth file not found: ", ECOSPACE_DEPTH_FILE, call. = FALSE)
 depth <- terra::rast(ECOSPACE_DEPTH_FILE)
 .prj <- sub("\\.asc$", ".prj", ECOSPACE_DEPTH_FILE, ignore.case = TRUE)
 if (!file.exists(.prj) || is.na(terra::crs(depth)) || !nzchar(terra::crs(depth))) terra::crs(depth) <- "EPSG:4326"
+}
 .dv <- terra::values(depth, mat = FALSE)
 if (sum(.dv < 0, na.rm = TRUE) > sum(.dv > 0, na.rm = TRUE)) {        # bathymetry (negative down) -> depth
   depth <- -depth; .esp_msg("[06b] Depth file has negative depths (bathymetry): read as depth = -value.")
 }
 water <- depth > 0
 n_water <- as.integer(terra::global(water, "sum", na.rm = TRUE)[1, 1])
-map_name <- gsub("[^A-Za-z0-9_-]", "_", sub("\\.asc$", "", basename(ECOSPACE_DEPTH_FILE), ignore.case = TRUE))
+map_name <- if (.make_grid) paste0("grid_", gsub("\\.", "p", format(signif(as.numeric(ECOSPACE_CELL_SIZE) * 60, 4))), "arcmin") else
+  gsub("[^A-Za-z0-9_-]", "_", sub("\\.asc$", "", basename(ECOSPACE_DEPTH_FILE), ignore.case = TRUE))
 esp_dir <- file.path(ECOSPACE_ENV_DIR, "ecospace_drivers", map_name)
 dir.create(esp_dir, recursive = TRUE, showWarnings = FALSE)
 .esp_msg(sprintf("[06b] Base map %s: %d x %d cells of %.4g x %.4g (%s), %d water cells -> %s",
-                 basename(ECOSPACE_DEPTH_FILE), terra::ncol(depth), terra::nrow(depth), terra::res(depth)[1], terra::res(depth)[2],
+                 if (.make_grid) map_name else basename(ECOSPACE_DEPTH_FILE), terra::ncol(depth), terra::nrow(depth), terra::res(depth)[1], terra::res(depth)[2],
                  if (terra::is.lonlat(depth)) "degrees" else "map units", n_water, esp_dir))
-terra::writeRaster(terra::mask(depth, water, maskvalues = c(NA, 0)), file.path(esp_dir, "depth_used.asc"),
-                   filetype = "AAIGrid", NAflag = -9999, overwrite = TRUE)
+terra::writeRaster(terra::ifel(is.na(depth), 0, depth), file.path(esp_dir, "depth_used.asc"),
+                   filetype = "AAIGrid", NAflag = -9999, overwrite = TRUE, gdal = "DECIMAL_PRECISION=1")
+unlink(file.path(esp_dir, "depth_used.prj"))
 
 ## --- Helpers ---------------------------------------------------------------
 ## coarser base map -> area mean; finer -> bilinear (compared in metres)

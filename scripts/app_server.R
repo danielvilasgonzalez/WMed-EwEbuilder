@@ -125,6 +125,21 @@ observeEvent(input$ecospace_depth_upload, {
   showNotification(sprintf("Ecospace base map: %d x %d cells of %.4g, %d water cells (depth > 0).", terra::ncol(g), terra::nrow(g),
                            terra::res(g)[1], sum(abs(terra::values(g, mat = FALSE)) > 0, na.rm = TRUE)), duration = 8)
 })
+output$esp_cell_km <- renderText({
+  a <- input$esp_cell_arcmin; if (is.null(a) || !is.finite(a)) return("")
+  sprintf("= %.4g degrees, about %.1f km E-W x %.1f km N-S at 40\u00b0N", a / 60, a / 60 * 111.32 * cos(40 * pi / 180), a / 60 * 111.32)
+})
+.esp_map_name <- function() {
+  if (identical(input$esp_grid_mode, "file")) { f <- ecospace_depth(); if (is.na(f)) f <- "depth_wmed.asc"
+    gsub("[^A-Za-z0-9_-]", "_", sub("\\.asc$", "", basename(f), ignore.case = TRUE)) }
+  else paste0("grid_", gsub("\\.", "p", format(signif(as.numeric(input$esp_cell_arcmin), 4))), "arcmin")
+}
+output$esp_out_where <- renderUI({
+  d <- file.path(.inputs_run_dir(), "environment", "ecospace_drivers", .esp_map_name())
+  tags$div(class = "wm-help mt-2", "Written to ", tags$code(.show_path(d)), ": one folder per variable (", tags$code("<var>/<var>_YYYY_MM.asc"),
+           "), ", tags$code("depth_used.asc"), " (the Ecospace depth map), ", tags$code("ecospace_driver_index.csv"), " and a check figure.",
+           if (dir.exists(d)) tags$span(" Last made ", format(file.mtime(d), "%d %b %Y %H:%M"), ".") else " Not made yet.")
+})
 output$ecospace_depth_info <- renderUI({
   f <- ecospace_depth()
   tags$div(class = "wm-help", if (is.na(f)) "Default base map: data/Bathymetry/depth_wmed.asc (1/6 deg)." else paste("Base map:", basename(f)))
@@ -529,7 +544,9 @@ config_code <- reactive({
     sprintf("APPLY_CATCHABILITY <- %s   # MEDITS catchability correction", tf(input$catch_q)),
     if (isTRUE(input$catch_q) && !is.na(catch_path())) sprintf("CATCHABILITY_FILE <- \"%s\"   # uploaded catchability table", .fwd(catch_path())),
     if (!is.na(other_survey())) sprintf("OTHER_SURVEY_FILE <- \"%s\"   # biomass from any survey: species, year, biomass_t_km2", .fwd(other_survey())),
-    if (!is.na(ecospace_depth())) sprintf("ECOSPACE_DEPTH_FILE <- \"%s\"   # Ecospace base map (06b)", .fwd(ecospace_depth())),
+    if (identical(input$esp_grid_mode, "file") && !is.na(ecospace_depth())) sprintf("ECOSPACE_DEPTH_FILE <- \"%s\"   # Ecospace base map (06b)", .fwd(ecospace_depth())),
+    if (!identical(input$esp_grid_mode, "file") && is.finite(as.numeric(input$esp_cell_arcmin)))
+      sprintf("ECOSPACE_CELL_SIZE <- %s/60   # Ecospace base map at %s arc-min, depth from EMODnet (06b)", input$esp_cell_arcmin, input$esp_cell_arcmin),
     if (7 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
     if (7 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
     if (!is.null(survey_files()$TA)) sprintf("MEDITS_TA_FILE   <- \"%s\"   # own MEDITS hauls", .fwd(survey_files()$TA$path)),

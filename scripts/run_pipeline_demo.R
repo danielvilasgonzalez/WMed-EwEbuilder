@@ -283,7 +283,7 @@ if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
                 "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE", "HIGH_F_B_FIX",
                 "ECOSIM_CATCH_COUNTRIES", "ECOSIM_CATCH_START_YEAR", "ECOSIM_CATCH_SCALING", "MULTISTANZA_B_SOURCE",
                 "MEDITS_TA_FILE", "MEDITS_TB_FILE", "MEDITS_TC_FILE", "MEDIAS_DIR", "F_MAX", "F_THRESHOLD_FROM_ASSESSMENT",
-                "ECOSPACE_DEPTH_FILE", "ECOSPACE_DRIVER_STEP", "ECOSPACE_DRIVER_SCALING", "OTHER_SURVEY_FILE")
+                "ECOSPACE_DEPTH_FILE", "ECOSPACE_CELL_SIZE", "ECOSPACE_DRIVER_STEP", "ECOSPACE_DRIVER_SCALING", "OTHER_SURVEY_FILE")
 .rec_settings <- Filter(Negate(is.null), lapply(stats::setNames(.rec_names, .rec_names), function(n)
   if (exists(n, envir = .GlobalEnv, inherits = FALSE)) get(n, envir = .GlobalEnv) else NULL))
 if (exists("FG_SPECIES_FILE", envir = .GlobalEnv)) .rec_settings$FG_SPECIES_FILE <- basename(FG_SPECIES_FILE)

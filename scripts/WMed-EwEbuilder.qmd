@@ -2557,13 +2557,26 @@ wm_figure("fig-environment", r"---(Environment of the model area over the run's 
 
 ### Ecospace driver maps (`06b_ecospace_drivers.R`)
 
-06b turns the monthly maps of 06 into Ecospace input maps on the
-user's own base map: a depth ESRI ASCII grid (`ECOSPACE_DEPTH_FILE`,
-page: Settings → *Ecospace drivers*), at any resolution and extent
-inside the Western Med box, in lon/lat or, with its `.prj`, any
-projection. Depth > 0 = water; a grid of negative depths (bathymetry)
-is read as −depth. 06b downloads nothing, so it reruns in minutes for a
-new base map (step "06b Ecospace maps"; 06 must have run once).
+06b turns the monthly maps of 06 into Ecospace input maps on a base
+map chosen on the page (Settings → *Ecospace drivers*):
+
+- **At a resolution** (`ECOSPACE_CELL_SIZE`, in degrees; the page asks
+  arc-minutes, default 10): 06b makes the base map from the EMODnet
+  bathymetry (`data/Bathymetry/EMODnet_WMed_1arcmin.tif`). A cell is
+  water when at least half of it is below sea level
+  (`ECOSPACE_MIN_WATER_FRACTION`), with the mean depth of that part;
+  cells outside the model GSAs are land (`ECOSPACE_CLIP_MODEL_AREA`);
+  extent = the model GSAs' box (`ECOSPACE_EXTENT` to change). The map is
+  written as `depth_used.asc`, the Ecospace depth map to load with the
+  drivers.
+- **Your depth ESRI ASCII grid** (`ECOSPACE_DEPTH_FILE`): any resolution
+  and extent inside the Western Med box, lon/lat or, with its `.prj`,
+  any projection. Depth > 0 = water; negative depths (bathymetry) are
+  read as −depth.
+
+06b downloads nothing, so it reruns in minutes for another resolution
+(step "06b Ecospace maps"; 06 must have run once). The page shows the
+full path of the output folder.
 
 Per variable and month:
 
@@ -2578,7 +2591,7 @@ Per variable and month:
    g C m⁻²) or `"relative"` (value / the base-year map mean, as the
    Ecosim forcing). `ECOSPACE_DRIVER_STEP`: `"monthly"` or `"annual"`.
 
-Outputs in `environment/ecospace_drivers/<base map>/`: `<var>/<var>_<YYYY>_<MM>.asc`
+Outputs in `environment/ecospace_drivers/<base map>/` (`grid_<n>arcmin` or the depth file's name): `<var>/<var>_<YYYY>_<MM>.asc`
 (same `ncols`, `nrows`, corner and cell size as the depth file),
 `ecospace_driver_index.csv` (time step, year, month, file, cells
 filled, mean, min, max) and `ecospace_driver_mean_maps.png`. Tested
