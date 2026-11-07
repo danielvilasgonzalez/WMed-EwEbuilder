@@ -4232,10 +4232,15 @@ message("Saved to biomass_proportion_by_species_fg.csv (Species x FG, prop_sp_fg
   fg_species_coverage[, coverage_survey := paste0(n_observed_survey, "/", n_species_fg_file)]
   setcolorder(fg_species_coverage, c("FG_num", "FG_name", "coverage", "coverage_survey", "n_species_fg_file", "n_with_biomass", "n_observed_survey"))
   fwrite(fg_species_coverage[order(FG_num)], file.path(csv_out_dir, "fg_species_coverage.csv"))
+  ## Totals over UNIQUE species: a species in two FGs (multistanza hake) is
+  ## counted once; it has biomass / is observed if it is in any of its FGs.
+  .u <- .cov[, .(has_B = any(has_B), observed = any(observed)), by = Species]
+  .tot <- data.table(n_species = nrow(.u), n_with_biomass = sum(.u$has_B), n_observed_survey = sum(.u$observed))
+  fwrite(.tot, file.path(csv_out_dir, "fg_species_coverage_totals.csv"))
   message("\n[Species coverage] species with biomass / species in the FG file, per FG (survey-observed in brackets) - fg_species_coverage.csv:\n",
           paste(fg_species_coverage[order(FG_num), sprintf("  %2d %-40s %7s  (%s)", FG_num, substr(FG_name, 1, 40), coverage, coverage_survey)], collapse = "\n"),
-          "\nTotal: ", sum(fg_species_coverage$n_with_biomass), " of ", sum(fg_species_coverage$n_species_fg_file), " species have biomass; ",
-          sum(fg_species_coverage$n_observed_survey), " observed by the surveys.")
+          "\nTotal (unique species): ", .tot$n_with_biomass, " of ", .tot$n_species, " species have biomass; ",
+          .tot$n_observed_survey, " observed by the surveys.")
 }, error = function(e) message("[Species coverage] not computed - ", conditionMessage(e)))
 .species_coverage(FG_spp_Ecopath)
 

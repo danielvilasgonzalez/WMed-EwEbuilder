@@ -288,14 +288,26 @@ output$fg_summary <- renderUI({
       stat("File", basename(ft$path), format(file.mtime(ft$path), "edited %d %b %Y, %H:%M")),
       stat("Functional groups", nrow(fg), paste0("FG ", min(fg$FG_number), "-", max(fg$FG_number))),
       stat("Species", data.table::uniqueN(x$species),
-           if (sum(fg$n_species) != data.table::uniqueN(x$species))
-             paste0(sum(fg$n_species), " FG entries: ", sum(fg$n_species) - data.table::uniqueN(x$species),
-                    " species counted in more than one FG (e.g. multistanza)") else NULL),
+           if (sum(fg$n_species) != data.table::uniqueN(x$species)) "unique species; a multistanza species is in two FGs but counted once" else NULL),
       if (has_b) stat("FGs with Ecopath B (last run)", paste0(fg[is.finite(B), .N], "/", nrow(fg)),
                       paste0(fg[B_source == "Estimated by Ecopath (EE)", .N], " estimated by Ecopath (EE), ",
                              fg[B_source == "No biomass", .N], " without biomass")),
-      if (has_cov) stat("With biomass (last run)", paste0(sum(cov$n_with_biomass), "/", sum(cov$n_species_fg_file)),
-                        paste0(sum(cov$n_observed_survey), " observed in the surveys; ", format(file.mtime(.cov_f), "%d %b %H:%M")))),
+      if (has_cov) {
+        ## unique species (01 writes the totals); older runs: species in the
+        ## FG file minus those without biomass in every FG they are in
+        .tf <- file.path(dirname(.cov_f), "fg_species_coverage_totals.csv")
+        .tot <- if (file.exists(.tf)) tryCatch(data.table::fread(.tf), error = function(e) NULL) else NULL
+        if (is.null(.tot) || !nrow(.tot)) {
+          .nm <- table(x$species)
+          .wo <- table(unlist(strsplit(cov$species_without_biomass[!is.na(cov$species_without_biomass)], "; ", fixed = TRUE)))
+          .never <- sum(names(.wo) %in% names(.nm) & as.integer(.wo[names(.wo)]) >= as.integer(.nm[names(.wo)]), na.rm = TRUE)
+          .tot <- data.table::data.table(n_species = data.table::uniqueN(x$species), n_with_biomass = data.table::uniqueN(x$species) - .never,
+                                         n_observed_survey = NA_integer_)
+        }
+        stat("With biomass (last run)", paste0(.tot$n_with_biomass, "/", .tot$n_species),
+             paste0(if (is.finite(.tot$n_observed_survey)) paste0(.tot$n_observed_survey, " observed in the surveys; ") else "",
+                    "unique species; ", format(file.mtime(.cov_f), "%d %b %H:%M")))
+      }),
     if (length(warn)) tags$div(class = "alert alert-warning py-2 small mt-2 mb-2", lapply(warn, function(w) tags$div(w))),
     if (nrow(ms)) tags$div(class = "alert alert-info py-2 small mt-2 mb-2",
       tags$strong(sprintf("Multistanza group(s) (%d): ", nrow(ms))),
