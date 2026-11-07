@@ -3438,6 +3438,45 @@ if (!exists("MANUAL_DENSITY_ECOSIM_PATH", envir = .GlobalEnv, inherits = FALSE))
 .md_es <- .md_read(MANUAL_DENSITY_ECOSIM_PATH)
 if (!is.null(.md_es) && !"year" %in% names(.md_es)) { message("[Manual density] Ecosim CSV has no 'year' column - ignored."); .md_es <- NULL }
 if (!is.null(.md_es)) .md_es[, year := as.integer(year)]
+## --- Other survey (your own species x year x density) -------------------
+## OTHER_SURVEY_FILE (page: Settings -> Survey data -> "Other survey"):
+## any survey that gives a density per species and year, e.g. a coastal
+## trammel-net survey, a visual census or an ROV survey. Columns:
+##   species        scientific name in the FG file (or an FG name)
+##   year
+##   density_t_km2  biomass density, t (wet weight) per km2
+##   area_km2       optional: the area the density applies to; then the
+##                  model-area density = density_t_km2 x area_km2 / A_model
+##                  (no area_km2 = the density holds for the whole model area)
+##   reference      optional
+## Several rows of a species and year (e.g. per site) are averaged; with
+## area_km2 they are summed as density x area. The rows go into the manual
+## density override below (as Ecosim rows; the YEAR_ECOPATH years then set
+## Ecopath B), so they replace that species' survey density, or add a
+## species the surveys do not catch. Rows of the manual Ecosim file win
+## over this file for the same species and year.
+if (!exists("OTHER_SURVEY_FILE", envir = .GlobalEnv, inherits = FALSE)) OTHER_SURVEY_FILE <- ""
+if (nzchar(OTHER_SURVEY_FILE) && file.exists(OTHER_SURVEY_FILE)) {
+  .os <- .md_read(OTHER_SURVEY_FILE)
+  if (!is.null(.os) && "year" %in% names(.os)) {
+    .os[, year := as.integer(year)]
+    .A_mod <- if (exists("MODEL_AREA_KM2") && is.finite(MODEL_AREA_KM2)) MODEL_AREA_KM2 else sum(strata_area_by_area$area_km2, na.rm = TRUE)
+    if ("area_km2" %in% names(.os)) {
+      .os[, area_km2 := suppressWarnings(as.numeric(area_km2))]
+      .os <- .os[, .(density_t_km2 = if (all(is.finite(area_km2))) sum(density_t_km2 * area_km2) / .A_mod else mean(density_t_km2),
+                     reference = if ("reference" %in% names(.SD)) paste(unique(na.omit(reference)), collapse = "; ") else NA_character_),
+                 by = .(species, year)]
+    } else {
+      .os <- .os[, .(density_t_km2 = mean(density_t_km2),
+                     reference = if ("reference" %in% names(.SD)) paste(unique(na.omit(reference)), collapse = "; ") else NA_character_),
+                 by = .(species, year)]
+    }
+    .os[, reference := paste0("Other survey (", basename(OTHER_SURVEY_FILE), ")", fifelse(is.na(reference) | !nzchar(reference), "", paste0(": ", reference)))]
+    .md_es <- if (is.null(.md_es)) .os else rbind(.md_es, .os[!.md_es, on = c("species", "year")], fill = TRUE)
+    message("[Other survey] ", basename(OTHER_SURVEY_FILE), ": ", uniqueN(.os$species), " species, ", paste(range(.os$year), collapse = "-"),
+            " - used as manual densities (replace the survey density of those species).")
+  } else message("[Other survey] ", OTHER_SURVEY_FILE, " needs columns species, year, density_t_km2 - ignored.")
+}
 manual_density_log <- data.table()
 if (!is.null(.md_ep) || !is.null(.md_es)) {
   .fgl <- unique(dataframe2[, .(FG_num, FG_name)])

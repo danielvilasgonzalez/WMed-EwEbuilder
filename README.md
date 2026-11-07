@@ -87,7 +87,8 @@ Each step reads files the earlier ones wrote. `run_pipeline_demo.R` runs the ste
 | 2 | `02_fisheries.R` | **Catch, landings, discards, effort and F** by country, fleet and FG. Catch from GFCM, STECF FDI, Sea Around Us and ICCAT; effort from FishMIP and FDI, with technology creep. F by country, to find where a high F comes from. |
 | 3 | `03_pbqb-traits.R` | **P/B and Q/B** per FG from FishBase/SeaLifeBase traits and empirical equations, plus EcoBase. |
 | 4 | `04_diets.R` | **Diet matrix.** Sources in order: Mediterranean metaweb → MAISHA → FishBase/SeaLifeBase → EcoBase → literature fallback. FG order follows the FG table. |
-| 6 | `06_environment.R` (optional) | **Environmental drivers** from Copernicus Marine (Mediterranean reanalyses; global model scaled to the Med for 1994–98): bottom and surface temperature, surface salinity, NPP. Maps on the model grid (`.asc` for Ecospace), time series with the 10–90 % range over the area, Ecosim forcing series, and phytoplankton B and P/B for Ecopath. |
+| 6 | `06_environment.R` (optional) | **Environmental drivers** from Copernicus Marine (Mediterranean reanalyses; global model scaled to the Med for 1994–98): bottom and surface temperature, surface salinity, NPP. Monthly maps on the native grid, time series with the 10–90 % range over the area, Ecosim forcing series, and phytoplankton B and P/B for Ecopath. |
+| 7 | `06b_ecospace_drivers.R` (optional) | **Ecospace driver maps**: the monthly maps of 06 regridded onto your Ecospace depth `.asc` (any resolution or projection), coastal gaps filled, one `.asc` per variable and month plus an index file. No download; rerun alone for a new base map. |
 | 5 | `05_diagnostics.R` | **Validation.** Compares with the 1995 Western Med model and runs the EwE plausibility checks (P/Q, diet sums, cannibalism, PREBAL, F). Writes one summary table and one PDF of all plots. |
 
 Every method, equation, assumption and reference is in `scripts/WMed-EwEbuilder.qmd`.
@@ -196,7 +197,7 @@ scripts/
   wmed_paths.R                     # finds git_dir, pcloud_dir, out_dir on any computer
   install_packages.R  package_versions.csv
   01_biomass.R  01b_biomass_unsurveyed.R  02_fisheries.R  03_pbqb-traits.R  04_diets.R
-  05_diagnostics.R  06_environment.R
+  05_diagnostics.R  06_environment.R  06b_ecospace_drivers.R
   03b_ecobase.R                    # EcoBase fallbacks
   lib_*.R                          # shared functions (survey density, AquaMaps, FishBase diets,
                                    #   plankton, Copernicus, taxonomy, run record)

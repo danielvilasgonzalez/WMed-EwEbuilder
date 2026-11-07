@@ -15,12 +15,16 @@
 .git_dir <- normalizePath("..")   # this .qmd sits in <git_dir>/scripts
 source(file.path(.git_dir, "scripts", "wmed_paths.R"), local = TRUE)
 .paths <- wmed_find_paths(.git_dir)  # config.local.R > config.R > standard pCloud Drive place
-## Paths shown on the page: the home folder as "~", so no user name is
-## displayed (the page may be shown on a projector or shared as a screenshot).
+## Paths shown on the page: the real full path on this computer (e.g.
+## /Users/<name>/WMed_EwE_output, C:/Users/<name>/Documents/...), so each
+## user sees exactly where their folders are. Set
+## options(wmed.short_paths = TRUE) to show the home folder as "~" instead
+## (e.g. for a projector or a screenshot).
 .show_path <- function(p) {
   if (is.null(p) || !length(p) || is.na(p)) return(p)
+  p2 <- gsub("\\\\", "/", normalizePath(path.expand(p), winslash = "/", mustWork = FALSE))
+  if (!isTRUE(getOption("wmed.short_paths", FALSE))) return(p2)
   h <- normalizePath(path.expand("~"), winslash = "/", mustWork = FALSE)
-  p2 <- gsub("\\\\", "/", p)
   if (startsWith(p2, h)) paste0("~", substring(p2, nchar(h) + 1)) else p2
 }
 .base_out <- unname(.paths$out_dir)   # main output folder: default-input results, caches, the page's run files
@@ -80,12 +84,13 @@ run_target <- reactiveVal(NULL)   # output folder of the run started from this p
     basis = if (is.null(input$basis)) "whole_gsa" else input$basis, area_name = input$area_name,
     year_ecopath = yr(input$ecopath_years), ts_years = yr(input$ts_years),
     fg_file = { f <- fg_path(); if (is.null(f) || is.na(f)) NULL else f },
-    own_survey = length(survey_files()) > 0))
+    own_survey = length(survey_files()) > 0 || !is.na(other_survey())))
 }
 .run_label <- function(d) {
   if (is.null(d) || is.na(d)) return("-")
-  if (identical(normalizePath(d, mustWork = FALSE), normalizePath(.base_out, mustWork = FALSE))) "the main output folder (default inputs)"
-  else paste0("runs/", basename(d))
+  ## the full path on this computer, so the user can open the folder
+  if (identical(normalizePath(d, mustWork = FALSE), normalizePath(.base_out, mustWork = FALSE)))
+    paste0(.show_path(d), " (main output folder, default inputs)") else .show_path(d)
 }
 observeEvent(input$fg_file, if (nzchar(input$fg_file)) fg_path(input$fg_file))
 catch_path <- reactiveVal(NA_character_)
@@ -137,6 +142,45 @@ observeEvent(input$survey_upload, {
   survey_files(cur)
   showNotification(HTML(paste(msg, collapse = "<br>")), duration = 10, type = if (any(grepl("not recognised|needs both", msg))) "warning" else "message")
 })
+## --- Ecospace base map (depth .asc) for 06b ------------------------------
+ecospace_depth <- reactiveVal(NA_character_)
+observeEvent(input$ecospace_depth_upload, {
+  up <- input$ecospace_depth_upload
+  d <- file.path(.run_dir, "ecospace_basemap"); dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  asc <- up[grepl("\\.asc$", up$name, ignore.case = TRUE), ]
+  if (!nrow(asc)) { showNotification("Upload the depth map as an ESRI ASCII grid (.asc), optionally with its .prj.", type = "error"); return() }
+  for (i in seq_len(nrow(up))) file.copy(up$datapath[i], file.path(d, up$name[i]), overwrite = TRUE)
+  f <- normalizePath(file.path(d, asc$name[1]))
+  g <- tryCatch(terra::rast(f), error = function(e) NULL)
+  if (is.null(g)) { showNotification("Could not read the .asc file.", type = "error"); return() }
+  ecospace_depth(f)
+  showNotification(sprintf("Ecospace base map: %d x %d cells of %.4g, %d water cells (depth > 0).", terra::ncol(g), terra::nrow(g),
+                           terra::res(g)[1], sum(abs(terra::values(g, mat = FALSE)) > 0, na.rm = TRUE)), duration = 8)
+})
+output$ecospace_depth_info <- renderUI({
+  f <- ecospace_depth()
+  tags$div(class = "wm-help", if (is.na(f)) "Default base map: data/Bathymetry/depth_wmed.asc (1/6 deg)." else paste("Base map:", basename(f)))
+})
+other_survey <- reactiveVal(NA_character_)
+observeEvent(input$other_survey_upload, {
+  dest <- file.path(.survey_dir, paste0("other_survey_", gsub("[^A-Za-z0-9_.-]", "_", input$other_survey_upload$name)))
+  dir.create(.survey_dir, recursive = TRUE, showWarnings = FALSE)
+  file.copy(input$other_survey_upload$datapath, dest, overwrite = TRUE)
+  x <- tryCatch(data.table::fread(dest), error = function(e) NULL)
+  if (!is.null(x)) data.table::setnames(x, tolower(trimws(names(x))))
+  if (is.null(x) || !all(c("species", "year") %in% names(x)) || !any(c("density_t_km2", "density") %in% names(x))) {
+    showNotification("The other-survey csv needs columns species, year and density_t_km2.", type = "error"); return() }
+  other_survey(normalizePath(dest))
+  showNotification(sprintf("Other survey: %d rows, %d species, %s.", nrow(x), data.table::uniqueN(x$species),
+                           paste(range(x$year, na.rm = TRUE), collapse = "-")), duration = 6)
+})
+output$other_survey_info <- renderUI({
+  f <- other_survey()
+  if (is.na(f)) return(NULL)
+  tags$div(class = "wm-help", "Other survey: ", tags$strong(sub("^other_survey_", "", basename(f))), " ",
+           actionLink("other_survey_reset", "remove"))
+})
+observeEvent(input$other_survey_reset, other_survey(NA_character_))
 observeEvent(input$survey_reset, { survey_files(list()); showNotification("Default survey data (2024 MEDBS) will be used.", duration = 5) })
 output$survey_status <- renderUI({
   f <- survey_files()
@@ -310,7 +354,7 @@ output$fg_summary <- renderUI({
 ## 2026-10-29 are used. 01 is slower the first time after a change of GSAs
 ## (bathymetry download).
 .step_min_default <- c(6.8, 11.7, 4.9, 5.1, 1.6, 15)   # 06: a rerun with the years cached; the first run takes hours
-.step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 validation", "06 environment")
+.step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 diagnostics", "06 environment", "06b Ecospace maps")
 
 ## --- Custom region from an uploaded shapefile / polygon file ---------------
 custom_shape <- reactiveVal(NULL)   # list(path, sf) of the uploaded region
@@ -447,9 +491,10 @@ steps_txt <- reactive({
   else if (all(diff(s) == 1)) paste0(min(s), ":", max(s))
   else paste0("c(", paste(s, collapse = ", "), ")")
 })
-observeEvent(input$steps_all,    updateCheckboxGroupInput(session, "steps_chk", selected = 1:6))
+observeEvent(input$steps_all,    updateCheckboxGroupInput(session, "steps_chk", selected = 1:7))
 observeEvent(input$steps_main,   updateCheckboxGroupInput(session, "steps_chk", selected = 1:5))
-observeEvent(input$steps_only6,  updateCheckboxGroupInput(session, "steps_chk", selected = 6))
+observeEvent(input$steps_only6,  updateCheckboxGroupInput(session, "steps_chk", selected = 6:7))
+observeEvent(input$steps_only7,  updateCheckboxGroupInput(session, "steps_chk", selected = 7))
 observeEvent(input$steps_none,   updateCheckboxGroupInput(session, "steps_chk", selected = character(0)))
 observeEvent(input$steps_after1, updateCheckboxGroupInput(session, "steps_chk", selected = 2:5))
 observeEvent(input$steps_only5,  updateCheckboxGroupInput(session, "steps_chk", selected = 5))
@@ -523,6 +568,10 @@ config_code <- reactive({
     if (!is.na(fg_path())) sprintf("FG_SPECIES_FILE  <- \"%s\"   # species -> FG table", .fwd(fg_path())),
     sprintf("APPLY_CATCHABILITY <- %s   # MEDITS catchability correction", tf(input$catch_q)),
     if (isTRUE(input$catch_q) && !is.na(catch_path())) sprintf("CATCHABILITY_FILE <- \"%s\"   # uploaded catchability table", .fwd(catch_path())),
+    if (!is.na(other_survey())) sprintf("OTHER_SURVEY_FILE <- \"%s\"   # other survey: species, year, density_t_km2", .fwd(other_survey())),
+    if (!is.na(ecospace_depth())) sprintf("ECOSPACE_DEPTH_FILE <- \"%s\"   # Ecospace base map (06b)", .fwd(ecospace_depth())),
+    if (7 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
+    if (7 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
     if (!is.null(survey_files()$TA)) sprintf("MEDITS_TA_FILE   <- \"%s\"   # own MEDITS hauls", .fwd(survey_files()$TA$path)),
     if (!is.null(survey_files()$TB)) sprintf("MEDITS_TB_FILE   <- \"%s\"   # own MEDITS catch", .fwd(survey_files()$TB$path)),
     if (!is.null(survey_files()$TC)) sprintf("MEDITS_TC_FILE   <- \"%s\"   # own MEDITS length/maturity", .fwd(survey_files()$TC$path)),
@@ -847,7 +896,7 @@ output$run_progress <- renderUI({
   })
   tagList(
     tags$div(style = "font-size: 1.15rem; font-weight: 600; margin-bottom: .35rem;",
-             switch(st, running = if (!is.na(current)) paste0("Step ", current, "/6: ", .step_names[current]) else "Starting...",
+             switch(st, running = if (!is.na(current)) paste0("Step ", current, "/7: ", .step_names[current]) else "Starting...",
                     done = "Finished", error = if (.stopped_by_user()) "Stopped" else "Stopped with an error")),
     tags$div(class = "progress mb-2", style = "height: 34px; border-radius: 17px; font-size: 1.05rem;",
              tags$div(class = paste("progress-bar progress-bar-striped", colour, if (st == "running") "progress-bar-animated"),

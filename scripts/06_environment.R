@@ -25,8 +25,8 @@
 ##  The PISCES gap fill keeps 0-ENV_INTEGRATION_DEPTH m: only its
 ##  year-to-year ratio is used, the level comes from MedBFM (see below).
 ##  For each: one GeoTIFF per variable on the native 1/24 deg grid (one
-##  layer per month), monthly ASCII maps on the Ecospace base map
-##  (ECOSPACE_DEPTH_FILE), and the monthly and annual means over the model
+##  layer per month; 06b_ecospace_drivers.R turns them into monthly ASCII
+##  maps on any Ecospace base map), and the monthly and annual means over the model
 ##  area (area-weighted) with the value relative to 1995 (Ecosim forcing).
 ##  Ecopath: phytoplankton B (1995) and P/B (NPP 1994-1995 / B 1995) per
 ##  group (Large / Small phytoplankton).
@@ -420,8 +420,12 @@ ecospace_grid <- if (file.exists(ECOSPACE_DEPTH_FILE)) {
 }
 .env_domain_mean <- function(r) .env_domain_stats(r)$value
 
+## ASCII maps on the Ecospace base map are made by 06b_ecospace_drivers.R
+## (any base map, coastal gaps filled, index file). ENV_WRITE_ASCII = TRUE
+## also writes the old unfilled copies here, in environment/ecospace_asc/.
+.env_default("ENV_WRITE_ASCII", FALSE)
 .env_write_ascii <- function(r, name) {
-  if (is.null(ecospace_grid)) return(invisible())
+  if (is.null(ecospace_grid) || !isTRUE(ENV_WRITE_ASCII)) return(invisible())
   d <- file.path(asc_dir, name); dir.create(d, showWarnings = FALSE)
   a <- terra::resample(r, ecospace_grid, method = "average")
   a <- terra::mask(a, ecospace_grid > 0, maskvalues = c(NA, 0))

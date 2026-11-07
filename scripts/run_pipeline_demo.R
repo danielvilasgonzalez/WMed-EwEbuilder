@@ -198,7 +198,7 @@ RUN_NAME <- wmed_run_name(area_mode = if (.custom_run) "custom" else "westmed",
                           gsas = if (.custom_run) integer(0) else MODEL_GSAS, basis = get0("MODEL_AREA_BASIS", ifnotfound = "whole_gsa"),
                           area_name = get0("AREA_NAME", ifnotfound = NULL), year_ecopath = YEAR_ECOPATH, ts_years = TS_YEARS,
                           fg_file = get0("FG_SPECIES_FILE", ifnotfound = NULL),
-                          own_survey = any(vapply(c("MEDITS_TA_FILE", "MEDITS_TB_FILE", "MEDITS_TC_FILE", "MEDIAS_DIR"),
+                          own_survey = any(vapply(c("MEDITS_TA_FILE", "MEDITS_TB_FILE", "MEDITS_TC_FILE", "MEDIAS_DIR", "OTHER_SURVEY_FILE"),
                                                   function(v) nzchar(get0(v, envir = .GlobalEnv, ifnotfound = "")), logical(1))))
 RUN_DIR <- wmed_run_dir(OUT_BASE_DIR, RUN_NAME)
 out_dir <- RUN_DIR
@@ -232,8 +232,8 @@ source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_interme
 .progress_file <- Sys.getenv("WMED_PROGRESS_FILE", "")
 .progress <- function(txt) if (nzchar(.progress_file)) base::cat(txt, "\n", sep = "", file = .progress_file, append = TRUE)
 .run_step <- function(i, script, note = "") {
-  message(sprintf("\n--- Step %d/6: %s %s---", i, script, note))
-  .progress(sprintf("--- Step %d/6: %s", i, script))
+  message(sprintf("\n--- Step %d/7: %s %s---", i, script, note))
+  .progress(sprintf("--- Step %d/7: %s", i, script))
   t <- Sys.time()
   ## Each script sets options(error = ...) to write errors to its log; put
   ## the session's own handler back afterwards, or every later error in this
@@ -248,9 +248,9 @@ source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_interme
                   call. = FALSE)
            })
   while (sink.number() > 0) sink()
-  message(sprintf("--- Step %d/6 done in %.1f min ---", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
+  message(sprintf("--- Step %d/7 done in %.1f min ---", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
   .step_minutes[[sprintf("%02d", i)]] <<- round(as.numeric(difftime(Sys.time(), t, units = "mins")), 1)
-  .progress(sprintf("--- Step %d/6 done in %.1f min", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
+  .progress(sprintf("--- Step %d/7 done in %.1f min", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
 }
 
 if (1 %in% RUN_STEPS) .run_step(1, "01_biomass.R", "[MEDITS/MEDIAS + unsurveyed groups; the first run after a strata change rebuilds the strata areas from NOAA bathymetry - needs internet] ")
@@ -262,13 +262,18 @@ if (4 %in% RUN_STEPS) .run_step(4, "04_diets.R", "[diet matrix] ")
 if (6 %in% RUN_STEPS)
   tryCatch(.run_step(6, "06_environment.R", "[Copernicus: temperature, salinity, NPP, phytoplankton B and P/B; the first run downloads several GB] "),
            error = function(e) message("06_environment.R failed (the other steps are not affected): ", conditionMessage(e)))
+## 7 = Ecospace drivers: the monthly maps of 06 regridded onto
+## ECOSPACE_DEPTH_FILE (06b_ecospace_drivers.R; no download, minutes).
+if (7 %in% RUN_STEPS)
+  tryCatch(.run_step(7, "06b_ecospace_drivers.R", "[Ecospace: monthly ASCII driver maps on the Ecospace base map] "),
+           error = function(e) message("06b_ecospace_drivers.R failed (the other steps are not affected): ", conditionMessage(e)))
 
 if (!exists("RUN_VALIDATION", envir = .GlobalEnv, inherits = FALSE)) RUN_VALIDATION <- TRUE
 if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
   tryCatch(.run_step(5, "05_diagnostics.R", "[comparison with the 1995 model + all checks] "),
            error = function(e) message("05_diagnostics.R failed (steps 1-4 are complete): ", conditionMessage(e)))
 } else {
-  if (5 %in% RUN_STEPS) message("--- Step 5/6: skipped (RUN_VALIDATION = FALSE) ---")
+  if (5 %in% RUN_STEPS) message("--- Step 5/7: skipped (RUN_VALIDATION = FALSE) ---")
 }
 
 ## Run record: settings, minutes per step, git commit, R and package
@@ -277,7 +282,8 @@ if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
                 "AREA_MODE", "AREA_NAME", "CUSTOM_AREA_TYPE", "CUSTOM_BBOX", "STRATA", "DROP_OUTLIERS", "NORMALIZE_TS",
                 "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE", "HIGH_F_B_FIX",
                 "ECOSIM_CATCH_COUNTRIES", "ECOSIM_CATCH_START_YEAR", "ECOSIM_CATCH_SCALING", "MULTISTANZA_B_SOURCE",
-                "MEDITS_TA_FILE", "MEDITS_TB_FILE", "MEDITS_TC_FILE", "MEDIAS_DIR", "F_MAX", "F_THRESHOLD_FROM_ASSESSMENT")
+                "MEDITS_TA_FILE", "MEDITS_TB_FILE", "MEDITS_TC_FILE", "MEDIAS_DIR", "F_MAX", "F_THRESHOLD_FROM_ASSESSMENT",
+                "ECOSPACE_DEPTH_FILE", "ECOSPACE_DRIVER_STEP", "ECOSPACE_DRIVER_SCALING", "OTHER_SURVEY_FILE")
 .rec_settings <- Filter(Negate(is.null), lapply(stats::setNames(.rec_names, .rec_names), function(n)
   if (exists(n, envir = .GlobalEnv, inherits = FALSE)) get(n, envir = .GlobalEnv) else NULL))
 if (exists("FG_SPECIES_FILE", envir = .GlobalEnv)) .rec_settings$FG_SPECIES_FILE <- basename(FG_SPECIES_FILE)

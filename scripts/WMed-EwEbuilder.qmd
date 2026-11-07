@@ -477,6 +477,8 @@ reference tables, each with a citation per row.
 | 01 | `medits_reference_tables/` | `data/Complementary data/` | strata, manual species overrides, MEDIAS areas, unit factors | yes |
 | 01 | `catchability_factors_ecotrans_medits_2021_spp.csv` | `data/Complementary data/` | catchability q (`APPLY_CATCHABILITY`; or your own `CATCHABILITY_FILE`) | optional |
 | 01 | `manual_density_ecopath.csv`, `manual_density_ecosim.csv` | `data/Complementary data/` | user densities (t/km²) that override any other source | optional |
+| 01 | other survey: csv with `species`, `year`, `density_t_km2` [, `area_km2`, `reference`] (page: Settings → *Survey data* → *Other survey*) | anywhere (`OTHER_SURVEY_FILE`) | any survey with a density per species and year; replaces those species' density in their FG through the manual density override (model-area density = density × `area_km2` / $A_{model}$ when `area_km2` is given); years it does not cover keep the survey value | optional |
+| 07 (06b) | Ecospace base map: depth `.asc` (+ `.prj`) | anywhere (`ECOSPACE_DEPTH_FILE`; default `data/Bathymetry/depth_wmed.asc`) | grid of the Ecospace driver maps | optional |
 | 01, 02 | own MEDITS `TA`, `TB`, `TC` and MEDIAS `abundance`, `biomass` files (page: Settings → *Survey data*) | anywhere (`MEDITS_TA_FILE`, `MEDITS_TB_FILE`, `MEDITS_TC_FILE`, `MEDIAS_DIR`) | replace the 2024 MEDBS survey files; same exchange-format columns; a run with them goes to its own folder (`…__survey-own`) | optional |
 | 02 | `assessment_F_thresholds.csv` | `data/Complementary data/` | F threshold per species (species, F_max, reference), ahead of RAM Legacy | optional |
 | 01 | `small_pelagics_acoustic_pre_medias.csv`, `multistanza_reference_tables/` | `data/Complementary data/` | pre-MEDIAS acoustics; hake stanza parameters | yes |
@@ -2541,8 +2543,7 @@ area differs inside itself, not an error of the model. Years filled from
 PISCES are shaded.
 
 Outputs in `out_dir/environment/`: one GeoTIFF per variable on the
-native 1/24° grid (one layer per month), monthly ASCII maps on the
-Ecospace base map `data/Bathymetry/depth_wmed.asc` (`ecospace_asc/`),
+native 1/24° grid (one layer per month), the input of 06b below,
 `environment_timeseries_monthly.csv` and `_annual.csv` (with the value
 relative to 1995, the Ecosim forcing shape),
 `ecopath_phytoplankton_B_PB.csv`, and `diagnostics/` (units and depth
@@ -2554,6 +2555,36 @@ levels of every file, gap-fill ratios, satellite size classes).
 #| echo: false
 wm_figure("fig-environment", r"---(Environment of the model area over the run's years: monthly (grey) and annual (red) area-weighted means, with the 10th-90th percentile across grid cells as the band; shaded years are PISCES scaled to MedBFM; dashed line = Ecopath year.)---", "environment_timeseries.png", r"---(06_environment.R)---")
 ```
+
+### Ecospace driver maps (`06b_ecospace_drivers.R`)
+
+06b turns the monthly maps of 06 into Ecospace input maps on the
+user's own base map: a depth ESRI ASCII grid (`ECOSPACE_DEPTH_FILE`,
+page: Settings → *Ecospace drivers*), at any resolution and extent
+inside the Western Med box, in lon/lat or, with its `.prj`, any
+projection. Depth > 0 = water; a grid of negative depths (bathymetry)
+is read as −depth. 06b downloads nothing, so it reruns in minutes for a
+new base map (step "06b Ecospace maps"; 06 must have run once).
+
+Per variable and month:
+
+1. Regrid with `terra::project()`: area mean of the native 1/24° cells
+   in each base-map cell when the base map is coarser, bilinear when it
+   is finer.
+2. Water cells left empty by the native land mask (coast, narrow
+   bays) take the mean of their valid neighbours (3 × 3 window, up to
+   `ECOSPACE_FILL_PASSES` = 10 passes); any cell still empty takes the
+   month's map mean. Land = NODATA (−9999).
+3. `ECOSPACE_DRIVER_SCALING`: `"absolute"` (°C, PSU, g C m⁻² d⁻¹,
+   g C m⁻²) or `"relative"` (value / the base-year map mean, as the
+   Ecosim forcing). `ECOSPACE_DRIVER_STEP`: `"monthly"` or `"annual"`.
+
+Outputs in `environment/ecospace_drivers/<base map>/`: `<var>/<var>_<YYYY>_<MM>.asc`
+(same `ncols`, `nrows`, corner and cell size as the depth file),
+`ecospace_driver_index.csv` (time step, year, month, file, cells
+filled, mean, min, max) and `ecospace_driver_mean_maps.png`. Tested
+on the 1/6° base map (one coastal cell filled per month), a 1/36° grid
+(2% of the cells filled, bilinear) and a 10 km EPSG:3035 grid.
 
 ## Known limitations {#sec-open-issues .unnumbered}
 
