@@ -328,7 +328,7 @@ output$fg_summary <- renderUI({
 ## run). Until a script has run here, the times of the Windows run of
 ## 2026-10-29 are used. 01 is slower the first time after a change of GSAs
 ## (bathymetry download).
-.step_min_default <- c(6.8, 11.7, 4.9, 5.1, 1.6, 15)   # 06: a rerun with the years cached; the first run takes hours
+.step_min_default <- c(6.8, 11.7, 4.9, 5.1, 1.6, 15, 2)   # 06: a rerun with the years cached; the first run takes hours; 06b: minutes
 .step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 diagnostics", "06 environment", "06b Ecospace maps")
 
 ## --- Custom region from an uploaded shapefile / polygon file ---------------
@@ -644,6 +644,7 @@ run_note <- reactiveVal("")
     x <- utils::tail(h$minutes[h$step == k & is.finite(h$minutes)], 5)
     if (length(x)) d[k] <- stats::median(x)
   }
+  d[!is.finite(d)] <- 2   # a script with no timing yet
   d
 }
 
