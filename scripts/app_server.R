@@ -79,7 +79,8 @@ run_target <- reactiveVal(NULL)   # output folder of the run started from this p
     area_mode = if (custom) "custom" else "westmed", gsas = if (custom) integer(0) else as.integer(input$gsas),
     basis = if (is.null(input$basis)) "whole_gsa" else input$basis, area_name = input$area_name,
     year_ecopath = yr(input$ecopath_years), ts_years = yr(input$ts_years),
-    fg_file = { f <- fg_path(); if (is.null(f) || is.na(f)) NULL else f }))
+    fg_file = { f <- fg_path(); if (is.null(f) || is.na(f)) NULL else f },
+    own_survey = length(survey_files()) > 0))
 }
 .run_label <- function(d) {
   if (is.null(d) || is.na(d)) return("-")
@@ -96,6 +97,55 @@ observeEvent(input$catch_upload, {   # an uploaded catchability table is kept ne
     showNotification("The catchability table needs columns ScientificName and q.", type = "error"); return() }
   catch_path(normalizePath(dest))
   showNotification(sprintf("Catchability table loaded: %d species.", nrow(x)), duration = 5)
+})
+## --- Own survey data (MEDITS TA/TB/TC, MEDIAS abundance/biomass) ---------
+## Uploaded files are kept in <run files>/survey_upload/ and recognised by
+## their columns (MEDITS / MEDIAS exchange formats); the run then reads
+## them instead of the default 2024 MEDBS survey files (MEDITS_TA_FILE,
+## MEDITS_TB_FILE, MEDITS_TC_FILE, MEDIAS_DIR). A file not uploaded keeps
+## the default. Runs with own survey data go to their own output folder.
+survey_files <- reactiveVal(list())
+.survey_dir <- file.path(.run_dir, "survey_upload")
+.survey_kind <- function(path, name) {
+  h <- tryCatch(tolower(gsub("\\s+", "", names(data.table::fread(path, nrows = 0)))), error = function(e) character(0))
+  nm <- tolower(name)
+  has <- function(...) all(c(...) %in% h)
+  if (has("ptot", "genus", "species", "haul_number")) return("TB")
+  if (has("haul_number", "distance", "wing_opening")) return("TA")
+  if (has("genus", "species", "length_class") || has("genus", "species", "nblon")) return("TC")
+  if (any(grepl("^lengthclass", h)) && has("species", "area", "year"))
+    return(if (grepl("abund", nm)) "MEDIAS_abundance" else if (grepl("biom", nm)) "MEDIAS_biomass" else "MEDIAS_?")
+  NA_character_
+}
+observeEvent(input$survey_upload, {
+  up <- input$survey_upload
+  dir.create(.survey_dir, recursive = TRUE, showWarnings = FALSE)
+  cur <- survey_files(); msg <- character(0)
+  for (i in seq_len(nrow(up))) {
+    k <- .survey_kind(up$datapath[i], up$name[i])
+    if (is.na(k) || k == "MEDIAS_?") {
+      msg <- c(msg, paste0(up$name[i], ": not recognised", if (identical(k, "MEDIAS_?")) " (MEDIAS file: put 'abundance' or 'biomass' in its name)" else
+        " (needs the MEDITS TA/TB/TC or MEDIAS columns)")); next }
+    dest <- if (startsWith(k, "MEDIAS")) file.path(.survey_dir, "MEDIAS", paste0(sub("MEDIAS_", "", k), ".csv")) else file.path(.survey_dir, paste0(k, ".csv"))
+    dir.create(dirname(dest), recursive = TRUE, showWarnings = FALSE)
+    file.copy(up$datapath[i], dest, overwrite = TRUE)
+    cur[[k]] <- list(path = normalizePath(dest), name = up$name[i])
+    msg <- c(msg, paste0(up$name[i], " -> ", k))
+  }
+  if (xor(!is.null(cur$MEDIAS_abundance), !is.null(cur$MEDIAS_biomass)))
+    msg <- c(msg, "MEDIAS needs both abundance and biomass files - upload the other one, or the default MEDIAS is used.")
+  survey_files(cur)
+  showNotification(HTML(paste(msg, collapse = "<br>")), duration = 10, type = if (any(grepl("not recognised|needs both", msg))) "warning" else "message")
+})
+observeEvent(input$survey_reset, { survey_files(list()); showNotification("Default survey data (2024 MEDBS) will be used.", duration = 5) })
+output$survey_status <- renderUI({
+  f <- survey_files()
+  lab <- c(TA = "MEDITS hauls (TA)", TB = "MEDITS catch (TB)", TC = "MEDITS length/maturity (TC)",
+           MEDIAS_abundance = "MEDIAS abundance", MEDIAS_biomass = "MEDIAS biomass")
+  rows <- lapply(names(lab), function(k) tags$tr(tags$td(lab[[k]]),
+    tags$td(if (!is.null(f[[k]])) tags$strong(f[[k]]$name) else tags$span(class = "text-muted", "default (2024 MEDBS)"))))
+  tagList(tags$table(class = "table table-sm mb-1", style = "font-size:.85rem;", rows),
+          if (length(f)) tags$div(class = "wm-help", "Runs with your own survey files go to their own output folder (…__survey-own)."))
 })
 observeEvent(input$fg_upload, {   # an uploaded csv is kept next to the run files so the run can read it
   dest <- file.path(.run_dir, paste0("uploaded_", gsub("[^A-Za-z0-9_.-]", "_", input$fg_upload$name)))
@@ -473,6 +523,11 @@ config_code <- reactive({
     if (!is.na(fg_path())) sprintf("FG_SPECIES_FILE  <- \"%s\"   # species -> FG table", .fwd(fg_path())),
     sprintf("APPLY_CATCHABILITY <- %s   # MEDITS catchability correction", tf(input$catch_q)),
     if (isTRUE(input$catch_q) && !is.na(catch_path())) sprintf("CATCHABILITY_FILE <- \"%s\"   # uploaded catchability table", .fwd(catch_path())),
+    if (!is.null(survey_files()$TA)) sprintf("MEDITS_TA_FILE   <- \"%s\"   # own MEDITS hauls", .fwd(survey_files()$TA$path)),
+    if (!is.null(survey_files()$TB)) sprintf("MEDITS_TB_FILE   <- \"%s\"   # own MEDITS catch", .fwd(survey_files()$TB$path)),
+    if (!is.null(survey_files()$TC)) sprintf("MEDITS_TC_FILE   <- \"%s\"   # own MEDITS length/maturity", .fwd(survey_files()$TC$path)),
+    if (!is.null(survey_files()$MEDIAS_abundance) && !is.null(survey_files()$MEDIAS_biomass))
+      sprintf("MEDIAS_DIR       <- \"%s\"   # own MEDIAS abundance.csv + biomass.csv", .fwd(dirname(survey_files()$MEDIAS_biomass$path))),
     sprintf("HIGH_F_B_FIX     <- \"%s\"   # FGs with F > 1: none / min_from_catch / ecopath_estimate", if (is.null(input$high_f)) "none" else input$high_f),
     sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (06)", if (is.null(input$phyto_src)) "isimip" else input$phyto_src))
   head <- c(sprintf("## WMed-EwEbuilder settings - from WMed-EwEbuilder.qmd, %s", format(Sys.time(), "%Y-%m-%d %H:%M")),

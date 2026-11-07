@@ -3379,7 +3379,8 @@ if (nrow(multistanza_fg_pairs) == 0) {
 ## length of the adult-stanza age (see
 ## compute_stanza_catch_split_from_length(), lib_survey_fg_density_functions.R).
 if (nrow(multistanza_fg_pairs) > 0 && nrow(multistanza_age_split) == 0) {
-  TC_FILE_02 <- resolve_pcloud_file(paste0(pcloud_dir, "/data/Medits_Medias_JRC2026/2024_MEDBSsurvey/Demersal/TC.csv"), pcloud_dir, required = FALSE)
+  TC_FILE_02 <- if (exists("MEDITS_TC_FILE", envir = .GlobalEnv, inherits = FALSE) && file.exists(MEDITS_TC_FILE)) MEDITS_TC_FILE else   # your own TC (page upload) or the default
+    resolve_pcloud_file(paste0(pcloud_dir, "/data/Medits_Medias_JRC2026/2024_MEDBSsurvey/Demersal/TC.csv"), pcloud_dir, required = FALSE)
   multistanza_age_split <- compute_stanza_catch_split_from_length(multistanza_fg_pairs, TC_FILE_02, year_range = YEAR_ECOPATH, area_filter = FILTER_AREAS)
   if (nrow(multistanza_age_split)) fwrite(multistanza_age_split, file.path(csv_out_dir, "multistanza_juv_adult_age_split.csv"))
 }
@@ -7345,19 +7346,73 @@ if (!file.exists(SPECIES_DENSITY_PATH)) {
   if (!exists("HIGH_F_B_FIX", envir = .GlobalEnv, inherits = FALSE)) HIGH_F_B_FIX <- "none"
   if (!exists("F_MAX", envir = .GlobalEnv, inherits = FALSE)) F_MAX <- 1
   if (!exists("HIGH_F_EE", envir = .GlobalEnv, inherits = FALSE)) HIGH_F_EE <- 0.95
-  hi <- f_by_fg[is.finite(F) & F > F_MAX]
+  ## --- F threshold per FG from the stock assessments ------------------
+  ## Exploited species can have F > 1 in their assessments (Mediterranean
+  ## hake, red shrimp, red mullet), so F > 1 alone flags them although the
+  ## value is plausible. Threshold per FG:
+  ##   F_thr(f) = max(F_MAX, max assessed F of the FG's species)
+  ## assessed F = the highest annual F of any stock of the species in the
+  ## model GSAs, from (1) your table F_THRESHOLD_FILE (default
+  ## data/Complementary data/assessment_F_thresholds.csv: species,
+  ## F_max, reference), else (2) RAM Legacy v4.44 (Ricard et al. 2012;
+  ## STECF/GFCM assessments, timeseries F). FGs with no assessed species
+  ## keep F_MAX. Written to assessment_F_threshold_by_fg.csv.
+  if (!exists("F_THRESHOLD_FROM_ASSESSMENT", envir = .GlobalEnv, inherits = FALSE)) F_THRESHOLD_FROM_ASSESSMENT <- TRUE
+  if (!exists("F_THRESHOLD_FILE", envir = .GlobalEnv, inherits = FALSE))
+    F_THRESHOLD_FILE <- file.path(pcloud_dir, "data/Complementary data/assessment_F_thresholds.csv")
+  f_thr_sp <- data.table(species = character(), F_max_assessed = numeric(), F_source = character())
+  if (isTRUE(F_THRESHOLD_FROM_ASSESSMENT)) {
+    .ram_rd <- list.files(file.path(pcloud_dir, "data/fisheries/STAR_RAMLegacy/ram_legacy_cache"), "^DBdata\\.RData$", recursive = TRUE, full.names = TRUE)
+    if (length(.ram_rd)) tryCatch({
+      .e <- new.env(); load(.ram_rd[1], envir = .e)
+      .st <- as.data.table(.e$stock)[, .(stockid, species = scientificname)]
+      .tv <- as.data.table(.e$timeseries_values_views)[is.finite(F), .(stockid, year, F)]
+      .g <- regmatches(.st$stockid, regexpr("GSA[0-9-]+$", .st$stockid))
+      .st <- .st[grepl("GSA[0-9-]+$", stockid)][, gsa_txt := .g]
+      .st[, in_model := vapply(sub("^GSA", "", gsa_txt), function(z) {
+        v <- suppressWarnings(as.integer(strsplit(z, "-", fixed = TRUE)[[1]])); v <- v[!is.na(v)]
+        length(v) > 0 && any(seq(min(v), max(v)) %in% FILTER_AREAS) }, logical(1))]
+      .r <- merge(.tv, .st[in_model == TRUE], by = "stockid")
+      if (nrow(.r)) f_thr_sp <- .r[, .(F_max_assessed = max(F), F_source = paste0("RAM Legacy v4.44: max F of ",
+                                     paste(unique(stockid), collapse = ", "), " (", min(year), "-", max(year), ")")), by = species]
+    }, error = function(e) message("[F] RAM Legacy F not read: ", conditionMessage(e)))
+    if (file.exists(F_THRESHOLD_FILE)) {
+      .u <- tryCatch(fread(F_THRESHOLD_FILE), error = function(e) NULL)
+      if (!is.null(.u) && all(c("species", "F_max") %in% names(.u)) && nrow(.u)) {
+        .u <- .u[is.finite(as.numeric(F_max)), .(species = trimws(species), F_max_assessed = as.numeric(F_max),
+                                                 F_source = paste0("your table (", basename(F_THRESHOLD_FILE), ")",
+                                                                   if ("reference" %in% names(.u)) paste0(": ", reference) else ""))]
+        f_thr_sp <- rbind(.u, f_thr_sp[!species %in% .u$species])
+      }
+    }
+  }
+  .fg_sp <- unique(fg[, .(species = trimws(ESPECIE), FG_num = GF)])
+  f_thr_fg <- merge(.fg_sp, f_thr_sp, by = "species")[, .(F_max_assessed = max(F_max_assessed),
+                     assessed_species = paste(unique(species), collapse = ", "), F_source = paste(unique(F_source), collapse = " | ")), by = FG_num]
+  f_by_fg[, F_threshold := F_MAX]
+  f_by_fg[f_thr_fg, on = "FG_num", F_threshold := pmax(F_MAX, i.F_max_assessed)]
+  if (nrow(f_thr_fg)) {
+    fwrite(merge(f_by_fg[, .(FG_num, FG_name, F, F_threshold)], f_thr_fg, by = "FG_num"),
+           file.path(csv_out_dir, "assessment_F_threshold_by_fg.csv"))
+    message("[F] F threshold from stock assessments for ", nrow(f_thr_fg), " FG(s) (else F_MAX = ", F_MAX, "): ",
+            paste(f_by_fg[f_thr_fg, on = "FG_num", sprintf("%s %.2g", FG_name, F_threshold)], collapse = "; "),
+            " -> assessment_F_threshold_by_fg.csv.")
+  }
+  hi <- f_by_fg[is.finite(F) & F > F_threshold]
   if (nrow(hi)) {
-    hi_out <- hi[, .(FG_num, FG_name, B_before = Biomass_density_avg, Catch_density_avg, F_before = F,
+    hi_out <- hi[, .(FG_num, FG_name, B_before = Biomass_density_avg, Catch_density_avg, F_before = F, F_threshold,
                      action = HIGH_F_B_FIX,
-                     B_after = switch(HIGH_F_B_FIX, min_from_catch = Catch_density_avg / F_MAX, ecopath_estimate = NA_real_, Biomass_density_avg))]
+                     B_after = switch(HIGH_F_B_FIX, min_from_catch = Catch_density_avg / F_threshold, ecopath_estimate = NA_real_, Biomass_density_avg))]
     fwrite(hi_out, file.path(csv_out_dir, "high_F_REVIEW.csv"))
-    message("[F] ", nrow(hi), " FG(s) with F > ", F_MAX, ": ", paste(sprintf("%s (%.2g)", hi$FG_name, hi$F), collapse = ", "),
+    message("[F] ", nrow(hi), " FG(s) with F above their threshold (F_MAX = ", F_MAX, ", or the assessed F): ",
+            paste(sprintf("%s (%.2g > %.2g)", hi$FG_name, hi$F, hi$F_threshold), collapse = ", "),
             " - HIGH_F_B_FIX = \"", HIGH_F_B_FIX, "\" (high_F_REVIEW.csv).")
     if (HIGH_F_B_FIX %in% c("min_from_catch", "ecopath_estimate") && file.exists(ECOPATH_WORKBOOK_PATH)) tryCatch({
       eb <- as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, "Ecopath_B", check.names = FALSE, sep.names = " "))
       k <- eb$FG_num %in% hi$FG_num
-      note <- if (HIGH_F_B_FIX == "min_from_catch") sprintf("B set to catch / F_MAX (F_MAX = %s; survey B gave F > %s) - HIGH_F_B_FIX", F_MAX, F_MAX) else
-        sprintf("B left to Ecopath (EE = %s; survey B gave F > %s) - HIGH_F_B_FIX", HIGH_F_EE, F_MAX)
+      .thr <- hi_out$F_threshold[match(eb$FG_num[k], hi_out$FG_num)]
+      note <- if (HIGH_F_B_FIX == "min_from_catch") sprintf("B set to catch / F threshold (%s; survey B gave a higher F) - HIGH_F_B_FIX", signif(.thr, 3)) else
+        sprintf("B left to Ecopath (EE = %s; survey B gave F > threshold %s) - HIGH_F_B_FIX", HIGH_F_EE, signif(.thr, 3))
       if (HIGH_F_B_FIX == "min_from_catch") {
         eb[k, Biomass := hi_out$B_after[match(FG_num, hi_out$FG_num)]]
       } else {

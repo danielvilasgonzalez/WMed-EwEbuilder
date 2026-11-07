@@ -6512,3 +6512,34 @@ fishbase_memo <- function(fn_name, server, args, fetch) {
   }
   res
 }
+
+## Mean body mass (kg) of one species from SeaLifeBase (marine mammals,
+## turtles, seabirds, invertebrates):
+##   1. length-weight relationship (poplw): W = a L^b, a and b the median
+##      over the SeaLifeBase records, L = CommonLength (else the maximum
+##      Length) of the species table, W in g;
+##   2. else the species table's maximum Weight (g) - an upper value;
+##   3. else NA (the caller keeps its own value).
+## Uses the shared FishBase/SeaLifeBase snapshot (fishbase_memo).
+sealifebase_body_mass_kg <- function(species) {
+  if (!requireNamespace("rfishbase", quietly = TRUE)) return(list(kg = NA_real_, how = "rfishbase not installed"))
+  sp <- tryCatch(data.table::as.data.table(fishbase_memo("rfishbase::species", "sealifebase", list(species),
+                   function() rfishbase::species(species, server = "sealifebase"))), error = function(e) NULL)
+  if (is.null(sp) || !nrow(sp)) return(list(kg = NA_real_, how = "not in SeaLifeBase"))
+  num <- function(v) suppressWarnings(as.numeric(v))
+  L <- if ("CommonLength" %in% names(sp) && is.finite(num(sp$CommonLength[1]))) num(sp$CommonLength[1]) else
+    if ("Length" %in% names(sp)) num(sp$Length[1]) else NA_real_
+  L_lab <- if ("CommonLength" %in% names(sp) && is.finite(num(sp$CommonLength[1]))) "common length" else "maximum length"
+  lw <- tryCatch(data.table::as.data.table(fishbase_memo("rfishbase::poplw", "sealifebase", list(species),
+                   function() rfishbase::poplw(species, server = "sealifebase"))), error = function(e) NULL)
+  if (!is.null(lw) && nrow(lw) && all(c("a", "b") %in% names(lw)) && is.finite(L)) {
+    a <- stats::median(num(lw$a), na.rm = TRUE); b <- stats::median(num(lw$b), na.rm = TRUE)
+    if (is.finite(a) && is.finite(b)) {
+      w <- a * L^b / 1000
+      if (is.finite(w) && w > 0) return(list(kg = w, how = sprintf("length-weight W = %.3g L^%.3g (median of %d record(s)) at %s %s cm", a, b, nrow(lw), L_lab, L)))
+    }
+  }
+  if ("Weight" %in% names(sp) && is.finite(num(sp$Weight[1])) && num(sp$Weight[1]) > 0)
+    return(list(kg = num(sp$Weight[1]) / 1000, how = "maximum weight in the species table (an upper value)"))
+  list(kg = NA_real_, how = paste0("no length-weight relationship or weight in SeaLifeBase (", L_lab, " ", L, " cm)"))
+}

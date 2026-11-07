@@ -1200,6 +1200,41 @@ load_manual_cited_biomass_group <- function(csv_path, taxon_keywords, label, rev
               paste(unique(raw$Group[hit_mad]), collapse = ", "))
     }
   }
+  ## Optional Species + Body_mass_kg: the species and the mean body mass
+  ## the row's biomass was computed with (count or density x body mass).
+  ## With BODY_MASS_FROM_SEALIFEBASE (default TRUE) the body mass is taken
+  ## from SeaLifeBase when it has one, and the row is rescaled:
+  ##   B_new = B_row x M_SLB / Body_mass_kg
+  ## M_SLB (sealifebase_body_mass_kg(), lib_survey_fg_density_functions.R):
+  ## the SeaLifeBase length-weight relationship W = a L^b at the species'
+  ## common length (else its maximum length), else the SeaLifeBase maximum
+  ## weight. Neither -> the row's own Body_mass_kg is kept. Logged in
+  ## Source_citation and body_mass_sealifebase_REVIEW.csv.
+  col_sp <- resolve_iccat_col(names(raw), c("Species", "ScientificName"))
+  col_bm <- resolve_iccat_col(names(raw), c("Body_mass_kg"))
+  if (!exists("BODY_MASS_FROM_SEALIFEBASE", envir = .GlobalEnv, inherits = FALSE)) BODY_MASS_FROM_SEALIFEBASE <- TRUE
+  if (isTRUE(BODY_MASS_FROM_SEALIFEBASE) && !is.na(col_sp) && !is.na(col_bm) && exists("sealifebase_body_mass_kg", mode = "function")) {
+    .bm_log <- list()
+    for (i in which(nzchar(trimws(as.character(raw[[col_sp]]))) & is.finite(suppressWarnings(as.numeric(raw[[col_bm]]))))) {
+      sp_i <- trimws(as.character(raw[[col_sp]][i])); m0 <- as.numeric(raw[[col_bm]][i])
+      slb <- tryCatch(sealifebase_body_mass_kg(sp_i), error = function(e) list(kg = NA_real_, how = conditionMessage(e)))
+      .bm_log[[length(.bm_log) + 1]] <- data.table(Group = raw$Group[i], Species = sp_i, Body_mass_kg_row = m0,
+                                                   Body_mass_kg_sealifebase = slb$kg, how = slb$how,
+                                                   factor = if (is.finite(slb$kg)) slb$kg / m0 else 1)
+      if (!is.finite(slb$kg) || slb$kg <= 0) next
+      f <- slb$kg / m0
+      raw[i, group_biomass_t := group_biomass_t * f]
+      if ("Model_area_density_t_km2" %in% names(raw)) raw[i, Model_area_density_t_km2 := Model_area_density_t_km2 * f]
+      raw[i, Source_citation := paste0(Source_citation, " | BODY MASS: ", signif(slb$kg, 4), " kg from SeaLifeBase (", slb$how,
+                                       ") instead of ", m0, " kg - biomass x ", signif(f, 3), " (BODY_MASS_FROM_SEALIFEBASE).")]
+    }
+    if (length(.bm_log)) {
+      .bm_log <- rbindlist(.bm_log, fill = TRUE)
+      fwrite(.bm_log, file.path(csv_out_dir, "body_mass_sealifebase_REVIEW.csv"))
+      message("[", label, "] Body mass from SeaLifeBase: ", paste(sprintf("%s %s kg (was %s; %s)", .bm_log$Species,
+              signif(.bm_log$Body_mass_kg_sealifebase, 4), .bm_log$Body_mass_kg_row, .bm_log$how), collapse = "; "))
+    }
+  }
   ## Optional Count_GSAs: a COUNT row (Biomass_t is a regional total, not a
   ## density) for the GSAs listed here, e.g. "6,7,8,9". Only the share of
   ## those GSAs inside the model area is kept (share by GSA polygon area),

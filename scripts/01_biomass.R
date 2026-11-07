@@ -395,6 +395,29 @@ message("[01_biomass.R] Species -> FG file: ", fg_species_file)
 #downloaded from MEDITS website
 tm_list_file     <- resolve_pcloud_file(paste0(pcloud_dir,"/data/Medits_Medias_JRC2026/2024_MEDBSsurvey/TM_list_(April_2019).xlsx"), pcloud_dir)
 
+## --- Survey data files (MEDITS trawl, MEDIAS acoustic) ------------------
+## Default: the 2024 MEDBS survey data in the data folder. Your own files
+## (a newer data call, another survey in the same MEDITS/MEDIAS format)
+## replace them with these settings - the page's "Survey data" upload
+## writes them:
+##   MEDITS_TA_FILE  hauls (TA: country, area, vessel, year, haul_number, distance, wing_opening, depths, positions)
+##   MEDITS_TB_FILE  catch per haul (TB: same haul keys + genus, species, ptot)
+##   MEDITS_TC_FILE  length / maturity (TC; hake stanzas, optional)
+##   MEDIAS_DIR      folder with MEDIAS abundance.csv and biomass.csv
+## Same column names as the MEDITS / MEDIAS exchange formats (MEDITS
+## Handbook; MEDIAS Handbook). A file not given keeps the default.
+.survey_default_dir <- file.path(pcloud_dir, "data/Medits_Medias_JRC2026/2024_MEDBSsurvey")
+.survey_file <- function(var, default) {
+  v <- get0(var, envir = .GlobalEnv, inherits = FALSE)
+  if (!is.null(v) && nzchar(v) && file.exists(v)) { message("[Survey data] ", var, " = ", v, " (your file)"); return(v) }
+  if (!is.null(v) && nzchar(v)) message("[Survey data] ", var, " = ", v, " not found - using the default ", basename(default))
+  default
+}
+MEDITS_TA_FILE <- .survey_file("MEDITS_TA_FILE", file.path(.survey_default_dir, "Demersal/TA.csv"))
+MEDITS_TB_FILE <- .survey_file("MEDITS_TB_FILE", file.path(.survey_default_dir, "Demersal/TB.csv"))
+MEDITS_TC_FILE <- .survey_file("MEDITS_TC_FILE", file.path(.survey_default_dir, "Demersal/TC.csv"))
+MEDIAS_DIR     <- .survey_file("MEDIAS_DIR", file.path(.survey_default_dir, "Acoustic"))
+
 ## plot_dir is INSIDE out_dir (out_dir/plots/biomass), not two directories
 ## up from it - both are created (recursive=TRUE, in case the full parent
 ## path doesn't exist yet) rather than assuming either already exists.
@@ -794,7 +817,7 @@ fg_raw <- fread(fg_species_file)
 dataframe2 <- unique(fg_raw[, .(ScientificName = species, FG_num = FG_number, FG_name)])
 
 ## --- dataframe1: MEDITS' TA.csv (samples/hauls) + TB.csv (catch) -----------
-ta <- read_csv(file.path(pcloud_dir,"data/Medits_Medias_JRC2026/2024_MEDBSsurvey/Demersal/TA.csv"), show_col_types = FALSE)
+ta <- read_csv(MEDITS_TA_FILE, show_col_types = FALSE)
 
 ## TS_YEARS' default end year is the actual last year present in TA.csv,
 ## not a hardcoded literal - only when TS_YEARS wasn't already pre-set
@@ -859,7 +882,7 @@ ta_swept <- ta %>%
   dplyr::select(SampleID, swept_area_km2, mean_depth,
                 shooting_latitude, shooting_longitude)
 
-tb <- read_csv(file.path(pcloud_dir, "data/Medits_Medias_JRC2026/2024_MEDBSsurvey/Demersal/TB.csv"), show_col_types = FALSE)
+tb <- read_csv(MEDITS_TB_FILE, show_col_types = FALSE)
 tb <- tb %>%
   mutate(
     species_code = paste0(genus, species),
@@ -2000,7 +2023,7 @@ if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa
   ##    (reusing compute_strata_area_by_area() from the shared library)
   ##    for any GSA/country combination Table 1 doesn't cover.
   ## =================================================================
-  medias_dir  <- paste0(pcloud_dir, "/data/Medits_Medias_JRC2026/2024_MEDBSsurvey/Acoustic/")
+  medias_dir  <- MEDIAS_DIR
   ## ASFIS species list, downloaded from https://www.fao.org/fishery/collection/asfis/en
   asfis_file  <- resolve_pcloud_file(paste0(pcloud_dir, "/data/ASFIS_sp_2026.1.csv"), pcloud_dir)
   
@@ -2869,7 +2892,7 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
     ## cutoff assumption (default: matsub stage 1 = juvenile, 2A+ = adult)
     ## and for code_overrides if a species' genus/species MEDITS code isn't
     ## the standard 4+3-letter truncation.
-    TC_SURVEY_FILE <- resolve_pcloud_file(paste0(pcloud_dir, "/data/Medits_Medias_JRC2026/2024_MEDBSsurvey/Demersal/TC.csv"), pcloud_dir)
+    TC_SURVEY_FILE <- MEDITS_TC_FILE
     multistanza_age_proportion <- if (file.exists(TC_SURVEY_FILE)) {
       ## Restricted to the Ecopath baseline years and the study GSAs - the
       ## raw TC.csv covers every MEDITS country/GSA/year (Black Sea, Aegean...).

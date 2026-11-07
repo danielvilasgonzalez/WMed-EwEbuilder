@@ -197,7 +197,9 @@ OUT_BASE_DIR <- sub("/+$", "", out_dir)   # the main output folder, from wmed_se
 RUN_NAME <- wmed_run_name(area_mode = if (.custom_run) "custom" else "westmed",
                           gsas = if (.custom_run) integer(0) else MODEL_GSAS, basis = get0("MODEL_AREA_BASIS", ifnotfound = "whole_gsa"),
                           area_name = get0("AREA_NAME", ifnotfound = NULL), year_ecopath = YEAR_ECOPATH, ts_years = TS_YEARS,
-                          fg_file = get0("FG_SPECIES_FILE", ifnotfound = NULL))
+                          fg_file = get0("FG_SPECIES_FILE", ifnotfound = NULL),
+                          own_survey = any(vapply(c("MEDITS_TA_FILE", "MEDITS_TB_FILE", "MEDITS_TC_FILE", "MEDIAS_DIR"),
+                                                  function(v) nzchar(get0(v, envir = .GlobalEnv, ifnotfound = "")), logical(1))))
 RUN_DIR <- wmed_run_dir(OUT_BASE_DIR, RUN_NAME)
 out_dir <- RUN_DIR
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
@@ -274,7 +276,8 @@ if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
 .rec_names <- c("RUN_STEPS", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
                 "AREA_MODE", "AREA_NAME", "CUSTOM_AREA_TYPE", "CUSTOM_BBOX", "STRATA", "DROP_OUTLIERS", "NORMALIZE_TS",
                 "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE", "HIGH_F_B_FIX",
-                "ECOSIM_CATCH_COUNTRIES", "ECOSIM_CATCH_START_YEAR", "ECOSIM_CATCH_SCALING", "MULTISTANZA_B_SOURCE")
+                "ECOSIM_CATCH_COUNTRIES", "ECOSIM_CATCH_START_YEAR", "ECOSIM_CATCH_SCALING", "MULTISTANZA_B_SOURCE",
+                "MEDITS_TA_FILE", "MEDITS_TB_FILE", "MEDITS_TC_FILE", "MEDIAS_DIR", "F_MAX", "F_THRESHOLD_FROM_ASSESSMENT")
 .rec_settings <- Filter(Negate(is.null), lapply(stats::setNames(.rec_names, .rec_names), function(n)
   if (exists(n, envir = .GlobalEnv, inherits = FALSE)) get(n, envir = .GlobalEnv) else NULL))
 if (exists("FG_SPECIES_FILE", envir = .GlobalEnv)) .rec_settings$FG_SPECIES_FILE <- basename(FG_SPECIES_FILE)

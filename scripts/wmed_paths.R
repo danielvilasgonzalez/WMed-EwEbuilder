@@ -231,14 +231,16 @@ wmed_save_local_config <- function(git_dir, out_dir = NULL, pcloud_dir = NULL, l
 ## are shared by every run. Used by run_pipeline_demo.R and the page.
 wmed_run_name <- function(area_mode = "westmed", gsas = 1:12, basis = "whole_gsa", area_name = NULL,
                           year_ecopath = 1994:1996, ts_years = 1995:2023, fg_file = NULL,
-                          default_fg = "FG_WMed_2026.csv") {
+                          default_fg = "FG_WMed_2026.csv", own_survey = FALSE) {
+  ## own_survey = TRUE (your own MEDITS/MEDIAS files): always its own
+  ## folder, "__survey-own", so it never overwrites the default run
   rng <- function(v) { v <- range(as.integer(v)); if (v[1] == v[2]) v[1] else paste(v, collapse = "-") }
   gsas <- sort(unique(as.integer(gsas)))
   custom <- identical(area_mode, "custom")
   fg <- if (is.null(fg_file) || is.na(fg_file) || !nzchar(fg_file)) default_fg else basename(fg_file)
   is_default <- !custom && identical(gsas, 1:12) && identical(basis, "whole_gsa") &&
     identical(as.integer(range(year_ecopath)), c(1994L, 1996L)) && identical(as.integer(range(ts_years)), c(1995L, 2023L)) &&
-    identical(fg, default_fg)
+    identical(fg, default_fg) && !isTRUE(own_survey)
   if (is_default) return("")
   area <- if (custom) gsub("[^A-Za-z0-9_-]", "_", if (is.null(area_name) || !nzchar(area_name)) "custom_region" else area_name) else {
     runs <- split(gsas, cumsum(c(1, diff(gsas) != 1)))
@@ -247,7 +249,7 @@ wmed_run_name <- function(area_mode = "westmed", gsas = 1:12, basis = "whole_gsa
   }
   years <- paste0("EP", rng(year_ecopath), "_TS", rng(ts_years))
   fgp <- if (!identical(fg, default_fg)) paste0("FG-", gsub("[^A-Za-z0-9_-]", "_", sub("\\.[A-Za-z]+$", "", fg))) else NULL
-  paste(c(area, years, fgp), collapse = "__")
+  paste(c(area, years, fgp, if (isTRUE(own_survey)) "survey-own"), collapse = "__")
 }
 wmed_run_dir <- function(base_out_dir, run_name) {
   base_out_dir <- sub("/+$", "", base_out_dir)
