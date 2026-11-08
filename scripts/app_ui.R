@@ -283,6 +283,11 @@ tagList(
 
   ## Ecospace maps (06b) ------------------------------------------------------
   .card("4b", "Ecospace maps: environmental drivers (06b)", "\U0001F5FA\ufe0f",
+    tags$script(HTML("document.addEventListener('toggle', function (e) { if (e.target.classList && e.target.classList.contains('wm-esp') && e.target.open && window.jQuery) { jQuery(e.target).trigger('shown'); jQuery(window).trigger('resize'); } }, true);")),
+    tags$details(class = "wm-esp",
+      tags$summary(tags$strong("Open the Ecospace drivers"), tags$span(class = "wm-help ms-2",
+        "monthly ASCII maps of temperature, salinity, NPP and phytoplankton on your Ecospace grid: resolution, output folder and map viewer")),
+      tags$div(class = "mt-2",
         tags$div(class = "wm-help mt-1", "06b regrids the monthly maps of 06 (temperature, salinity, bottom temperature, NPP, phytoplankton carbon) onto the Ecospace base map: same rows, columns, corner and cell size, coastal gaps filled from the neighbouring cells, land = NODATA. No download: rerun 06b alone for another resolution."),
         radioButtons("esp_grid_mode", "Base map", inline = TRUE, width = "100%",
                      choices = c("Make it at a resolution" = "cell", "Use my depth .asc" = "file"), selected = "cell"),
@@ -310,7 +315,7 @@ tagList(
         fluidRow(column(6, selectInput("esp_step", "Time step", c("Monthly" = "monthly", "Annual mean" = "annual"), width = "100%")),
                  column(6, selectInput("esp_scaling", "Values", c("Absolute (deg C, PSU, g C m-2 ...)" = "absolute",
                                                                   "Relative to the base year (= 1)" = "relative"), width = "100%"))),
-    tags$div(class = "wm-help", "Tick \u201c06b Ecospace maps\u201d in Scripts to run (card 4), or use the link \u201conly 06b\u201d there. 06 must have run once.")),
+    tags$div(class = "wm-help", "Tick \u201c06b Ecospace maps\u201d in Scripts to run (card 4), or use the link \u201conly 06b\u201d there. 06 must have run once.")))),
 
   ## 4. Run ----------------------------------------------------------------
   .card("5", "Run", "\u25B6\ufe0f",
