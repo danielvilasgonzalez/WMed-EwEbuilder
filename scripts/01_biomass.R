@@ -29,11 +29,18 @@
 ## PNGs are drawn with ragg when installed: several times faster than the
 ## default png() device, above all on Windows (where the 30-panel
 ## coverage map took ~3 min instead of ~20 s on a Mac), same look.
+## Gradient legends (colour bars) get a thin black frame in every figure
+## (ggplot2 >= 3.5: theme element legend.frame; older versions: unchanged).
+.frame_legends <- function(p) {
+  if (utils::packageVersion("ggplot2") < "3.5.0") return(p)
+  th <- ggplot2::theme(legend.frame = ggplot2::element_rect(colour = "black", linewidth = 0.4))
+  if (inherits(p, "patchwork")) p & th else if (inherits(p, "ggplot")) p + th else p
+}
 ggsave <- function(filename, plot = ggplot2::last_plot(), ..., bg = "white", readable = TRUE) {
   dots <- list(...)
   if (is.null(dots$device) && grepl("\\.png$", filename, ignore.case = TRUE) && requireNamespace("ragg", quietly = TRUE))
     dots$device <- ragg::agg_png
-  do.call(ggplot2::ggsave, c(list(filename, if (isTRUE(readable)) .readable(plot) else plot), dots, list(bg = bg)))
+  do.call(ggplot2::ggsave, c(list(filename, .frame_legends(if (isTRUE(readable)) .readable(plot) else plot)), dots, list(bg = bg)))
 }
 if (!exists("PLOT_DPI", envir = .GlobalEnv, inherits = FALSE)) PLOT_DPI <- 300
 

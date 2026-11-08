@@ -299,7 +299,7 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
         w <- pmax(outer(zv, edges_hi, pmin) - matrix(edges_lo, length(zv), length(edges_lo), byrow = TRUE), 0)
         am <- matrix(a, length(zv), length(z))
         m <- matrix(rowSums(am * w), dim(a)[1], dim(a)[2]); m[!ok] <- NA
-        zeu_vals[[mkey]] <- zv
+        zeu_vals[[mkey]] <- zv[as.vector(ok)]   # water cells only (land would show as 200 m in the diagnostics)
       }
     } else {
       m <- a[, , 1]
