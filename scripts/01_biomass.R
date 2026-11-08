@@ -1377,7 +1377,7 @@ if (!isTRUE(APPLY_CATCHABILITY)) {
                              `lobsters and crabs` = "lobster|decapod|crab",
                              `sharks and rays` = "shark|ray|skate|torpedo|catshark",
                              `demersal fish` = "demersal|hake|anglerfish|conger|pandora|seabream|sparidae|dentex|mullet|flatfish|scorpaenidae|labridae|groupers|salema|poor cod|blue whiting")
-  .dt_noq <- dt[, .(FG_name, Year, Density)]
+  .dt_noq <- dt[, .(FG_name, Year, Density, SampleID)]
   dt <- apply_catchability_correction(dt, CATCHABILITY_TABLE, default_q = 1, species_taxonomy = species_taxonomy,
                                       exempt_fg_names = EXEMPT_FG_NAMES, q_similar_groups = Q_SIMILAR_GROUPS)
   ## q of every species (catchability_q_by_species.csv: the value used and
@@ -1389,25 +1389,31 @@ if (!isTRUE(APPLY_CATCHABILITY)) {
     .qfg <- .qbs[, .(n_species = .N, q_mean = mean(q_resolved), q_min = min(q_resolved), q_max = max(q_resolved),
                      n_default = sum(match_level == "default_q")), by = .(FG_name)]
     .yrs <- if (exists("YEAR_ECOPATH")) YEAR_ECOPATH else unique(dt$Year)
-    .eff <- merge(.dt_noq[Year %in% .yrs, .(B_without_q = sum(Density, na.rm = TRUE)), by = FG_name],
-                  dt[Year %in% .yrs, .(B_with_q = sum(Density, na.rm = TRUE)), by = FG_name], by = "FG_name")
-    .eff[, ratio := fifelse(B_without_q > 0, B_with_q / B_without_q, NA_real_)]
+    ## mean FG density per haul (t/km2), over ALL hauls of the Ecopath years
+    ## (a haul without the FG counts as 0): the raw survey density and the
+    ## q-corrected one. Before strata/area weighting, so not Ecopath B.
+    .n_h <- uniqueN(.dt_noq[Year %in% .yrs, SampleID])
+    .eff <- merge(.dt_noq[Year %in% .yrs, .(density_without_q_t_km2 = sum(Density, na.rm = TRUE) / .n_h), by = FG_name],
+                  dt[Year %in% .yrs, .(density_with_q_t_km2 = sum(Density, na.rm = TRUE) / .n_h), by = FG_name], by = "FG_name")
+    .eff[, ratio := fifelse(density_without_q_t_km2 > 0, density_with_q_t_km2 / density_without_q_t_km2, NA_real_)]
+    .eff[, n_hauls := .n_h]
     .eff <- merge(.eff, .qfg, by = "FG_name", all.x = TRUE)
     fwrite(.eff[order(-ratio)], file.path(csv_out_dir, "catchability_effect_by_fg.csv"))
     tryCatch({
-      .pd <- .eff[is.finite(ratio) & B_without_q > 0]
+      .pd <- .eff[is.finite(ratio) & density_without_q_t_km2 > 0]
       .pd[, FG_name := factor(FG_name, levels = .pd[order(ratio), FG_name])]
-      .pl <- melt(.pd, id.vars = c("FG_name", "ratio"), measure.vars = c("B_without_q", "B_with_q"), variable.name = "series", value.name = "B")
-      .pl[, series := factor(series, levels = c("B_without_q", "B_with_q"), labels = c("without q (raw survey)", "with q (B / q)"))]
+      .pl <- melt(.pd, id.vars = c("FG_name", "ratio"), measure.vars = c("density_without_q_t_km2", "density_with_q_t_km2"), variable.name = "series", value.name = "B")
+      .pl[, series := factor(series, levels = c("density_without_q_t_km2", "density_with_q_t_km2"), labels = c("without q (raw survey)", "with q (density / q)"))]
       p_q <- ggplot(.pl, aes(B, FG_name)) +
         geom_line(aes(group = FG_name), colour = "grey75") +
         geom_point(aes(colour = series), size = 2) +
-        geom_text(data = .pd, aes(x = B_with_q, y = FG_name, label = paste0("x", signif(ratio, 2))), hjust = -0.3, size = 2.6, colour = "grey30") +
-        scale_x_log10() + scale_colour_manual(values = c("without q (raw survey)" = "grey55", "with q (B / q)" = "#1b7f9e"), name = NULL) +
+        geom_text(data = .pd, aes(x = density_with_q_t_km2, y = FG_name, label = paste0("x", signif(ratio, 2))), hjust = -0.3, size = 2.6, colour = "grey30") +
+        scale_x_log10() + scale_colour_manual(values = c("without q (raw survey)" = "grey55", "with q (density / q)" = "#1b7f9e"), name = NULL) +
         labs(title = "Survey density with and without catchability (q), by FG",
-             subtitle = paste0("Sum of haul densities in the Ecopath years (", paste(range(.yrs), collapse = "-"),
-                               "), log scale; label = with / without q. catchability_effect_by_fg.csv, q per species in catchability_q_by_species.csv"),
-             x = "Density (survey units, log scale)", y = NULL) +
+             subtitle = paste0("Mean MEDITS density per haul in the Ecopath years (", paste(range(.yrs), collapse = "-"), ", ", .n_h,
+                               " hauls; hauls without the FG = 0), before strata/area weighting; label = with / without q. ",
+                               "catchability_effect_by_fg.csv; q per species in catchability_q_by_species.csv"),
+             x = "Density (t/km\u00b2 per haul, log scale)", y = NULL) +
         theme_minimal(base_size = 9) + theme(legend.position = "bottom")
       ggsave(file.path(plot_dir, "survey_catchability_effect.png"), p_q, width = 10, height = max(5, 0.18 * nrow(.pd) + 1.5), dpi = PLOT_DPI, bg = "white")
     }, error = function(e) message("[Catchability] figure skipped - ", conditionMessage(e)))
