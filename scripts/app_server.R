@@ -103,7 +103,7 @@ observeEvent(input$catch_upload, {   # an uploaded catchability table is kept ne
   catch_path(normalizePath(dest))
   showNotification(sprintf("Catchability table loaded: %d species.", nrow(x)), duration = 5)
 })
-## --- Survey biomass upload (card 4a) -------------------------------------
+## --- Survey biomass upload (card 4) -------------------------------------
 ## Biomass from any survey: species, year, biomass_t_km2 (OTHER_SURVEY_FILE).
 ## Kept in <run files>/survey_upload/. Own MEDITS/MEDIAS files can still be
 ## set in a settings file (MEDITS_TA_FILE, MEDITS_TB_FILE, MEDITS_TC_FILE,
@@ -1246,7 +1246,7 @@ output$dl_info <- renderUI({
   out[[7]] <- row("Copernicus tool (05 only)", isTRUE(cli), if (isTRUE(cli)) Sys.which("copernicusmarine") else "copernicusmarine not found",
                   "Only for 05 environment: install Python, then 'pip install copernicusmarine'.")
   out[[8]] <- row("Copernicus login (05 only)", .cm_has_login(), if (.cm_has_login()) "saved on this computer" else "not saved",
-                  "Use 'enter or change the login' in card 4c (environment and Ecospace).")
+                  "Use 'enter or change the login' in card 6 (environment and Ecospace).")
   do.call(rbind, out)
 }
 observeEvent(input$setup_check, {
@@ -1259,7 +1259,7 @@ observeEvent(input$setup_check, {
   })
 })
 
-## --- Run summary (card 6): what to look at after a run ----------------------
+## --- Run summary (card 8): what to look at after a run ----------------------
 ## Per script: the log of the last run, its errors and warnings; then the
 ## FGs with F > 1 and the FGs with no Ecopath B (from the REVIEW tables).
 .last_logs <- function() {

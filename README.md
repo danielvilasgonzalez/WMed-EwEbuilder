@@ -70,12 +70,11 @@ On a new computer only `rmarkdown`, `knitr` and `shiny` must be installed before
 | 1 Model area | Click GSAs on the map, or a custom region (upload a shapefile, GeoJSON, GeoPackage or KML, or draw a lon/lat box). |
 | 2 Food web | Pick or upload the species → FG table (`FG_number`, `FG_name`, `species`; optional `FG_group`). The default is `FG_WMed_2026.csv` (80 FGs). |
 | 3 Years | Ecopath baseline and Ecosim years, used by every script. Catch and effort years follow them. |
-| 4 Scripts to run | Tick the scripts (01–06); they run in order and 06 diagnostics runs last. |
-| 4a Biomass settings (01, 01b) | Survey estimator, outliers, catchability (and your own q table), filling missing Ecopath B, Ecosim normalisation, phytoplankton source, and the upload of biomass from any survey. |
-| 4b Fisheries settings (02) | What happens to FGs with high F (reported with recommendations, never changed). |
-| 4c Environment and Ecospace (05, 05b) | Your Copernicus login for step 05, and (collapsed) the Ecospace base map, resolution, map viewer and downloads for 05b. |
-| 5 Run | **Run pipeline** / **Stop**, with progress and time left per step. The *Settings block* shows the same run as R code: copy or download it, and **Load settings (.R)** fills the page again from a downloaded file (the file is read, never run). |
-| 6 Results | Download the workbook, diet matrices, review tables, all tables or the logs. A summary of the last run (errors, warnings, FGs with F > 1, FGs without Ecopath B). The **FG explorer** (one group's Ecosim biomass with the survey uncertainty band, and its catches), the key plots and every plot, with zoom. |
+| 4 Biomass settings (01, 01b) | Survey estimator, outliers, catchability (and your own q table), filling missing Ecopath B, Ecosim normalisation, phytoplankton source, and the upload of biomass from any survey. |
+| 5 Fisheries settings (02) | What happens to FGs with high F (reported with recommendations, never changed). |
+| 6 Environment and Ecospace (05, 05b) | Your Copernicus login for step 05, and (collapsed) the Ecospace base map, resolution, map viewer and downloads for 05b. |
+| 7 Run | Tick the scripts to run (01–06; they run in order and 06 diagnostics runs last), then **Run pipeline** / **Stop**, with progress and time left per step. The *Settings block* shows the same run as R code: copy or download it, and **Load settings (.R)** fills the page again from a downloaded file (the file is read, never run). |
+| 8 Results | Download the workbook, diet matrices, review tables, all tables or the logs. A summary of the last run (errors, warnings, FGs with F > 1, FGs without Ecopath B). The **FG explorer** (one group's Ecosim biomass with the survey uncertainty band, and its catches; point at a year to see the species shares), the key plots and every plot, with zoom. |
 
 The floating **Run / Results / Methods** bar jumps around the page; **Hide methods** hides the documentation while you work.
 
@@ -132,7 +131,7 @@ Steps 01–06 take about 10–30 minutes. The first run on a new computer can ta
 
 The GitHub-only packages (`rfishbase`, `duckdbfs`, `FishLife`) are installed by `install_packages.R`.
 
-**Copernicus login.** Your own login is asked for on the page (card 4c) and saved by the `copernicusmarine` toolbox in your user folder (`~/.copernicusmarine`), or set it in your own `~/.Renviron`:
+**Copernicus login.** Your own login is asked for on the page (card 6) and saved by the `copernicusmarine` toolbox in your user folder (`~/.copernicusmarine`), or set it in your own `~/.Renviron`:
 ```
 COPERNICUSMARINE_SERVICE_USERNAME=your_user
 COPERNICUSMARINE_SERVICE_PASSWORD=your_password
@@ -186,7 +185,7 @@ previous_runs/<time>/           # the workbook, logs and validation summary of t
 | "Folders not found" | Card 0 of the page, or copy `config.R.example` to `config.local.R` and set the paths. |
 | Errors after running chunks of the `.qmd` in the console | The page must be rendered (Run Document), not run chunk by chunk. Restart R and click Run Document. |
 | A step failed | Results → **Logs of the last run (.zip)**, or the `<date>_0N_..._log.txt` files in `out_dir`. The run summary on the page shows the first error of each script. |
-| 05 downloads nothing | Card 0 → **Check setup** (Copernicus tool and login), then card 4c → *enter or change the login*. |
+| 05 downloads nothing | Card 0 → **Check setup** (Copernicus tool and login), then card 6 → *enter or change the login*. |
 | Packages older than the reference | `source("scripts/install_packages.R")` and restart R. |
 | The input snapshot or first run is slow | The first run copies the shared data to the local copy (~2.5 GB); later runs read the local copy. |
 

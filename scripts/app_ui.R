@@ -4,7 +4,7 @@
 ## app_ui.R
 ## Created by: Daniel Vilas
 ##
-## The page's controls (cards 0-6): built once when the page renders; the last
+## The page's controls (cards 0-8): built once when the page renders; the last
 ## expression is the UI that the page shows.
 ## Kept in its own R file (not inside WMed-EwEbuilder.qmd) so it can be
 ## edited and tested like any script, and RStudio's Visual editor cannot
@@ -133,7 +133,7 @@ tagList(
       }
       $('.wm-card[id^=\"wm-card-\"]').each(function () {
         var li = add(ul, '#' + this.id, $(this).data('wmtitle'));
-        if (this.id === 'wm-card-6') {
+        if (this.id === 'wm-card-8') {
           var sub = $('<ul></ul>');
           add(sub, '#run_summary', 'Run summary');
           add(sub, '#wm-fg-explorer', 'FG explorer');
@@ -221,27 +221,15 @@ tagList(
       tags$span(class = "wm-help ms-2", "Edit it (add species, merge or split FGs) and upload it back above.")),
     uiOutput("fg_summary")),
 
-  ## 3. Years and 4. scripts to run ------------------------------------------
-  fluidRow(
-    column(6, .card("3", "Years", "\U0001F4C5",
-      sliderInput("ecopath_years", "Ecopath baseline (YEAR_ECOPATH)", min = 1990, max = 2023, value = c(1994, 1996), step = 1, sep = "", width = "100%"),
-      sliderInput("ts_years", "Ecosim time series (TS_YEARS)", min = 1990, max = 2023, value = c(1995, 2023), step = 1, sep = "", width = "100%"),
-      tags$div(class = "wm-help", "Used by every script: biomass (01), catch, landings, discards and effort (02, from the first Ecopath or Ecosim year to the last Ecosim year), P/B and Q/B (03), diets (04) and the environmental drivers (05, 05b)."))),
-    column(6, .card("4", "Scripts to run", "\u2699\ufe0f",
-      checkboxGroupInput("steps_chk", "Scripts to run (RUN_STEPS)", inline = TRUE,
-                         choices = c("01 biomass" = 1, "02 fisheries" = 2, "03 P/B, Q/B" = 3, "04 diets" = 4, "05 environment" = 5,
-                                     "05b Ecospace maps" = 6, "06 diagnostics" = 7),
-                         selected = c(1:4, 7)),
-      tags$div(class = "mb-2",
-        actionLink("steps_all", "all 01-06"), " \u00b7 ", actionLink("steps_main", "01-04 + 06"), " \u00b7 ", actionLink("steps_none", "none"), " \u00b7 ",
-        actionLink("steps_after1", "02-04 + 06 (keep biomass)"), " \u00b7 ", actionLink("steps_only_diag", "only 06"), " \u00b7 ", actionLink("steps_only_env", "only 05 + 05b"), " \u00b7 ", actionLink("steps_only_esp", "only 05b (new base map)")),
-      tags$small(class = "text-muted d-block mb-1",
-        "The scripts run in this order; 06 diagnostics runs last, so it checks the outputs of all the others. ",
-        "The settings of each script are in the cards below (4a biomass, 4b fisheries, 4c environment and Ecospace); 03 and 04 have none of their own."),
-      uiOutput("steps_check")))),
+  ## 3. Years ----------------------------------------------------------------
+  .card("3", "Years", "\U0001F4C5",
+    fluidRow(
+      column(6, sliderInput("ecopath_years", "Ecopath baseline (YEAR_ECOPATH)", min = 1990, max = 2023, value = c(1994, 1996), step = 1, sep = "", width = "100%")),
+      column(6, sliderInput("ts_years", "Ecosim time series (TS_YEARS)", min = 1990, max = 2023, value = c(1995, 2023), step = 1, sep = "", width = "100%"))),
+    tags$div(class = "wm-help", "Used by every script: biomass (01), catch, landings, discards and effort (02, from the first Ecopath or Ecosim year to the last Ecosim year), P/B and Q/B (03), diets (04) and the environmental drivers (05, 05b).")),
 
-  ## 4a. Biomass settings (01, 01b) ---------------------------------------------
-  .card("4a", "Biomass settings (01 biomass, 01b unsurveyed groups)", "\U0001F4E5",
+  ## 4. Biomass settings (01, 01b) ---------------------------------------------
+  .card("4", "Biomass settings (01 biomass, 01b unsurveyed groups)", "\U0001F4E5",
     tags$div(class = "wm-help mb-2", "Biomass comes from the MEDITS trawl and MEDIAS acoustic surveys (2024 MEDBS data) and, for groups they cannot measure, from literature and models (01b)."),
     fluidRow(
       column(6,
@@ -282,15 +270,15 @@ tagList(
     downloadButton("dl_other_survey_template", "Download an empty template", class = "btn-sm btn-outline-secondary"),
     tags$div(class = "wm-help mt-2", "Runs with an uploaded survey go to their own output folder (\u2026__survey-own), so the default results are kept.")),
 
-  ## 4b. Fisheries settings (02) -----------------------------------------------
-  .card("4b", "Fisheries settings (02 fisheries)", "\U0001F3A3",
+  ## 5. Fisheries settings (02) -----------------------------------------------
+  .card("5", "Fisheries settings (02 fisheries)", "\U0001F3A3",
     tags$div(class = "wm-help mb-2", "Catch, landings, discards and effort follow the years of card 3, for the GSAs of card 1."),
-    tags$div(class = "wm-help mb-2", tags$strong("FGs with high F"), " are reported, not changed: F above 1, or above the highest F in the stock assessments of the FG's species. Each one gets a recommendation in high_F_REVIEW.csv (Results), e.g. a trawl survey that hardly samples the group, missing catchability (card 4a), or catch to check. Ecopath_B is left as it is.")),
+    tags$div(class = "wm-help mb-2", tags$strong("FGs with high F"), " are reported, not changed: F above 1, or above the highest F in the stock assessments of the FG's species. Each one gets a recommendation in high_F_REVIEW.csv (Results), e.g. a trawl survey that hardly samples the group, missing catchability (card 4), or catch to check. Ecopath_B is left as it is.")),
 
-  ## 4c. Environment (05) and Ecospace maps (05b) ---------------------------------
-  .card("4c", "Environment and Ecospace settings (05 environment, 05b Ecospace maps)", "\U0001F30A",
+  ## 6. Environment (05) and Ecospace maps (05b) ---------------------------------
+  .card("6", "Environment and Ecospace settings (05 environment, 05b Ecospace maps)", "\U0001F30A",
     tags$div(class = "wm-help mb-2",
-      "05 environment gets monthly temperature, salinity, NPP and phytoplankton from Copernicus Marine (Ecosim forcing and, with PHYTO_SOURCE = Copernicus in card 4a, the Ecopath phytoplankton). ",
+      "05 environment gets monthly temperature, salinity, NPP and phytoplankton from Copernicus Marine (Ecosim forcing and, with PHYTO_SOURCE = Copernicus in card 4, the Ecopath phytoplankton). ",
       "Its first run downloads several GB; later runs only fetch new years. It needs a Copernicus Marine account: ",
       actionLink("cm_login_link", "enter or change the login"), "."),
     tags$script(HTML("document.addEventListener('toggle', function (e) { if (e.target.classList && e.target.classList.contains('wm-esp') && e.target.open && window.jQuery) { jQuery(e.target).trigger('shown'); jQuery(window).trigger('resize'); } }, true);")),
@@ -331,10 +319,22 @@ tagList(
         fluidRow(column(6, selectInput("esp_step", "Time step", c("Monthly" = "monthly", "Annual mean" = "annual"), width = "100%")),
                  column(6, selectInput("esp_scaling", "Values", c("Absolute (deg C, PSU, g C m-2 ...)" = "absolute",
                                                                   "Relative to the base year (= 1)" = "relative"), width = "100%"))),
-    tags$div(class = "wm-help", "Tick \u201c05b Ecospace maps\u201d in Scripts to run (card 4), or use the link \u201conly 05b\u201d there. 05 must have run once.")))),
+    tags$div(class = "wm-help", "Tick \u201c05b Ecospace maps\u201d in Scripts to run (card 7, Run), or use the link \u201conly 05b\u201d there. 05 must have run once.")))),
 
-  ## 4. Run ----------------------------------------------------------------
-  .card("5", "Run", "\u25B6\ufe0f",
+  ## 7. Run ----------------------------------------------------------------
+  .card("7", "Run", "\u25B6\ufe0f",
+    tags$div(class = "mb-2 pb-2 border-bottom",
+      checkboxGroupInput("steps_chk", "Scripts to run (RUN_STEPS)", inline = TRUE,
+                         choices = c("01 biomass" = 1, "02 fisheries" = 2, "03 P/B, Q/B" = 3, "04 diets" = 4, "05 environment" = 5,
+                                     "05b Ecospace maps" = 6, "06 diagnostics" = 7),
+                         selected = c(1:4, 7)),
+      tags$div(class = "mb-2",
+        actionLink("steps_all", "all 01-06"), " \u00b7 ", actionLink("steps_main", "01-04 + 06"), " \u00b7 ", actionLink("steps_none", "none"), " \u00b7 ",
+        actionLink("steps_after1", "02-04 + 06 (keep biomass)"), " \u00b7 ", actionLink("steps_only_diag", "only 06"), " \u00b7 ", actionLink("steps_only_env", "only 05 + 05b"), " \u00b7 ", actionLink("steps_only_esp", "only 05b (new base map)")),
+      tags$small(class = "text-muted d-block mb-1",
+        "The scripts run in this order; 06 diagnostics runs last, so it checks the outputs of all the others. ",
+        "The settings of each script are in the cards above (4 biomass, 5 fisheries, 6 environment and Ecospace); 03 and 04 have none of their own."),
+      uiOutput("steps_check")),
     fluidRow(
       column(5,
         actionButton("run", "Run pipeline", class = "btn-primary", icon = icon("play")),
@@ -360,7 +360,7 @@ tagList(
 
   ## Results ---------------------------------------------------------------
   tags$div(id = "wm-results-card"),
-  .card("6", "Results", "\U0001F4CA",
+  .card("8", "Results", "\U0001F4CA",
     tags$div(class = "mb-2",
       selectInput("results_run", "Show the results of", choices = NULL, width = "100%"),
       tags$div(class = "wm-help", "Each set of inputs (area, years, FG table) has its own output folder: the default inputs (GSAs 1-12, Ecopath 1994-1996, Ecosim 1995-2023, FG_WMed_2026.csv) in the main output folder, any other in runs/<area>__EP<years>_TS<years>. Runs with different inputs never overwrite each other; the same inputs again replace their own results."),
