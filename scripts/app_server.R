@@ -1504,7 +1504,10 @@ observe({
   ch <- stats::setNames(fg$FG_num, paste0(fg$FG_num, " - ", fg$FG_name, ifelse(has_b, "", "  (no biomass series)")))
   updateSelectInput(session, "fg_explore", choices = ch, selected = { s <- isolate(input$fg_explore); if (is.null(s) || !s %in% ch) ch[1] else s })
 })
-output$fg_explore_plot <- renderPlot({
+## The two panels are built here and drawn as two plots (biomass, catches),
+## so the biomass plot can be hovered: Shiny maps the mouse to data
+## coordinates only for a single ggplot.
+.fg_panels <- reactive({
   d <- .ecosim_ts()
   validate(need(!is.null(d) && nrow(d), "No Ecosim_ts sheet yet - run the pipeline (01 and 02)."))
   req(input$fg_explore)
@@ -1524,8 +1527,8 @@ output$fg_explore_plot <- renderPlot({
   ## show.legend = TRUE on every line/point layer and the same fixed scale in
   ## both panels make the two legends identical, so patchwork shows one
   cols <- c("Biomass" = "#0072B2", "Catches" = "#D55E00", "Discards" = "#009E73")
-  sc <- ggplot2::scale_colour_manual(values = cols, limits = names(cols), breaks = names(cols), drop = FALSE, name = NULL,
-                                     guide = ggplot2::guide_legend(override.aes = list(linewidth = 1.1, size = 2)))
+  sc <- function(keys) ggplot2::scale_colour_manual(values = cols[keys], limits = keys, breaks = keys, drop = FALSE, name = NULL,
+                                                    guide = ggplot2::guide_legend(override.aes = list(linewidth = 1.1, size = 2)))
   th <- ggplot2::theme_minimal(base_size = 11) +
     ggplot2::theme(legend.position = "bottom", legend.text = ggplot2::element_text(size = 11),
                    plot.title = ggplot2::element_text(size = 12, face = "bold"),
@@ -1579,8 +1582,8 @@ output$fg_explore_plot <- renderPlot({
     if (!is.null(r) && nrow(r) && is.finite(r$y0))   # the Ecopath baseline years
       p <- p + ggplot2::annotate("rect", xmin = r$y0 - 0.5, xmax = r$y1 + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
     if (absolute && !b_abs) sub <- paste0(sub, " - shown relative (no Ecopath B to scale to)")
-    p + ggplot2::geom_hline(yintercept = if (b_abs) r0$B else 1, colour = "grey70", linetype = "dashed") + .ln() + sc + th +
-      ggplot2::labs(title = "Biomass", subtitle = sub, x = NULL,
+    p + ggplot2::geom_hline(yintercept = if (b_abs) r0$B else 1, colour = "grey70", linetype = "dashed") + .ln() + sc("Biomass") + th +
+      ggplot2::labs(title = "Biomass", subtitle = if (is.null(sub)) "Point the mouse at a year: the species shares of the FG biomass" else paste0(sub, "\nPoint the mouse at a year: the species shares of the FG biomass"), x = NULL,
                     y = if (b_abs) "t/km\u00b2" else if (rb$lab == "Ecopath years") "Relative to Ecopath years (= 1)" else paste0("Relative to ", sub("^first year with a value, ", "", rb$lab), " (= 1)"))
   } else {
     .nm <- if (!is.null(.fg_list())) .fg_list()$FG_name[match(.fg_now, .fg_list()$FG_num)] else ""
@@ -1599,14 +1602,86 @@ output$fg_explore_plot <- renderPlot({
     pc <- ggplot2::ggplot(ct, ggplot2::aes(Year, value, colour = series))
     if (length(base_yrs)) pc <- pc + ggplot2::annotate("rect", xmin = min(base_yrs) - 0.5, xmax = max(base_yrs) + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
     (if (absolute) pc else pc + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed")) + .ln() +
-      sc + th + ggplot2::labs(title = "Catches and discards",
+      sc(intersect(c("Catches", "Discards"), unique(ct$type))) + th + ggplot2::labs(title = "Catches and discards",
                               subtitle = paste0("Ecopath years: ", paste(refs, collapse = ", "), " t/km\u00b2"), x = NULL,
                               y = if (absolute) "t/km\u00b2" else "Relative to Ecopath years (= 1)")
   } else note_panel("Catches and discards", "No catch or discards recorded\nfor this group in the data sources.")
-  if (requireNamespace("patchwork", quietly = TRUE))
-    patchwork::wrap_plots(p1, p2, ncol = 2, guides = "collect") & ggplot2::theme(legend.position = "bottom")
-  else p1
-}, res = 96)
+  list(p1 = p1, p2 = p2, b = if (nrow(b)) b[, c("Year", "value")] else NULL, fg = .fg_now)
+})
+output$fg_explore_plot <- renderPlot(.fg_panels()$p1, res = 96)
+output$fg_explore_plot_catch <- renderPlot(.fg_panels()$p2, res = 96)
+
+## Species shares of an FG's biomass, for the hover box of the FG explorer.
+## Per year: the survey species densities (species_density_regional_combined.csv,
+## MEDITS + MEDIAS). Ecopath years, and years without a survey split: the
+## Ecopath baseline composition (biomass_proportion_by_species_fg.csv, every
+## source: surveys, literature, assessments).
+.sp_year <- reactive({
+  .ecosim_ts()
+  f <- file.path(.out_dir, "biomass", "species_density_regional_combined.csv")
+  if (is.na(.out_dir) || !file.exists(f)) return(NULL)
+  x <- tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+  if (is.null(x) || !all(c("Year", "FG_num", "ScientificName", "mean_density") %in% names(x))) NULL else x
+})
+.sp_ecopath <- reactive({
+  .ecosim_ts()
+  f <- file.path(.out_dir, "biomass", "biomass_proportion_by_species_fg.csv")
+  if (is.na(.out_dir) || !file.exists(f)) return(NULL)
+  x <- tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+  if (is.null(x) || !all(c("FG_num", "Species") %in% names(x))) return(NULL)
+  x$w <- if ("Biomass_t_km2" %in% names(x)) suppressWarnings(as.numeric(x$Biomass_t_km2)) else NA_real_
+  if ("prop_sp_fg" %in% names(x)) x$w[!is.finite(x$w)] <- suppressWarnings(as.numeric(x$prop_sp_fg[!is.finite(x$w)]))
+  x
+})
+.fg_species_shares <- function(fg, yr) {
+  e <- .ecopath_b(); r <- if (!is.null(e)) e[e$FG_num == fg, ][1, ] else NULL
+  in_base <- !is.null(r) && nrow(r) && is.finite(r$y0) && yr >= r$y0 && yr <= r$y1
+  sy <- .sp_year()
+  if (!in_base && !is.null(sy)) {
+    x <- sy[sy$FG_num == fg & sy$Year == yr & is.finite(sy$mean_density) & sy$mean_density > 0, ]
+    if (nrow(x)) {
+      x <- stats::aggregate(mean_density ~ ScientificName, x, sum)
+      return(list(sp = x$ScientificName, w = x$mean_density, src = paste0("surveys ", yr, " (MEDITS + MEDIAS species only)")))
+    }
+  }
+  se <- .sp_ecopath()
+  if (!is.null(se)) {
+    x <- se[se$FG_num == fg & is.finite(se$w) & se$w > 0, ]
+    if (nrow(x)) {
+      x <- stats::aggregate(w ~ Species, x, sum)
+      return(list(sp = x$Species, w = x$w, src = paste0("Ecopath baseline", if (!is.null(r) && !is.na(r$years)) paste0(" ", r$years),
+                                                          if (!in_base) paste0(" (no survey split for ", yr, ")") else "", ", all sources")))
+    }
+  }
+  NULL
+}
+output$fg_explore_tip <- renderUI({
+  h <- input$fg_explore_hover
+  if (is.null(h) || is.null(h$x)) return(NULL)
+  pn <- .fg_panels(); if (is.null(pn$b) || !nrow(pn$b)) return(NULL)
+  pt <- shiny::nearPoints(pn$b, h, xvar = "Year", yvar = "value", threshold = 12, maxpoints = 1)
+  if (!nrow(pt)) {   # anywhere above a year: that year's point
+    yr <- round(h$x); pt <- pn$b[pn$b$Year == yr, , drop = FALSE]
+    if (!nrow(pt)) return(NULL)
+  }
+  yr <- pt$Year[1]
+  sh <- .fg_species_shares(pn$fg, yr)
+  rows <- if (is.null(sh)) list(tags$div(class = "text-muted", "No species split recorded for this FG.")) else {
+    o <- order(-sh$w); p <- sh$w[o] / sum(sh$w); sp <- sh$sp[o]
+    k <- min(length(p), 10)
+    c(lapply(seq_len(k), function(i) tags$div(tags$span(style = "display:inline-block; min-width:3.6em; text-align:right; margin-right:.5em; font-variant-numeric: tabular-nums;",
+                                                            if (p[i] >= 0.001) sprintf("%.1f%%", 100 * p[i]) else "<0.1%"), tags$em(sp[i]))),
+      if (length(p) > k) list(tags$div(class = "text-muted", sprintf("+ %d more species: %.1f%%", length(p) - k, 100 * sum(p[-seq_len(k)])))),
+      list(tags$div(class = "text-muted mt-1", style = "font-size:.75rem;", "Source: ", sh$src)))
+  }
+  left <- h$coords_css$x; top <- h$coords_css$y
+  flip <- !is.null(h$range) && !is.null(h$range$right) && h$coords_img$x > (h$range$left + h$range$right) / 2
+  tags$div(style = paste0("position:absolute; z-index:20; pointer-events:none; top:", top + 12, "px; ",
+                          if (flip) paste0("right:calc(100% - ", left - 12, "px); ") else paste0("left:", left + 12, "px; "),
+                          "background:rgba(255,255,255,.97); border:1px solid #9fb3c8; border-radius:6px; padding:.4rem .6rem; ",
+                          "box-shadow:0 2px 8px rgba(16,42,67,.18); font-size:.8rem; max-width:340px; line-height:1.3;"),
+    tags$strong(paste0(yr, ": species shares of the FG biomass")), rows)
+})
 
 ## --- Load a settings file (presets) -------------------------------------
 ## A settings .R from 'Download .R' (or written by hand) sets the inputs

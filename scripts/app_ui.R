@@ -381,9 +381,14 @@ tagList(
             selectInput("fg_explore", NULL, choices = NULL, width = "420px"),
             radioButtons("fg_explore_scale", NULL, inline = TRUE,
                          choices = c("Relative to Ecopath years" = "rel", "Absolute (t/km\u00b2)" = "abs"), selected = "rel")),
-        plotOutput("fg_explore_plot", height = "340px"),
+        fluidRow(
+          column(6, tags$div(style = "position: relative;",
+            plotOutput("fg_explore_plot", height = "340px",
+                       hover = hoverOpts("fg_explore_hover", delay = 80, delayType = "throttle", nullOutside = TRUE)),
+            uiOutput("fg_explore_tip"))),
+          column(6, plotOutput("fg_explore_plot_catch", height = "340px"))),
         uiOutput("fg_explore_info"),
-        tags$div(class = "wm-help", "Band: survey sampling uncertainty of the index (index x (1 \u00b1 1.96 CV)), for the FGs measured by MEDITS. Grey: the Ecopath baseline years; their B (t/km\u00b2) is in the subtitle and below, with its source."))),
+        tags$div(class = "wm-help", "Band: survey sampling uncertainty of the index (index x (1 \u00b1 1.96 CV)), for the FGs measured by MEDITS. Grey: the Ecopath baseline years; their B (t/km\u00b2) is in the subtitle and below, with its source. Point the mouse at a year of the biomass plot to see the share of each species in the FG biomass that year (survey species from MEDITS and MEDIAS; in the Ecopath years, and for groups without a survey split, the Ecopath baseline composition from all sources)."))),
     tags$div(class = "wm-results", uiOutput("results"))),
 
   tags$script(type = "application/json", id = "wm-gsa-geojson", HTML(.gsa_geojson)),
