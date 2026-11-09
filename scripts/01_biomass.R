@@ -3543,8 +3543,9 @@ fwrite(fg_index_regional_combined, file.path(csv_out_dir, "survey_fg_annual_inde
 ##     -> Ecosim biomass series (one row per year).
 ## "species" is a scientific name in the FG file, or an FG name (then the
 ## value is the whole FG). A species' value replaces only that species'
-## share of its FG: FG density = FG density - survey density of the
-## species + manual density. With an Ecopath value and no Ecosim rows the
+## part of its FG: FG density = FG density x (1 - s) + manual density, with
+## s the species' share of the FG's survey biomass that year (1 for a
+## species alone in its FG), whatever source the FG value came from. With an Ecopath value and no Ecosim rows the
 ## species' own survey trend is rescaled so its YEAR_ECOPATH mean equals
 ## the manual value; a species with no survey data then adds the value as
 ## a flat contribution to every year the FG has data. Every change is
@@ -3636,8 +3637,19 @@ if (!is.null(.md_ep) || !is.null(.md_es) || !is.null(.os_all)) {
     .osv <- if (.is_os) .os_all[species == .t, .(Year = year, v = density_t_km2)] else data.table(Year = integer(), v = numeric())
     .yrs <- sort(unique(c(fg_index_regional_combined[FG_num == .fg, Year], YEAR_ECOPATH, .es$Year, .osv$Year)))
     ## the species' (or FG's) current contribution per year
-    .cur <- if (.is_fg) fg_index_regional_combined[FG_num == .fg, .(Year, cur = mean_density)] else
-      .sp_d[ScientificName == .t & FG_num == .fg, .(Year, cur = sd)]
+    ## A species' part of its FG = the FG value now (survey, stock assessment,
+    ## acoustic series, literature...) x the species' share of the FG's
+    ## survey biomass that year; a species alone in its FG = the whole FG
+    ## value. So the uploaded value replaces the species whatever source
+    ## the FG came from, not only its MEDITS/MEDIAS density.
+    .fgcur <- fg_index_regional_combined[FG_num == .fg, .(Year, fgv = mean_density)]
+    .alone <- !.is_fg && .spl[FG_num == .fg, uniqueN(ScientificName)] == 1
+    .cur <- if (.is_fg) fg_index_regional_combined[FG_num == .fg, .(Year, cur = mean_density)] else {
+      .sh <- merge(.sp_d[ScientificName == .t & FG_num == .fg, .(Year, sd)], .sp_d[FG_num == .fg, .(tot = sum(sd, na.rm = TRUE)), by = Year], by = "Year", all = TRUE)
+      .sh <- merge(.fgcur, .sh, by = "Year", all = TRUE)
+      if (.alone) .sh[, share := 1] else .sh[, share := fifelse(is.finite(tot) & tot > 0, fifelse(is.na(sd), 0, sd) / tot, NA_real_)]
+      .sh[, .(Year, cur = fifelse(is.finite(fgv) & is.finite(share), fgv * share, sd))]
+    }
     .new <- data.table(Year = .yrs)[.cur, cur := i.cur, on = "Year"]
     .new[, new := cur]
     if (is.finite(.ep)) {

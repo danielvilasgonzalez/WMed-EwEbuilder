@@ -86,3 +86,7 @@ config.R
 # data lives in the shared pCloud folder, not in the repo (old GFCM copy, 2025.1.0;
 # 02_fisheries.R reads data/fisheries/GFCM/<version> from pCloud)
 data/
+
+# Run logs of other projects written into this folder (e.g. a script run with
+# this repo as working directory) - never part of WMed_EwE
+*run_log_*.txt

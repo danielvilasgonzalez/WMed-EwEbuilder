@@ -263,7 +263,7 @@ tagList(
              " (t wet weight per km\u00b2 of the model area); optionally ", tags$code("area_km2"),
              " (when the biomass holds for a smaller area) and ", tags$code("reference"), ". ",
              tags$strong("A species in this file takes its biomass only from it, in every year:"),
-             " its MEDITS/MEDIAS value is removed from its FG, the file's values are used in the years it gives, and in other years the species adds nothing. Ecopath B = the mean of its rows in the Ecopath years (if none, of its first three years). An FG name instead of a species replaces the whole FG."),
+             " its part of its FG is removed whatever the source (MEDITS/MEDIAS, stock assessment, acoustic series, literature: the FG value \u00d7 the species' share of the FG survey biomass, or the whole FG if it is the only species), the file's values are used in the years it gives, and in other years the species adds nothing. Ecopath B = the mean of its rows in the Ecopath years (if none, of its first three years). An FG name instead of a species replaces the whole FG."),
     fileInput("other_survey_upload", NULL, accept = ".csv", width = "100%", buttonLabel = "Upload survey biomass (csv)",
               placeholder = "species, year, biomass_t_km2 [, area_km2, reference]"),
     uiOutput("other_survey_info"),
