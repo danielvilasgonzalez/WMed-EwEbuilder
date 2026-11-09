@@ -756,7 +756,6 @@ config_code <- reactive({
     if (!is.null(survey_files()$TC)) sprintf("MEDITS_TC_FILE   <- \"%s\"   # own MEDITS length/maturity", .fwd(survey_files()$TC$path)),
     if (!is.null(survey_files()$MEDIAS_abundance) && !is.null(survey_files()$MEDIAS_biomass))
       sprintf("MEDIAS_DIR       <- \"%s\"   # own MEDIAS abundance.csv + biomass.csv", .fwd(dirname(survey_files()$MEDIAS_biomass$path))),
-    sprintf("HIGH_F_B_FIX     <- \"%s\"   # FGs with F > 1: none / min_from_catch / ecopath_estimate", if (is.null(input$high_f)) "none" else input$high_f),
     sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (06)", if (is.null(input$phyto_src)) "isimip" else input$phyto_src))
   head <- c(sprintf("## WMed-EwEbuilder settings - from WMed-EwEbuilder.qmd, %s", format(Sys.time(), "%Y-%m-%d %H:%M")),
             "## Run from the scripts/ folder of the repo (folders found by wmed_paths.R).",
@@ -1641,7 +1640,7 @@ observeEvent(input$settings_upload, {
   for (k in names(sw)) if (is.logical(s[[k]])) { updateCheckboxInput(session, sw[[k]], value = isTRUE(s[[k]])); u(k) }
   if (!is.null(s$ECOPATH_B_FILL_MODE)) { updateCheckboxInput(session, "fill_b", value = identical(s$ECOPATH_B_FILL_MODE, "window_mean")); u("ECOPATH_B_FILL_MODE") }
   if (!is.null(s$ECOPATH_B_FILL_YEARS)) { updateSliderInput(session, "fill_years", value = rng(s$ECOPATH_B_FILL_YEARS)); u("ECOPATH_B_FILL_YEARS") }
-  if (!is.null(s$HIGH_F_B_FIX)) { updateSelectInput(session, "high_f", selected = s$HIGH_F_B_FIX); u("HIGH_F_B_FIX") }
+  ## HIGH_F_B_FIX: no longer a choice (high F is reported only)
   if (!is.null(s$PHYTO_SOURCE)) { updateSelectInput(session, "phyto_src", selected = s$PHYTO_SOURCE); u("PHYTO_SOURCE") }
   if (!is.null(s$RUN_STEPS))    { updateCheckboxGroupInput(session, "steps_chk", selected = as.character(s$RUN_STEPS)); u("RUN_STEPS") }
   if (identical(s$AREA_MODE, "custom")) {

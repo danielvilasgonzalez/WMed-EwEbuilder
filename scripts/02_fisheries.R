@@ -7339,18 +7339,13 @@ if (!file.exists(SPECIES_DENSITY_PATH)) {
           " FG that genuinely had zero recorded catch) or Biomass_density_avg is 0/NA (FG not observed in",
           " the survey).")
 
-  ## --- FGs with F above F_MAX: optional fix of Ecopath_B ---------------
-  ## A high F usually means the survey cannot see the group (coastal,
-  ## rocky-bottom or pelagic species; see 05's F by country). HIGH_F_B_FIX:
-  ##   "none" (default)    - report only (high_F_REVIEW.csv)
-  ##   "min_from_catch"    - B = C / F_MAX for those FGs (the smallest B
-  ##                         that keeps F at F_MAX; C = mean catch density)
-  ##   "ecopath_estimate"  - B left blank and EE_input = HIGH_F_EE (0.95),
-  ##                         so Ecopath estimates B from the catch and the
-  ##                         predation
-  ## Ecopath_B (Biomass, Reference) is updated in the workbook; F_by_fg.csv
-  ## then shows the F with the new B. The choice is kept in the run record.
-  if (!exists("HIGH_F_B_FIX", envir = .GlobalEnv, inherits = FALSE)) HIGH_F_B_FIX <- "none"
+  ## --- FGs with F above their threshold: REPORT + RECOMMENDATION -------
+  ## Report only (project decision 2026-11-09): Ecopath_B is never changed
+  ## here. Each flagged FG gets a recommendation in high_F_REVIEW.csv,
+  ## from its biomass source, catchability and how far F is above the
+  ## threshold. The modeller decides (manual density, survey upload,
+  ## catch check, or leaving B to Ecopath in EwE).
+  HIGH_F_B_FIX <- "none"
   if (!exists("F_MAX", envir = .GlobalEnv, inherits = FALSE)) F_MAX <- 1
   if (!exists("HIGH_F_EE", envir = .GlobalEnv, inherits = FALSE)) HIGH_F_EE <- 0.95
   ## --- F threshold per FG from the stock assessments ------------------
@@ -7407,34 +7402,37 @@ if (!file.exists(SPECIES_DENSITY_PATH)) {
   }
   hi <- f_by_fg[is.finite(F) & F > F_threshold]
   if (nrow(hi)) {
-    hi_out <- hi[, .(FG_num, FG_name, B_before = Biomass_density_avg, Catch_density_avg, F_before = F, F_threshold,
-                     action = HIGH_F_B_FIX,
-                     B_after = switch(HIGH_F_B_FIX, min_from_catch = Catch_density_avg / F_threshold, ecopath_estimate = NA_real_, Biomass_density_avg))]
+    ## biomass source of each FG (Ecopath_B Reference) and its catchability
+    .eb_ref <- tryCatch({ e <- as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, "Ecopath_B", check.names = FALSE, sep.names = " "))
+                          if ("Reference" %in% names(e)) e[, .(FG_num = as.numeric(FG_num), ref = as.character(Reference))] else NULL }, error = function(e) NULL)
+    .qf <- file.path(BIOMASS_CSV_DIR, "catchability_q_by_species.csv")
+    .qfg <- if (file.exists(.qf)) tryCatch(fread(.qf)[, .(q_mean = mean(q_resolved, na.rm = TRUE), q_default = all(match_level %in% c("default_q", "default"))), by = .(FG_num)], error = function(e) NULL) else NULL
+    .rocky <- get0("ROCKY_HABITAT_FG_NAMES", ifnotfound = character(0))
+    hi_out <- hi[, .(FG_num, FG_name, B_t_km2 = Biomass_density_avg, Catch_t_km2 = Catch_density_avg, F, F_threshold,
+                     F_over_threshold = F / F_threshold, B_for_F_threshold = Catch_density_avg / F_threshold)]
+    if (!is.null(.eb_ref)) hi_out <- merge(hi_out, .eb_ref, by = "FG_num", all.x = TRUE) else hi_out[, ref := NA_character_]
+    if (!is.null(.qfg)) hi_out <- merge(hi_out, .qfg, by = "FG_num", all.x = TRUE) else hi_out[, `:=`(q_mean = NA_real_, q_default = NA)]
+    hi_out[, B_source := fifelse(grepl("^MEDITS", ref), "MEDITS trawl survey", fifelse(grepl("^MEDIAS", ref), "MEDIAS acoustic survey",
+                          fifelse(grepl("stock assessment|iccat|gfcm saf", ref, ignore.case = TRUE), "stock assessment",
+                          fifelse(is.na(ref) | !nzchar(ref), "unknown", "literature / model"))))]
+    hi_out[, recommendation := mapply(function(fg, src, ratio, thr, qd, bneed) {
+      r <- character(0)
+      if (src == "MEDITS trawl survey" && (fg %in% .rocky || grepl("pelag|mackerel|sardin|anchov|tuna|bonito|dolphinfish|coastal|lagoon|rocky|grouper|salema|seabream|dentex|mullet", fg, ignore.case = TRUE)))
+        r <- c(r, "The bottom trawl hardly samples this group (rocky, coastal or pelagic): its survey B is likely too low. Prefer a literature, assessment or other-survey B (survey biomass upload or manual density) or leave B to Ecopath in EwE (EE ~0.95).")
+      else if (src == "MEDITS trawl survey")
+        r <- c(r, "B is MEDITS trawl density: check the catchability of its species; a literature or other-survey B may be better.")
+      if (isTRUE(qd)) r <- c(r, "Its species have no catchability (q = 1): add q for them (FG_WMed_2026.csv column q).")
+      if (ratio > 3) r <- c(r, sprintf("F is %.0fx the threshold: check the catch assigned to this FG (NEI splits in catch_split_REVIEW.csv; catch from outside the model area, e.g. lagoons or < 10 m).", ratio))
+      if (thr > F_MAX) r <- c(r, sprintf("An assessed species is in this FG (highest assessed F %.2g): compare with its stock assessment.", thr))
+      r <- c(r, sprintf("B that would give F = threshold: %.3g t/km2.", bneed))
+      paste(r, collapse = " ")
+    }, FG_name, B_source, F_over_threshold, F_threshold, q_default, B_for_F_threshold)]
+    hi_out[, ref := NULL]
+    setorder(hi_out, -F_over_threshold)
     fwrite(hi_out, file.path(csv_out_dir, "high_F_REVIEW.csv"))
-    message("[F] ", nrow(hi), " FG(s) with F above their threshold (F_MAX = ", F_MAX, ", or the assessed F): ",
-            paste(sprintf("%s (%.2g > %.2g)", hi$FG_name, hi$F, hi$F_threshold), collapse = ", "),
-            " - HIGH_F_B_FIX = \"", HIGH_F_B_FIX, "\" (high_F_REVIEW.csv).")
-    if (HIGH_F_B_FIX %in% c("min_from_catch", "ecopath_estimate") && file.exists(ECOPATH_WORKBOOK_PATH)) tryCatch({
-      eb <- as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, "Ecopath_B", check.names = FALSE, sep.names = " "))
-      k <- eb$FG_num %in% hi$FG_num
-      .thr <- hi_out$F_threshold[match(eb$FG_num[k], hi_out$FG_num)]
-      note <- if (HIGH_F_B_FIX == "min_from_catch") sprintf("B set to catch / F threshold (%s; survey B gave a higher F) - HIGH_F_B_FIX", signif(.thr, 3)) else
-        sprintf("B left to Ecopath (EE = %s; survey B gave F > threshold %s) - HIGH_F_B_FIX", HIGH_F_EE, signif(.thr, 3))
-      if (HIGH_F_B_FIX == "min_from_catch") {
-        eb[k, Biomass := hi_out$B_after[match(FG_num, hi_out$FG_num)]]
-      } else {
-        eb[k, Biomass := NA_real_]
-        if (!"EE_input" %in% names(eb)) eb[, EE_input := NA_real_]
-        eb[, EE_input := as.numeric(EE_input)]               # an all-blank column is read as logical
-        eb[k, EE_input := HIGH_F_EE]
-      }
-      if ("Reference" %in% names(eb)) eb[k, Reference := fifelse(is.na(Reference) | !nzchar(Reference), note, paste0(note, " | before: ", Reference))]
-      upsert_workbook_sheets(list(Ecopath_B = eb), ECOPATH_WORKBOOK_PATH)
-      f_by_fg[FG_num %in% hi$FG_num, `:=`(Biomass_density_avg = hi_out$B_after[match(FG_num, hi_out$FG_num)],
-                                          B_source = paste0("HIGH_F_B_FIX = ", HIGH_F_B_FIX))]
-      f_by_fg[FG_num %in% hi$FG_num, F := if (HIGH_F_B_FIX == "min_from_catch") Catch_density_avg / Biomass_density_avg else NA_real_]
-      message("[F] Ecopath_B updated for ", sum(k), " FG(s) (", HIGH_F_B_FIX, ").")
-    }, error = function(e) message("[F] HIGH_F_B_FIX not applied: ", conditionMessage(e)))
+    message("[F] ", nrow(hi), " FG(s) with F above their threshold (F_MAX = ", F_MAX, ", or the assessed F) - REPORTED, Ecopath_B not changed;",
+            " recommendation per FG in high_F_REVIEW.csv:\n  ",
+            paste(sprintf("%s: F %.2g > %.2g (%s)", hi_out$FG_name, hi_out$F, hi_out$F_threshold, hi_out$B_source), collapse = "\n  "))
   }
   fwrite(f_by_fg, file.path(csv_out_dir, "F_by_fg.csv"))
   
