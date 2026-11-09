@@ -332,6 +332,9 @@ if (exists("MODEL_GSAS", envir = .GlobalEnv, inherits = FALSE) && length(MODEL_G
 GSA_COASTAL_STATE <- list("1" = "Spain", "2" = "Spain", "3" = "Morocco", "4" = "Algeria", "5" = "Spain", "6" = "Spain",
                           "7" = "France", "8" = "France", "9" = "Italy", "10" = "Italy", "11" = "Italy",
                           "12" = "Tunisia", "13" = "Tunisia", "14" = "Tunisia")
+## GFCM divisions -> GSAs (GFCM Res. GFCM/33/2009/2): the area a GFCM catch
+## record comes from, used to split NEI catch by that area's biomass.
+GFCM_DIVISION_GSAS <- list("37.1.1" = 1:6, "37.1.2" = 7, "37.1.3" = 8:12)
 TARGET_COUNTRIES <- if (exists("TARGET_COUNTRIES_OVERRIDE", envir = .GlobalEnv, inherits = FALSE)) TARGET_COUNTRIES_OVERRIDE else
   unique(unlist(GSA_COASTAL_STATE[as.character(FILTER_AREAS)]))
 
@@ -897,6 +900,7 @@ match_bare_rank_to_fg <- function(query_clean, taxonomy_ref) {
     if (nrow(hits) == 0) next  # this rank's candidates were ALL non-commercial - try the next, broader rank instead
     fg_weights <- hits[, .(fg_biomass = sum(Density, na.rm = TRUE)), by = .(FG_num, FG_name)]
     fg_weights[, matched_rank := rank]
+    .last_split_members <<- unique(hits[, .(FG_num, ScientificName)])   # the survey species behind each candidate FG (regional split, below)
     return(fg_weights)
   }
   NULL
@@ -927,6 +931,16 @@ match_bare_rank_to_fg <- function(query_clean, taxonomy_ref) {
     .nei_fg_b_cache <<- b
   }
   .nei_fg_b_cache
+}
+## Survey species behind each split catch name (Species x FG_num x
+## ScientificName): their biomass in the GSAs a record was caught in gives
+## the regional split (.regionalize_split(), further down).
+.last_split_members <- NULL
+.split_members <- data.table(Species = character(), FG_num = numeric(), ScientificName = character())
+.register_split <- function(sp) {
+  if (!is.null(.last_split_members) && nrow(.last_split_members))
+    .split_members <<- unique(rbind(.split_members, data.table(Species = sp, .last_split_members), fill = TRUE))
+  .last_split_members <<- NULL
 }
 split_by_biomass <- function(fg_weights) {
   total <- sum(fg_weights$fg_biomass, na.rm = TRUE)
@@ -1318,6 +1332,7 @@ if (!is.null(taxonomy_rank_ref) && nrow(remaining) > 0) {
       fg_weights <- match_bare_rank_to_fg(rank_candidates$query_clean[i], taxonomy_rank_ref)
       if (!is.null(fg_weights)) {
         split_rows <- split_by_biomass(copy(fg_weights))
+        .register_split(rank_candidates$Species[i])
         split_rows[, `:=`(Species = rank_candidates$Species[i], match_method = paste0("taxonomy_", matched_rank, "_split"))]
         rank_split_matches <- rbind(rank_split_matches,
                                     split_rows[, .(Species, FG_num, FG_name, Split_weight, match_method)], fill = TRUE)
@@ -1383,6 +1398,7 @@ if (!is.null(nei_keyword_to_rank) && !is.null(taxonomy_rank_ref) && nrow(still_r
     fg_weights <- match_bare_rank_to_fg(nei_keyword_to_rank$target_rank_value[hit_row], taxonomy_rank_ref)
     if (is.null(fg_weights)) next
     split_rows <- split_by_biomass(copy(fg_weights))
+    .register_split(still_remaining$Species[i])
     split_rows[, `:=`(Species = still_remaining$Species[i],
                       match_method = paste0("nei_keyword_", nei_keyword_to_rank$target_rank_value[hit_row]))]
     nei_keyword_matches <- rbind(nei_keyword_matches,
@@ -1584,6 +1600,7 @@ rerun_species_fg_cascade <- function(species_names) {
         fg_weights <- match_bare_rank_to_fg(fsb2$query_clean[i], taxonomy_rank_ref)
         if (!is.null(fg_weights)) {
           split_rows <- split_by_biomass(copy(fg_weights))
+          .register_split(fsb2$Species[i])
           split_rows[, `:=`(Species = fsb2$Species[i], match_method = paste0("taxonomy_", matched_rank, "_split_rerun"))]
           out <- rbind(out, split_rows[, .(Species, FG_num, FG_name, Split_weight, match_method)], fill = TRUE)
         }
@@ -1594,6 +1611,79 @@ rerun_species_fg_cascade <- function(species_names) {
   
   out[is.na(Split_weight), Split_weight := 1]  # every earlier step here resolves to exactly one FG
   unique(out, by = c("Species", "FG_num"))  # by = "Species" alone would collapse a taxonomy-rank split's multiple FG rows for the same species down to just one, silently dropping the split
+}
+
+## --- NEI / higher-taxon catch: split by the biomass of its own area -----
+## A catch name split over several FGs (NEI groups, family/order/class
+## names) is split with the survey biomass of the GSAs the record was
+## caught in, not with the model-wide biomass:
+##   w_f,r = sum_{s in f, s in rank} B_s,g / sum_f(...),  g in GSAs of r
+## r = the record's area: GFCM division x country (GSAs of the division
+## whose coastal state is the country, e.g. Spain in 37.1.1 = GSAs 1, 2, 5,
+## 6; Italy in 37.1.3 = 9, 10, 11), GFCM division alone, or the FDI GSA.
+## B_s,g from species_biomass_by_gsa.csv (01). If the area has no biomass
+## for any candidate FG, the model-wide split is kept.
+## NEI_SPLIT_BY_REGION = FALSE keeps the model-wide split everywhere.
+if (!exists("NEI_SPLIT_BY_REGION")) NEI_SPLIT_BY_REGION <- TRUE
+SP_B_GSA <- NULL
+.spb_f <- file.path(BIOMASS_CSV_DIR, "species_biomass_by_gsa.csv")
+if (isTRUE(NEI_SPLIT_BY_REGION)) {
+  if (file.exists(.spb_f)) {
+    SP_B_GSA <- tryCatch(fread(.spb_f)[is.finite(biomass_t) & biomass_t > 0, .(AreaID = as.integer(AreaID), FG_num, ScientificName, biomass_t)],
+                         error = function(e) NULL)
+  } else message("\n[NEI regional split] ", .spb_f, " not found (run 01 first) - NEI catch keeps the model-wide biomass split.")
+}
+.region_gsas <- function(country = NA_character_, division = NA_character_) {
+  m <- as.integer(FILTER_AREAS)
+  dg <- if (!is.na(division) && division %in% names(GFCM_DIVISION_GSAS)) as.integer(GFCM_DIVISION_GSAS[[division]]) else integer(0)
+  cg <- if (!is.na(country)) as.integer(names(GSA_COASTAL_STATE)[vapply(GSA_COASTAL_STATE, identical, logical(1), country)]) else integer(0)
+  for (g in list(if (length(dg) && length(cg)) intersect(dg, cg) else integer(0), cg, dg)) {
+    g <- intersect(g, m); if (length(g)) return(sort(g))
+  }
+  integer(0)
+}
+.reg_w_cache <- new.env()
+.reg_split_w <- function(sp, gsas) {
+  k <- paste(sp, paste(gsas, collapse = ","), sep = "|")
+  if (!is.null(.reg_w_cache[[k]])) return(.reg_w_cache[[k]])
+  mem <- .split_members[Species == sp]
+  out <- NULL
+  if (nrow(mem) && length(gsas) && !is.null(SP_B_GSA)) {
+    b <- merge(mem[, .(FG_num, ScientificName)], SP_B_GSA[AreaID %in% gsas], by = c("FG_num", "ScientificName"))
+    if (nrow(b) && sum(b$biomass_t) > 0) {
+      w <- b[, .(B = sum(biomass_t)), by = FG_num]
+      out <- merge(unique(mem[, .(FG_num)]), w, by = "FG_num", all.x = TRUE)[is.na(B), B := 0][, .(FG_num, w_reg = B / sum(B))]
+    }
+  }
+  .reg_w_cache[[k]] <- if (is.null(out)) data.table(FG_num = numeric(), w_reg = numeric()) else out
+  .reg_w_cache[[k]]
+}
+.nei_reg_log <- list()
+## x: catch rows already merged with species_to_fg (Species, FG_num,
+## Split_weight); region from country_col / division_col, or gsa_col.
+.regionalize_split <- function(x, country_col = NULL, division_col = NULL, gsa_col = NULL, label = "") {
+  if (!isTRUE(NEI_SPLIT_BY_REGION) || is.null(SP_B_GSA) || !nrow(.split_members) || !nrow(x)) return(x)
+  idx <- x$Species %in% .split_members$Species
+  if (!any(idx)) return(x)
+  kc <- c(country_col, division_col, gsa_col)
+  keys <- unique(x[idx, c("Species", kc), with = FALSE])
+  wt <- rbindlist(lapply(seq_len(nrow(keys)), function(i) {
+    gsas <- if (!is.null(gsa_col)) intersect(as.integer(keys[[gsa_col]][i]), as.integer(FILTER_AREAS)) else
+      .region_gsas(if (!is.null(country_col)) as.character(keys[[country_col]][i]) else NA_character_,
+                   if (!is.null(division_col)) as.character(keys[[division_col]][i]) else NA_character_)
+    w <- .reg_split_w(keys$Species[i], gsas)
+    if (!nrow(w)) return(NULL)
+    cbind(keys[i], w, GSAs = paste(gsas, collapse = ","))
+  }), fill = TRUE)
+  if (!nrow(wt)) return(x)
+  x <- merge(x, wt, by = c("Species", kc, "FG_num"), all.x = TRUE, sort = FALSE)
+  ## rows of a key with regional weights but an FG without survey members there
+  has <- unique(wt[, c("Species", kc), with = FALSE])[, .has_reg := TRUE]
+  x <- merge(x, has, by = c("Species", kc), all.x = TRUE, sort = FALSE)
+  .nei_reg_log[[length(.nei_reg_log) + 1]] <<- unique(x[.has_reg == TRUE, c("Species", kc, "GSAs", "FG_num", "FG_name", "Split_weight", "w_reg"), with = FALSE])[, source := label]
+  x[.has_reg == TRUE, Split_weight := fifelse(is.na(w_reg), 0, w_reg)]
+  x[, c("w_reg", "GSAs", ".has_reg") := NULL]
+  x[Split_weight > 0 | !Species %in% .split_members$Species]
 }
 
 ## --- "Marine molluscs nei": split by the identified mollusc catch -------
@@ -1638,6 +1728,8 @@ if (!nrow(.mollusc_fgs) && exists("fg_lookup"))   # no Phylum column: mollusc FG
 }
 .apply_mollusc_nei <- function(ts, key, by_cols) {
   base <- merge(ts, species_to_fg, by = "Species", allow.cartesian = TRUE)
+  base <- .regionalize_split(base, country_col = if ("Country" %in% names(base)) "Country",
+                             division_col = if ("Division" %in% names(base)) "Division", label = paste("GFCM by", key))
   sp <- .mollusc_nei_split(ts, key)
   if (is.null(sp)) return(base)
   nei_rows <- merge(ts[grepl(MOLLUSC_NEI_REGEX, Species, perl = TRUE)], sp, by = c(key, "Year"), allow.cartesian = TRUE)
@@ -1669,7 +1761,11 @@ message("\n[GFCM] gfcm_catches_by_species_year_division_", DATASET_VERSION, ".cs
 ## the fleet/sector split, discard, and unreported steps below):
 gfcm_country_fg <- data.table()
 if (nrow(ts_data$country_species_ts) > 0) {
-  gfcm_country_fg <- .apply_mollusc_nei(ts_data$country_species_ts, "Country")  # attach FG to the country-level catch timeseries - allow.cartesian since a taxonomy-rank-split species now fans out into more than one FG row
+  .gfcm_cty_sp <- .apply_mollusc_nei(ts_data$country_species_ts, "Country")
+  ## species mix of each FG's catch (FG explorer of the page): target countries, study years
+  catch_species_gfcm <- .gfcm_cty_sp[Country %in% TARGET_COUNTRIES & Year >= START_YEAR & Year <= END_YEAR,
+                                     .(Landings_t = sum(Catch * Split_weight, na.rm = TRUE)), by = .(FG_num, FG_name, Year, Species)][Landings_t > 0]
+  gfcm_country_fg <- .gfcm_cty_sp  # attach FG to the country-level catch timeseries - allow.cartesian since a taxonomy-rank-split species now fans out into more than one FG row
   gfcm_country_fg <- gfcm_country_fg[Country %in% TARGET_COUNTRIES & Year >= START_YEAR & Year <= END_YEAR,
                                      .(Landings_t = sum(Catch * Split_weight, na.rm = TRUE)), by = .(Country, FG_num, FG_name, Year)]  # sum landings by country x FG x year, target countries and study period only - Catch scaled by Split_weight (1 for a normal match, so unchanged) before summing
   message("[GFCM] Country x FG x Year backbone: ", nrow(gfcm_country_fg), " row(s), ",
@@ -2896,7 +2992,15 @@ if (!dir.exists(stecf_catches_dir)) {
       ## FDI's species field uses the same FAO 3-alpha standard.
       species_code_ref <- unique(safe_fread(file.path(cfg$data_dir, cfg$species_file), "species_file")[, .(SpeciesCode = `3A_Code`, Species = Name_En)])  # FAO 3-alpha code lookup (unique()'d defensively - a duplicate SpeciesCode row here would fan out every merge keyed on it below)
       species_code_to_fg <- unique(merge(species_code_ref, species_to_fg, by = "Species")[, .(SpeciesCode, FG_num, FG_name, Split_weight)])  # build a 3-alpha code -> FG lookup - Split_weight carries a real fraction (<1) through for a taxonomy-rank-split aggregate/NEI code, 1 for every normal match
-      stecf_raw <- merge(stecf_raw, species_code_to_fg, by.x = "species", by.y = "SpeciesCode", all.x = TRUE, allow.cartesian = TRUE)  # attach FG to each FDI row - allow.cartesian since a taxonomy-rank-split code now fans out into more than one row (one per candidate FG)
+      stecf_raw <- merge(stecf_raw, species_code_to_fg, by.x = "species", by.y = "SpeciesCode", all.x = TRUE, allow.cartesian = TRUE)
+      ## NEI codes: split by the biomass of the record's own GSA (see .regionalize_split())
+      if (isTRUE(NEI_SPLIT_BY_REGION) && "sub_region" %in% names(stecf_raw)) {
+        .code_sp <- unique(merge(species_code_ref, species_to_fg[Species %in% .split_members$Species, .(Species)], by = "Species"))
+        stecf_raw[, .fdi_gsa := suppressWarnings(floor(as.numeric(sub("^GSA\\s*", "", toupper(trimws(as.character(sub_region)))))))]
+        stecf_raw[, Species := .code_sp$Species[match(species, .code_sp$SpeciesCode)]]
+        stecf_raw <- .regionalize_split(stecf_raw, gsa_col = ".fdi_gsa", label = "STECF FDI by GSA")
+        stecf_raw[, c(".fdi_gsa", "Species") := NULL]
+      }  # attach FG to each FDI row - allow.cartesian since a taxonomy-rank-split code now fans out into more than one row (one per candidate FG)
       ## Scale the two tonnage columns by Split_weight right here, at the
       ## fan-out point, so every row of stecf_raw from here on already
       ## carries its correctly-split share and nothing downstream needs
@@ -3135,6 +3239,12 @@ if (!dir.exists(stecf_catches_dir)) {
                                               Discard_t = sum(tot_discards_tonnes, na.rm = TRUE)),
                                           by = .(Country, GSA = sub_region, FleetType, Metier, FG_num, FG_name, Year = year)]  # sum catch/discards by country x GSA x fleet x metier x FG x year
       setorder(stecf_fdi_catch_by_gsa, Country, GSA, FG_num, Year)  # sort for readability
+      ## species mix of each FG's landings and discards (FG explorer of the page)
+      catch_species_fdi <- stecf_raw[!is.na(FG_num), .(Landings_t = sum(total_live_weight_landed, na.rm = TRUE),
+                                                       Discards_t = sum(tot_discards_tonnes, na.rm = TRUE)), by = .(FG_num, FG_name, Year = year, code = species)]
+      catch_species_fdi[, Species := species_code_ref$Species[match(code, species_code_ref$SpeciesCode)]]
+      catch_species_fdi[is.na(Species), Species := code][, code := NULL]
+      catch_species_fdi <- catch_species_fdi[Landings_t > 0 | Discards_t > 0]
       fwrite(stecf_fdi_catch_by_gsa, file.path(csv_out_dir, "stecf_fdi_catch_by_gsa_gear_year.csv"))  # write result to CSV
       message("[STECF FDI] stecf_fdi_catch_by_gsa_gear_year.csv written - ", nrow(stecf_fdi_catch_by_gsa),
               " Country x GSA x FleetType x Metier x FG x Year row(s).")
@@ -8377,11 +8487,34 @@ tryCatch({
     if (file.exists(file.path(csv_out_dir, "nei_keyword_fcap_adjustments.csv")))
       fread(file = file.path(csv_out_dir, "nei_keyword_fcap_adjustments.csv"))[
         , .(split_type = "NEI share moved by the F cap", item = Species, Country = NA_character_, Year = NA_integer_, FG_num, FG_name, share = delta,
-            how = "nei_keyword_fcap (share change)")])
+            how = "nei_keyword_fcap (share change)")],
+    if (length(.nei_reg_log)) {
+      rl <- rbindlist(.nei_reg_log, fill = TRUE)
+      for (cc in c("Country", "Division", ".fdi_gsa")) if (!cc %in% names(rl)) rl[, (cc) := NA]
+      unique(rl[, .(split_type = "NEI split by the biomass of its own area", item = Species,
+                    Country = trimws(paste0(fifelse(is.na(Country), "", as.character(Country)),
+                                            fifelse(is.na(Division), "", paste0(" ", Division)),
+                                            fifelse(is.na(.fdi_gsa), "", paste0(" GSA ", .fdi_gsa)))),
+                    Year = NA_integer_, FG_num, FG_name, share = fifelse(is.na(w_reg), 0, w_reg),
+                    how = paste0(source, ": biomass of GSAs ", GSAs, " (model-wide share ", round(Split_weight, 3), ")"))])
+    })
   sl <- rbindlist(parts, fill = TRUE)
   fwrite(sl[order(split_type, item, Country, Year, -share)], file.path(csv_out_dir, "catch_split_REVIEW.csv"))
   message("[Review] catch_split_REVIEW.csv: ", nrow(sl), " split row(s) (", uniqueN(sl$item), " catch item(s)).")
 }, error = function(e) message("[Review] catch_split_REVIEW.csv not written - ", conditionMessage(e)))
+
+## Species mix of each FG's catch, by year (FG explorer of the page):
+## STECF FDI landings and discards (Spain, France, Italy, model GSAs, 2014+)
+## and GFCM landings of the target countries (all years; no discards by
+## species). The page uses FDI where it has the FG and year, else GFCM.
+tryCatch({
+  cs <- rbindlist(list(
+    if (exists("catch_species_fdi")) catch_species_fdi[, .(FG_num, FG_name, Year, Species, Landings_t, Discards_t, source = "STECF FDI")],
+    if (exists("catch_species_gfcm")) catch_species_gfcm[, .(FG_num, FG_name, Year, Species, Landings_t, Discards_t = NA_real_, source = "GFCM")]), fill = TRUE)
+  if (!nrow(cs)) stop("no species catch recorded")
+  fwrite(cs[order(FG_num, Year, source, -Landings_t)], file.path(csv_out_dir, "catch_species_by_fg_year.csv"))
+  message("[Review] catch_species_by_fg_year.csv: species mix of the catch of ", uniqueN(cs$FG_num), " FGs (FG explorer).")
+}, error = function(e) message("[Review] catch_species_by_fg_year.csv not written - ", conditionMessage(e)))
 
 tryCatch({
   fa <- rbindlist(list(if (exists(".fa_sau")) .fa_sau, if (exists(".fa_stecf")) .fa_stecf), fill = TRUE)

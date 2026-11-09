@@ -1603,10 +1603,11 @@ observe({
     if (length(base_yrs)) pc <- pc + ggplot2::annotate("rect", xmin = min(base_yrs) - 0.5, xmax = max(base_yrs) + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
     (if (absolute) pc else pc + ggplot2::geom_hline(yintercept = 1, colour = "grey70", linetype = "dashed")) + .ln() +
       sc(intersect(c("Catches", "Discards"), unique(ct$type))) + th + ggplot2::labs(title = "Catches and discards",
-                              subtitle = paste0("Ecopath years: ", paste(refs, collapse = ", "), " t/km\u00b2"), x = NULL,
+                              subtitle = paste0("Ecopath years: ", paste(refs, collapse = ", "), " t/km\u00b2\nPoint the mouse at a year: the species in the catch or discards"), x = NULL,
                               y = if (absolute) "t/km\u00b2" else "Relative to Ecopath years (= 1)")
   } else note_panel("Catches and discards", "No catch or discards recorded\nfor this group in the data sources.")
-  list(p1 = p1, p2 = p2, b = if (nrow(b)) b[, c("Year", "value")] else NULL, fg = .fg_now)
+  list(p1 = p1, p2 = p2, b = if (nrow(b)) b[, c("Year", "value")] else NULL,
+       ct = if (nrow(ct)) as.data.frame(ct)[, c("Year", "value", "series")] else NULL, fg = .fg_now)
 })
 output$fg_explore_plot <- renderPlot(.fg_panels()$p1, res = 96)
 output$fg_explore_plot_catch <- renderPlot(.fg_panels()$p2, res = 96)
@@ -1655,23 +1656,14 @@ output$fg_explore_plot_catch <- renderPlot(.fg_panels()$p2, res = 96)
   }
   NULL
 }
-output$fg_explore_tip <- renderUI({
-  h <- input$fg_explore_hover
-  if (is.null(h) || is.null(h$x)) return(NULL)
-  pn <- .fg_panels(); if (is.null(pn$b) || !nrow(pn$b)) return(NULL)
-  pt <- shiny::nearPoints(pn$b, h, xvar = "Year", yvar = "value", threshold = 12, maxpoints = 1)
-  if (!nrow(pt)) {   # anywhere above a year: that year's point
-    yr <- round(h$x); pt <- pn$b[pn$b$Year == yr, , drop = FALSE]
-    if (!nrow(pt)) return(NULL)
-  }
-  yr <- pt$Year[1]
-  sh <- .fg_species_shares(pn$fg, yr)
-  rows <- if (is.null(sh)) list(tags$div(class = "text-muted", "No species split recorded for this FG.")) else {
+## Hover box: the shares (largest 10, then the rest) next to the mouse
+.tip_box <- function(h, title, sh, empty = "No species split recorded for this FG.") {
+  rows <- if (is.null(sh)) list(tags$div(class = "text-muted", empty)) else {
     o <- order(-sh$w); p <- sh$w[o] / sum(sh$w); sp <- sh$sp[o]
     k <- min(length(p), 10)
     c(lapply(seq_len(k), function(i) tags$div(tags$span(style = "display:inline-block; min-width:3.6em; text-align:right; margin-right:.5em; font-variant-numeric: tabular-nums;",
                                                             if (p[i] >= 0.001) sprintf("%.1f%%", 100 * p[i]) else "<0.1%"), tags$em(sp[i]))),
-      if (length(p) > k) list(tags$div(class = "text-muted", sprintf("+ %d more species: %.1f%%", length(p) - k, 100 * sum(p[-seq_len(k)])))),
+      if (length(p) > k) list(tags$div(class = "text-muted", sprintf("+ %d more: %.1f%%", length(p) - k, 100 * sum(p[-seq_len(k)])))),
       list(tags$div(class = "text-muted mt-1", style = "font-size:.75rem;", "Source: ", sh$src)))
   }
   left <- h$coords_css$x; top <- h$coords_css$y
@@ -1680,7 +1672,59 @@ output$fg_explore_tip <- renderUI({
                           if (flip) paste0("right:calc(100% - ", left - 12, "px); ") else paste0("left:", left + 12, "px; "),
                           "background:rgba(255,255,255,.97); border:1px solid #9fb3c8; border-radius:6px; padding:.4rem .6rem; ",
                           "box-shadow:0 2px 8px rgba(16,42,67,.18); font-size:.8rem; max-width:340px; line-height:1.3;"),
-    tags$strong(paste0(yr, ": species shares of the FG biomass")), rows)
+    tags$strong(title), rows)
+}
+## the point under the mouse, else the point of that year
+.hover_point <- function(d, h, extra = NULL) {
+  if (is.null(h) || is.null(h$x) || is.null(d) || !nrow(d)) return(NULL)
+  pt <- shiny::nearPoints(d, h, xvar = "Year", yvar = "value", threshold = 12, maxpoints = 1)
+  if (!nrow(pt)) { pt <- d[d$Year == round(h$x), , drop = FALSE]; if (nrow(pt) > 1 && !is.null(h$y)) pt <- pt[which.min(abs(pt$value - h$y)), , drop = FALSE] }
+  if (!nrow(pt)) NULL else pt[1, , drop = FALSE]
+}
+output$fg_explore_tip <- renderUI({
+  h <- input$fg_explore_hover
+  pn <- .fg_panels(); pt <- .hover_point(pn$b, h)
+  if (is.null(pt)) return(NULL)
+  yr <- pt$Year
+  .tip_box(h, paste0(yr, ": species shares of the FG biomass"), .fg_species_shares(pn$fg, yr))
+})
+
+## Species mix of the catch and discards (catch_species_by_fg_year.csv, 02):
+## STECF FDI (landings and discards by species, 2014+) where it has the FG
+## and year, else GFCM landings (no discards by species: the discards are
+## the catch x the fleet discard ratio, so they take the landings mix).
+.sp_catch <- reactive({
+  .ecosim_ts()
+  f <- file.path(.out_dir, "fisheries", "catch_species_by_fg_year.csv")
+  if (is.na(.out_dir) || !file.exists(f)) return(NULL)
+  x <- tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+  if (is.null(x) || !all(c("FG_num", "Year", "Species", "Landings_t", "source") %in% names(x))) NULL else x
+})
+.fg_catch_shares <- function(fg, yr, what = c("Catches", "Discards")) {
+  what <- match.arg(what)
+  x <- .sp_catch(); if (is.null(x)) return(NULL)
+  x <- x[x$FG_num == fg & x$Year == yr, ]
+  if (!nrow(x)) return(NULL)
+  fdi <- x[x$source == "STECF FDI", ]
+  if (what == "Discards" && nrow(fdi) && "Discards_t" %in% names(fdi) && sum(fdi$Discards_t, na.rm = TRUE) > 0) {
+    d <- stats::aggregate(Discards_t ~ Species, fdi[is.finite(fdi$Discards_t) & fdi$Discards_t > 0, ], sum)
+    return(list(sp = d$Species, w = d$Discards_t, src = paste0("STECF FDI discards ", yr, " (Spain, France, Italy)")))
+  }
+  use <- if (nrow(fdi) && sum(fdi$Landings_t, na.rm = TRUE) > 0) fdi else x[x$source == "GFCM", ]
+  use <- use[is.finite(use$Landings_t) & use$Landings_t > 0, ]
+  if (!nrow(use)) return(NULL)
+  d <- stats::aggregate(Landings_t ~ Species, use, sum)
+  src <- if (identical(use$source[1], "STECF FDI")) paste0("STECF FDI landings ", yr, " (Spain, France, Italy)") else paste0("GFCM landings ", yr, " (catch names as reported, NEI groups included)")
+  if (what == "Discards") src <- paste0(src, "; no discards by species this year, so the discards are shown with the landings mix")
+  list(sp = d$Species, w = d$Landings_t, src = src)
+}
+output$fg_explore_tip_catch <- renderUI({
+  h <- input$fg_explore_hover_catch
+  pn <- .fg_panels(); pt <- .hover_point(pn$ct, h)
+  if (is.null(pt)) return(NULL)
+  what <- if (identical(as.character(pt$series), "Discards")) "Discards" else "Catches"
+  .tip_box(h, paste0(pt$Year, ": ", tolower(what), " by species"), .fg_catch_shares(pn$fg, pt$Year, what),
+           empty = "No species detail for this FG and year.")
 })
 
 ## --- Load a settings file (presets) -------------------------------------

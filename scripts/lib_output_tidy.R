@@ -13,7 +13,7 @@
 ## =================================================================
 WMED_TIDY_BLOCKS <- c("biomass", "fisheries", "pbqb-traits", "diet")
 WMED_TIDY_KEEP <- list(
-  biomass = c("survey_fg_annual_index_regional_combined.csv", "species_density_regional_combined.csv",
+  biomass = c("survey_fg_annual_index_regional_combined.csv", "species_density_regional_combined.csv", "species_biomass_by_gsa.csv",
               "biomass_proportion_by_species_fg.csv", "FG_lookup.csv", "FG_Density_by_Stratum.csv",
               "model_area_by_gsa.csv", "model_area_cells.csv", "strata_area_by_area.csv",
               "survey_index_cv_by_fg_year.csv", "fg_species_coverage.csv", "fg_species_biomass_needs_review.csv",
@@ -21,7 +21,7 @@ WMED_TIDY_KEEP <- list(
               "survey_unmatched_for_manual_review.csv", "medias_area_10_200m_fallback.csv",
               "catchability_q_by_species.csv", "catchability_effect_by_fg.csv",
               "manual_density_override_applied.csv", "fg_species_coverage_totals.csv", "multistanza_split_comparison.csv"),
-  fisheries = c("F_by_fg.csv", "Catches_Discards_FG_ts.csv", "Catches_Ecosim.csv", "Fishing_Effort_by_Fleet.csv",
+  fisheries = c("F_by_fg.csv", "Catches_Discards_FG_ts.csv", "catch_species_by_fg_year.csv", "Catches_Ecosim.csv", "Fishing_Effort_by_Fleet.csv",
                 "catches_by_country_fleet_sector_year.csv", "species_fg_matched.csv", "mollusc_nei_split_by_country_year.csv",
                 "ecopath_L_fg_coverage_check.csv", "fg_zero_catch_diagnostic.csv", "ecosim_eu_catch_share.csv",
                 "high_F_REVIEW.csv", "assessment_F_threshold_by_fg.csv"),

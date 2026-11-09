@@ -1847,8 +1847,17 @@ Indices: $c$ country, $f$ FG, $l$ fleet (country × fleet type), $y$
 year.
 
 1.  Species → FG: $C_{c,f,y} = \sum_{s \in f} C_{c,s,y}$. FAO "NEI"
-    groups are split over candidate FGs in proportion to biomass, with
-    an $F \le 1$ cap (below). "Marine molluscs nei" (3,814 t/yr in
+    groups and higher-taxon names are split over candidate FGs in
+    proportion to the survey biomass of the area the catch comes from,
+    $w_{f,r} = \sum_{s \in f} B_{s,g \in r} / \sum_{f} \sum_{s \in f} B_{s,g \in r}$,
+    where $s$ are the survey species of that taxon and $r$ is the GSAs
+    of the record: the GFCM division × country (e.g. Spain in 37.1.1 =
+    GSAs 1, 2, 5, 6; France in 37.1.2 = GSA 7; Italy in 37.1.3 = GSAs
+    9–11), or the FDI GSA. $B_{s,g}$ is the mean survey biomass per GSA
+    (`species_biomass_by_gsa.csv`, from 01). An area with no survey
+    biomass for any candidate FG keeps the model-wide split
+    (`NEI_SPLIT_BY_REGION = FALSE` uses the model-wide split everywhere).
+    An $F \le 1$ cap follows (below). "Marine molluscs nei" (3,814 t/yr in
     1994–1996) is split over the commercial mollusc FGs in proportion to
     the mollusc catch the same country reported to species or group
     level in the same year,
@@ -1981,8 +1990,9 @@ with the rows to check first:
   file), *split over n FGs*, *matched through a broader taxon* or *ok*.
 - `catch_split_REVIEW.csv`: every catch item spread over several FGs and
   the share each FG gets: species and NEI groups, Mollusca NEI split by
-  the identified mollusc catch of the same country and year, and the NEI
-  shares moved by the F cap.
+  the identified mollusc catch of the same country and year, NEI groups
+  split by the biomass of their own area (with the GSAs used and the
+  model-wide share for comparison), and the NEI shares moved by the F cap.
 - `fleet_assignment_REVIEW.csv`: each country × source × raw gear (SAU
   gear, or FDI metier gear code and vessel length) and the fleet it was
   assigned to, the rule used (`gear_to_fleettype.csv`,

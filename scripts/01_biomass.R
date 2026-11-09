@@ -3366,6 +3366,27 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
           " rows) - MEDITS+MEDIAS combined species-level density, all years. This is the",
           " file 03_pbqb-traits.R reads directly (SPECIES_DF_SOURCE == \"survey\") to build",
           " its species_df input.")
+
+  ## Species biomass per GSA (t in the surveyed cells, mean over the survey
+  ## years): 02_fisheries.R splits NEI / higher-taxon catch over FGs with the
+  ## biomass of the GSAs the catch comes from (GFCM division x country, or
+  ## the FDI GSA), not with the model-wide biomass.
+  ##   B_s,g = mean_y sum_strata (D_s,g,h,y x A_g,h)   (MEDITS)
+  ##   MEDIAS: the acoustic biomass of the GSA; a species in both surveys
+  ##   takes the mean of the two, as in the combined index above.
+  tryCatch({
+    .bg <- merge(merge(per_group_sp, n_samples_by_stratum, by = c("AreaID", "Year", "Stratum")),
+                 unique(as.data.table(strata_area_by_area)[!is.na(prop) & !is.na(area_km2), .(AreaID, Stratum, area_km2)]), by = c("AreaID", "Stratum"))
+    .bg <- .bg[!is.na(n_samples) & n_samples > 0,
+               .(biomass_t = sum(density_sum / n_samples * area_km2, na.rm = TRUE)), by = .(AreaID, Year, FG_num, FG_name, ScientificName)][, Survey := "MEDITS"]
+    if (exists("acoustic_sp_by_gsa") && is.data.frame(acoustic_sp_by_gsa) && nrow(acoustic_sp_by_gsa))
+      .bg <- rbind(.bg, acoustic_sp_by_gsa[, .(AreaID, Year, FG_num, FG_name, ScientificName, biomass_t = species_biomass_t, Survey = "MEDIAS")])
+    .bg <- .bg[, .(biomass_t = mean(biomass_t, na.rm = TRUE)), by = .(AreaID, Year, FG_num, FG_name, ScientificName)]
+    .bg <- .bg[, .(biomass_t = mean(biomass_t, na.rm = TRUE), n_years = .N), by = .(AreaID, FG_num, FG_name, ScientificName)]
+    fwrite(.bg[order(AreaID, FG_num, -biomass_t)], file.path(csv_out_dir, "species_biomass_by_gsa.csv"))
+    message("Saved species_biomass_by_gsa.csv (", nrow(.bg), " species x GSA rows, ", uniqueN(.bg$AreaID),
+            " GSAs) - used by 02_fisheries.R to split NEI catch by the biomass of the GSAs it was caught in.")
+  }, error = function(e) message("[species_biomass_by_gsa] not written - ", conditionMessage(e)))
   
   ## Species inventory, for review - every species that appears ANYWHERE
   ## in the combined time series (not just the Ecopath base years), one
