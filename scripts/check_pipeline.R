@@ -71,9 +71,9 @@ for (f in c(list.files(.chk_dir, "\\.(R|qmd|Rmd|md)$", full.names = TRUE), file.
 if (!any(grepl("possible", .problems))) .say(TRUE, "no home folders, e-mails or passwords found")
 
 if (isTRUE(get0("QUICK_RUN", envir = .GlobalEnv, ifnotfound = FALSE))) {
-  message("4. Quick run: 01-05 for a box over GSA 6 (outputs in out_dir/check_run)")
+  message("4. Quick run: 01-04 + 06 for a box over GSA 6 (outputs in out_dir/check_run)")
   rs <- file.path(tempdir(), "wmed_check_run.R")
-  writeLines(c("CLEAN_START <- FALSE; RUN_STEPS <- 1:5",
+  writeLines(c("CLEAN_START <- FALSE; RUN_STEPS <- c(1:4, 7)",
                "AREA_MODE <- 'custom'; AREA_NAME <- 'check_run'; CUSTOM_AREA_TYPE <- 'bbox'",
                "CUSTOM_BBOX <- c(xmin = 0, xmax = 3.5, ymin = 38.5, ymax = 41.5)",
                "YEAR_ECOPATH <- 1994:1996; TS_YEARS <- 1995:2000",

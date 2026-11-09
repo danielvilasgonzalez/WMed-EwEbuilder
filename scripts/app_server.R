@@ -42,7 +42,7 @@ makeActiveBinding(".out_dir", function() shiny::isolate(.results_dir()), environ
 dir.create(.run_dir, showWarnings = FALSE, recursive = TRUE)
 .status_file <- file.path(.run_dir, "status.txt")       # "done" or "error: ..." when the run ends; its time = end
 .console <- file.path(.run_dir, "console.txt")          # everything the run prints
-.progress_file <- file.path(.run_dir, "progress.txt")   # "--- Step i/5 ..." lines
+.progress_file <- file.path(.run_dir, "progress.txt")   # "--- Step i/7 ..." lines
 .pid_file <- file.path(.run_dir, "pid.txt")             # process id of the run
 .settings_file <- file.path(.run_dir, "settings.R")     # settings block of the run; its time = start
 
@@ -110,7 +110,7 @@ observeEvent(input$catch_upload, {   # an uploaded catchability table is kept ne
 ## MEDIAS_DIR), not on the page.
 survey_files <- reactiveVal(list())
 .survey_dir <- file.path(.run_dir, "survey_upload")
-## --- Ecospace base map (depth .asc) for 06b ------------------------------
+## --- Ecospace base map (depth .asc) for 05b ------------------------------
 ecospace_depth <- reactiveVal(NA_character_)
 observeEvent(input$ecospace_depth_upload, {
   up <- input$ecospace_depth_upload
@@ -140,7 +140,7 @@ output$esp_out_where <- renderUI({
            "), ", tags$code("depth_used.asc"), " (the Ecospace depth map), ", tags$code("ecospace_driver_index.csv"), " and a check figure.",
            if (dir.exists(d)) tags$span(" Last made ", format(file.mtime(d), "%d %b %Y %H:%M"), ".") else " Not made yet.")
 })
-## --- Ecospace map viewer: the .asc files of 06b, one month at a time ------
+## --- Ecospace map viewer: the .asc files of 05b, one month at a time ------
 ## colour-bar ticks: the bar's own min and max plus round values inside
 .esp_bar_ticks <- function(rng, n = 4) {
   p <- pretty(rng, n); p <- p[p > rng[1] + 0.06 * diff(rng) & p < rng[2] - 0.06 * diff(rng)]
@@ -160,7 +160,7 @@ output$esp_out_where <- renderUI({
 })
 observe({
   m <- .esp_maps(); cur <- isolate(input$esp_view_map)
-  updateSelectInput(session, "esp_view_map", choices = if (length(m)) m else c("(no maps yet - run 06b)" = ""),
+  updateSelectInput(session, "esp_view_map", choices = if (length(m)) m else c("(no maps yet - run 05b)" = ""),
                     selected = if (!is.null(cur) && cur %in% m) cur else if (length(m)) m[1] else "")
 })
 .esp_index <- reactive({
@@ -325,7 +325,7 @@ output$dl_esp_zip <- downloadHandler(
   filename = function() paste0("ecospace_drivers_", input$esp_view_map, ".zip"),
   content = function(file) {
     d <- file.path(.esp_root(), input$esp_view_map)
-    if (!dir.exists(d)) stop("No maps for this base map - run 06b first.")
+    if (!dir.exists(d)) stop("No maps for this base map - run 05b first.")
     old <- setwd(d); on.exit(setwd(old))
     f <- list.files(".", recursive = TRUE)
     if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, f) else utils::zip(file, f, flags = "-q")
@@ -526,12 +526,12 @@ output$fg_summary <- renderUI({
 .unsurveyed <- c(3, 4, 12)
 ## Expected minutes per script (01..05): the median of the last 5 runs
 ## started from this page on this laptop (out_dir/.qmd_run/step_times.csv,
-## filled from the "--- Step i/5 done in x min" lines at the end of every
+## filled from the "--- Step i/7 done in x min" lines at the end of every
 ## run). Until a script has run here, the times of the Windows run of
 ## 2026-10-29 are used. 01 is slower the first time after a change of GSAs
 ## (bathymetry download).
-.step_min_default <- c(6.8, 11.7, 4.9, 5.1, 1.6, 15, 2)   # 06: a rerun with the years cached; the first run takes hours; 06b: minutes
-.step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 diagnostics", "06 environment", "06b Ecospace maps")
+.step_min_default <- c(6.8, 11.7, 4.9, 5.1, 15, 2, 1.6)   # 05: a rerun with the years cached; the first run takes hours; 05b: minutes
+.step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 environment", "05b Ecospace maps", "06 diagnostics")
 
 ## --- Custom region from an uploaded shapefile / polygon file ---------------
 custom_shape <- reactiveVal(NULL)   # list(path, sf) of the uploaded region
@@ -617,7 +617,7 @@ output$area_summary <- renderUI({
       stat("Region", input$area_name),
       stat("Box", if (ok) sprintf("%.1f-%.1f\u00b0E, %.1f-%.1f\u00b0N", b[1], b[2], b[3], b[4]) else "invalid", warn = !ok),
       stat("Box area", if (ok) paste(format(round(km2, -2), big.mark = ","), "km\u00b2") else "-", "rectangle, land included"),
-      stat("Scripts", "01-05", "catch from the overlapping GSAs")))
+      stat("Scripts", "01-04, 06", "catch from the overlapping GSAs")))
   }
   g <- as.numeric(input$gsas)
   if (!length(g)) return(tags$div(class = "alert alert-danger mb-0", "No GSA selected - click the map or a quick-select button."))
@@ -652,14 +652,15 @@ output$area_summary <- renderUI({
 ## C:\Users\... inside "..." is read as escape codes (\U) and the run fails.
 .fwd <- function(p) gsub("\\\\", "/", p)
 ## --- Which scripts to run ---------------------------------------------------
-## Tick boxes 01-05 -> RUN_STEPS. A later script reads what the earlier ones
+## Tick boxes -> RUN_STEPS (1-4 = 01-04, 5 = 05 environment, 6 = 05b Ecospace maps,
+## 7 = 06 diagnostics, always last). A later script reads what the earlier ones
 ## wrote to the output folder, so a script can run alone only if those files
 ## are already there (from an earlier run). What each one reads:
 ##   02: ecopath_ecosim_inputs.xlsx (Ecopath_B) and biomass_proportion_by_species_fg.csv, from 01
 ##   03: biomass_proportion_by_species_fg.csv from 01; F_by_fg.csv from 02
 ##   04: ecopath_ecosim_inputs.xlsx and biomass_proportion_by_species_fg.csv, from 01
 ##        (03's P/B, Q/B only feed the references sheet - used if present)
-##   05: ecopath_ecosim_inputs.xlsx from 01; F_by_fg.csv from 02
+##   06 (step 7): ecopath_ecosim_inputs.xlsx from 01; F_by_fg.csv from 02
 steps_sel <- reactive(sort(as.integer(input$steps_chk)))
 steps_txt <- reactive({
   s <- steps_sel()
@@ -669,18 +670,18 @@ steps_txt <- reactive({
   else paste0("c(", paste(s, collapse = ", "), ")")
 })
 observeEvent(input$steps_all,    updateCheckboxGroupInput(session, "steps_chk", selected = 1:7))
-observeEvent(input$steps_main,   updateCheckboxGroupInput(session, "steps_chk", selected = 1:5))
-observeEvent(input$steps_only6,  updateCheckboxGroupInput(session, "steps_chk", selected = 6:7))
-observeEvent(input$steps_only7,  updateCheckboxGroupInput(session, "steps_chk", selected = 7))
+observeEvent(input$steps_main,   updateCheckboxGroupInput(session, "steps_chk", selected = c(1:4, 7)))
+observeEvent(input$steps_only_env, updateCheckboxGroupInput(session, "steps_chk", selected = 5:6))
+observeEvent(input$steps_only_esp, updateCheckboxGroupInput(session, "steps_chk", selected = 6))
 observeEvent(input$steps_none,   updateCheckboxGroupInput(session, "steps_chk", selected = character(0)))
-observeEvent(input$steps_after1, updateCheckboxGroupInput(session, "steps_chk", selected = 2:5))
-observeEvent(input$steps_only5,  updateCheckboxGroupInput(session, "steps_chk", selected = 5))
+observeEvent(input$steps_after1, updateCheckboxGroupInput(session, "steps_chk", selected = c(2:4, 7)))
+observeEvent(input$steps_only_diag, updateCheckboxGroupInput(session, "steps_chk", selected = 7))
 .step_needs <- list(
   `2` = list(list(1, "ecopath_ecosim_inputs.xlsx"), list(1, "biomass/biomass_proportion_by_species_fg.csv")),
   `3` = list(list(1, "biomass/biomass_proportion_by_species_fg.csv"), list(2, "fisheries/F_by_fg.csv")),
   `4` = list(list(1, "ecopath_ecosim_inputs.xlsx"), list(1, "biomass/biomass_proportion_by_species_fg.csv")),
-  `5` = list(list(1, "ecopath_ecosim_inputs.xlsx"), list(2, "fisheries/F_by_fg.csv")))
-.step_out <- c(`1` = "biomass", `2` = "fisheries", `3` = "pbqb-traits", `4` = "diet", `5` = "validation", `6` = "environment")
+  `7` = list(list(1, "ecopath_ecosim_inputs.xlsx"), list(2, "fisheries/F_by_fg.csv")))
+.step_out <- c(`1` = "biomass", `2` = "fisheries", `3` = "pbqb-traits", `4` = "diet", `5` = "environment", `7` = "validation")
 ## settings lines that change results (no comments, RUN_STEPS, CLEAN_START or source())
 .result_settings <- function(x) {
   x <- trimws(sub("#.*$", "", x[!grepl("^\\s*##", x)]))
@@ -700,7 +701,7 @@ steps_problems <- reactive({
   ## later scripts left unticked whose outputs on disk came from the old run of an earlier ticked one
   stale <- character(0)
   if (length(s)) {
-    later <- setdiff(seq_len(5), s)
+    later <- setdiff(c(1:4, 7), s)   # the main scripts (not 05/05b)
     later <- later[later > min(s)]
     later <- later[dir.exists(file.path(od, .step_out[as.character(later)]))]
     if (length(later)) stale <- sprintf("The outputs of %s on disk will still come from the previous run, so they won't match the new %s.",
@@ -746,17 +747,17 @@ config_code <- reactive({
     sprintf("APPLY_CATCHABILITY <- %s   # MEDITS catchability correction", tf(input$catch_q)),
     if (isTRUE(input$catch_q) && !is.na(catch_path())) sprintf("CATCHABILITY_FILE <- \"%s\"   # uploaded catchability table", .fwd(catch_path())),
     if (!is.na(other_survey())) sprintf("OTHER_SURVEY_FILE <- \"%s\"   # biomass from any survey: species, year, biomass_t_km2", .fwd(other_survey())),
-    if (identical(input$esp_grid_mode, "file") && !is.na(ecospace_depth())) sprintf("ECOSPACE_DEPTH_FILE <- \"%s\"   # Ecospace base map (06b)", .fwd(ecospace_depth())),
+    if (identical(input$esp_grid_mode, "file") && !is.na(ecospace_depth())) sprintf("ECOSPACE_DEPTH_FILE <- \"%s\"   # Ecospace base map (05b)", .fwd(ecospace_depth())),
     if (!identical(input$esp_grid_mode, "file") && is.finite(as.numeric(input$esp_cell_arcmin)))
-      sprintf("ECOSPACE_CELL_SIZE <- %s/60   # Ecospace base map at %s arc-min, depth from EMODnet (06b)", input$esp_cell_arcmin, input$esp_cell_arcmin),
-    if (7 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
-    if (7 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
+      sprintf("ECOSPACE_CELL_SIZE <- %s/60   # Ecospace base map at %s arc-min, depth from EMODnet (05b)", input$esp_cell_arcmin, input$esp_cell_arcmin),
+    if (6 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
+    if (6 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
     if (!is.null(survey_files()$TA)) sprintf("MEDITS_TA_FILE   <- \"%s\"   # own MEDITS hauls", .fwd(survey_files()$TA$path)),
     if (!is.null(survey_files()$TB)) sprintf("MEDITS_TB_FILE   <- \"%s\"   # own MEDITS catch", .fwd(survey_files()$TB$path)),
     if (!is.null(survey_files()$TC)) sprintf("MEDITS_TC_FILE   <- \"%s\"   # own MEDITS length/maturity", .fwd(survey_files()$TC$path)),
     if (!is.null(survey_files()$MEDIAS_abundance) && !is.null(survey_files()$MEDIAS_biomass))
       sprintf("MEDIAS_DIR       <- \"%s\"   # own MEDIAS abundance.csv + biomass.csv", .fwd(dirname(survey_files()$MEDIAS_biomass$path))),
-    sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (06)", if (is.null(input$phyto_src)) "isimip" else input$phyto_src))
+    sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (05)", if (is.null(input$phyto_src)) "isimip" else input$phyto_src))
   head <- c(sprintf("## WMed-EwEbuilder settings - from WMed-EwEbuilder.qmd, %s", format(Sys.time(), "%Y-%m-%d %H:%M")),
             "## Run from the scripts/ folder of the repo (folders found by wmed_paths.R).",
             "CLEAN_START      <- FALSE   # keep the settings below")
@@ -794,7 +795,7 @@ output$dl_config <- downloadHandler(
 run_state <- reactiveVal("idle")          # idle | running | done | error
 run_started <- reactiveVal(NULL)
 run_finished <- reactiveVal(NULL)
-run_steps <- reactiveVal(1:5)
+run_steps <- reactiveVal(c(1:4, 7))
 step_seen <- reactiveVal(list())          # step number -> time its start line was first seen
 last_finished <- reactiveVal(Sys.time())  # changes after every run -> images reload
 run_note <- reactiveVal("")
@@ -824,7 +825,7 @@ run_note <- reactiveVal("")
 .settings_lines <- function() if (file.exists(.settings_file)) readLines(.settings_file, warn = FALSE) else character(0)
 
 ## Minutes each script took, per run (run = start time of the run)
-.times_file <- file.path(.run_dir, "step_times.csv")
+.times_file <- file.path(.run_dir, "step_times_v2.csv")   # v2: steps renumbered 2026-11 (5 = environment, 7 = diagnostics)
 .step_done_min <- function() {   # minutes of the scripts done so far in this run, named by step
   l <- if (file.exists(.progress_file)) readLines(.progress_file, warn = FALSE) else character(0)
   l <- grep("^--- Step \\d/\\d done in [0-9.]+ min", l, value = TRUE)
@@ -854,7 +855,7 @@ run_note <- reactiveVal("")
 if (file.exists(.settings_file)) {
   run_started(file.mtime(.settings_file))
   .st <- grep("^RUN_STEPS", .settings_lines(), value = TRUE)
-  run_steps(tryCatch(eval(parse(text = sub("^[^<]*<-", "", .st[1]))), error = function(e) 1:5))
+  run_steps(tryCatch(eval(parse(text = sub("^[^<]*<-", "", .st[1]))), error = function(e) c(1:4, 7)))
   if (file.exists(.status_file)) {
     run_state(if (identical(readLines(.status_file, warn = FALSE)[1], "done")) "done" else "error")
     run_finished(file.mtime(.status_file))
@@ -918,8 +919,8 @@ observeEvent(input$run, {
   .chk <- steps_problems()
   if (length(.chk$missing)) {
     showNotification(paste(c("Can't start:", .chk$missing), collapse = " "), type = "error", duration = 15); return() }
-  ## 06 needs a Copernicus Marine login: ask for it first if this laptop has none
-  if (6 %in% steps_sel() && !.cm_has_login()) { .cm_login_modal(then_run = TRUE); return() }
+  ## 05 needs a Copernicus Marine login: ask for it first if this laptop has none
+  if (5 %in% steps_sel() && !.cm_has_login()) { .cm_login_modal(then_run = TRUE); return() }
   .start_run()
 })
 
@@ -963,7 +964,7 @@ observeEvent(input$run, {
   showNotification(paste0("Pipeline started - outputs in ", .run_label(isolate(run_target())), ". Progress is shown below the button."), duration = 8)
 }
 
-## --- Copernicus Marine login (needed by 06 environment) -------------------
+## --- Copernicus Marine login (needed by 05 environment) -------------------
 ## Each user types their own account once in a window on the page. It is
 ## saved in that user's own .Renviron (as COPERNICUSMARINE_SERVICE_USERNAME
 ## / _PASSWORD, read by lib_cmems_phytoplankton_biomass.R) and set for this
@@ -985,7 +986,7 @@ cm_then_run <- reactiveVal(FALSE)
 .cm_login_modal <- function(then_run = FALSE) {
   cm_then_run(then_run)
   showModal(modalDialog(title = "Copernicus Marine login",
-    tags$p("06 environment downloads data from the Copernicus Marine Service, which needs your own free account (",
+    tags$p("05 environment downloads data from the Copernicus Marine Service, which needs your own free account (",
            tags$a("register here", href = "https://data.marine.copernicus.eu/register", target = "_blank"), ")."),
     textInput("cm_user", "Username", value = Sys.getenv("COPERNICUSMARINE_SERVICE_USERNAME")),
     passwordInput("cm_pass", "Password"),
@@ -1029,7 +1030,7 @@ observe({
   }
 })
 
-## Progress: read the "--- Step i/5: ..." / "--- Step i/5 done in x min ---"
+## Progress: read the "--- Step i/7: ..." / "--- Step i/7 done in x min ---"
 ## lines that run_pipeline_demo.R writes, and estimate the share done from
 ## the expected minutes per script.
 output$run_progress <- renderUI({
@@ -1237,14 +1238,14 @@ output$dl_info <- renderUI({
                   "They are installed on the first run (install_packages.R), or run source('install_packages.R') in the scripts folder.")
   old_to <- options(timeout = 8); on.exit(options(old_to), add = TRUE)
   net <- tryCatch({ con <- url("https://cloud.r-project.org", open = "rb"); close(con); TRUE }, error = function(e) FALSE, warning = function(w) FALSE)
-  out[[6]] <- row("Internet", net, if (net) "reachable" else "no connection", "Needed for the first run (downloads) and for 06.")
+  out[[6]] <- row("Internet", net, if (net) "reachable" else "no connection", "Needed for the first run (downloads) and for 05.")
   cli <- tryCatch({
     source(file.path(.git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"), local = TRUE)
     suppressMessages(ensure_copernicusmarine_cli(auto_install = FALSE))
   }, error = function(e) FALSE)
-  out[[7]] <- row("Copernicus tool (06 only)", isTRUE(cli), if (isTRUE(cli)) Sys.which("copernicusmarine") else "copernicusmarine not found",
-                  "Only for 06 environment: install Python, then 'pip install copernicusmarine'.")
-  out[[8]] <- row("Copernicus login (06 only)", .cm_has_login(), if (.cm_has_login()) "saved on this computer" else "not saved",
+  out[[7]] <- row("Copernicus tool (05 only)", isTRUE(cli), if (isTRUE(cli)) Sys.which("copernicusmarine") else "copernicusmarine not found",
+                  "Only for 05 environment: install Python, then 'pip install copernicusmarine'.")
+  out[[8]] <- row("Copernicus login (05 only)", .cm_has_login(), if (.cm_has_login()) "saved on this computer" else "not saved",
                   "Use 'enter or change the login' under the scripts to run (card 4).")
   do.call(rbind, out)
 }

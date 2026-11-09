@@ -5,10 +5,11 @@
 ##
 ## Runs the whole WMed EwE input pipeline in one go:
 ##   01_biomass.R -> 02_fisheries.R -> 03_pbqb-traits.R -> 04_diets.R
-##   -> 05_diagnostics.R
+##   -> 05_environment.R -> 05b_ecospace_drivers.R -> 06_diagnostics.R
+##   (05 and 05b only when asked: RUN_STEPS 5 and 6)
 ## The order matters: 02 needs Ecopath_B and strata_area_by_area.csv from
 ## 01 (F = C / B), 03 needs F_by_fg.csv from 02 (P/B = M + F), 04 needs
-## the species biomass shares from 01, and 05 reads everything.
+## the species biomass shares from 01, and 06 reads everything.
 ## 01 sources 01b_biomass_unsurveyed.R; 03 sources 03b_ecobase.R.
 ##
 ## Each script only sets a configuration variable when it does not exist
@@ -21,7 +22,7 @@
 ## Every script writes its own log (output/YYYYMMDD_<script>_log.txt,
 ## overwritten by a rerun on the same day).
 ##
-## Last updated 2026-10-14.
+## Last updated 2026-11-09.
 ## =================================================================
 
 ## ---- 0. Fresh session ----------------------------------------------
@@ -32,12 +33,13 @@ if (!exists("CLEAN_START", envir = .GlobalEnv, inherits = FALSE) || isTRUE(CLEAN
   invisible(gc())
 }
 options(warn = 1)
-## RUN_STEPS: which scripts to run (1 = 01_biomass ... 5 = 05_diagnostics,
-## 6 = 06_environment, the Copernicus environmental drivers; 6 runs before
-## 5 when both are asked, so the validation can compare its phytoplankton).
-## Default all; e.g. RUN_STEPS <- 5 redraws the validation plots from the
-## outputs already on disk (used by WMed-EwEbuilder.qmd).
-if (!exists("RUN_STEPS", envir = .GlobalEnv, inherits = FALSE)) RUN_STEPS <- 1:5
+## RUN_STEPS: which scripts to run, in this order: 1 = 01_biomass,
+## 2 = 02_fisheries, 3 = 03_pbqb-traits, 4 = 04_diets, 5 = 05_environment
+## (Copernicus environmental drivers), 6 = 05b_ecospace_drivers (Ecospace
+## ASCII maps), 7 = 06_diagnostics (last, so it can check everything).
+## Default c(1:4, 7); e.g. RUN_STEPS <- 7 redraws the validation plots from
+## the outputs already on disk (used by WMed-EwEbuilder.qmd).
+if (!exists("RUN_STEPS", envir = .GlobalEnv, inherits = FALSE)) RUN_STEPS <- c(1:4, 7)
 
 RUN_MODE <- "westmed_default"   # Western Mediterranean (GSAs 1-12, or a custom region inside them)
 
@@ -86,7 +88,7 @@ if (length(.missing)) stop("[run_pipeline_demo.R] These folders do not exist on 
                            paste(.missing, collapse = "\n  "), "\nFix config.local.R (this computer) and run again. Nothing was run.",
                            call. = FALSE)
 .scripts <- file.path(git_dir, "scripts", c("01_biomass.R", "02_fisheries.R", "03_pbqb-traits.R",
-                                            "04_diets.R", "05_diagnostics.R"))
+                                            "04_diets.R", "06_diagnostics.R"))
 if (any(!file.exists(.scripts))) stop("[run_pipeline_demo.R] Missing in git_dir:\n  ",
                                       paste(.scripts[!file.exists(.scripts)], collapse = "\n  "), call. = FALSE)
 
@@ -162,7 +164,7 @@ if (RUN_MODE == "westmed_default") {
   # ENABLE_ECOBASE_QUERY  <- TRUE    # FALSE = no EcoBase network call
   # ECOBASE_FORCE_REFRESH <- FALSE   # TRUE = re-query EcoBase instead of the cached CSV
   ##
-  ## Validation (05)
+  ## Validation (06)
   # RUN_VALIDATION <- TRUE
   if (!identical(get0("AREA_MODE", envir = .GlobalEnv, ifnotfound = "westmed"), "custom"))
   message("\n=== Running the Western Med pipeline: GSAs ", paste(MODEL_GSAS, collapse = ", "), " (", MODEL_AREA_BASIS, "), Ecopath ",
@@ -219,10 +221,10 @@ source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_interme
   message("[Custom region] Catch from GSA(s) ", paste(get("MODEL_GSAS", envir = .GlobalEnv), collapse = ", "), " (custom_gsa_overlap.csv).")
 }
 
-## ---- 3. Run the five steps -----------------------------------------
+## ---- 3. Run the steps -----------------------------------------
 ## Each step runs in the global environment (so later steps see the
 ## objects and settings of earlier ones). A failing step stops the run
-## and names the step and its log. 05 is optional and never stops the run.
+## and names the step and its log. 05, 05b and 06 never stop the run.
 .t0 <- Sys.time()
 .step_minutes <- list()
 ## Progress file (set WMED_PROGRESS_FILE, as the Run button of
@@ -254,26 +256,27 @@ source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_interme
 }
 
 if (1 %in% RUN_STEPS) .run_step(1, "01_biomass.R", "[MEDITS/MEDIAS + unsurveyed groups; the first run after a strata change rebuilds the strata areas from NOAA bathymetry - needs internet] ")
-if (.custom_run && any(2:5 %in% RUN_STEPS)) .set_custom_catch_gsas()
+if (.custom_run && any(c(2:4, 7) %in% RUN_STEPS)) .set_custom_catch_gsas()
 if (2 %in% RUN_STEPS) .run_step(2, "02_fisheries.R", "[catch, landings, discards, effort, F] ")
 if (3 %in% RUN_STEPS) .run_step(3, "03_pbqb-traits.R", "[P/B, Q/B, traits; includes the EcoBase query] ")
 if (4 %in% RUN_STEPS) .run_step(4, "04_diets.R", "[diet matrix] ")
-## 06 never stops the run: a missing Copernicus login or download only skips it
+## 05 never stops the run: a missing Copernicus login or download only skips it
+if (5 %in% RUN_STEPS)
+  tryCatch(.run_step(5, "05_environment.R", "[Copernicus: temperature, salinity, NPP, phytoplankton B and P/B; the first run downloads several GB] "),
+           error = function(e) message("05_environment.R failed (the other steps are not affected): ", conditionMessage(e)))
+## 6 = Ecospace drivers: the monthly maps of 05 regridded onto
+## the Ecospace base map (05b_ecospace_drivers.R; no download, minutes).
 if (6 %in% RUN_STEPS)
-  tryCatch(.run_step(6, "06_environment.R", "[Copernicus: temperature, salinity, NPP, phytoplankton B and P/B; the first run downloads several GB] "),
-           error = function(e) message("06_environment.R failed (the other steps are not affected): ", conditionMessage(e)))
-## 7 = Ecospace drivers: the monthly maps of 06 regridded onto
-## ECOSPACE_DEPTH_FILE (06b_ecospace_drivers.R; no download, minutes).
-if (7 %in% RUN_STEPS)
-  tryCatch(.run_step(7, "06b_ecospace_drivers.R", "[Ecospace: monthly ASCII driver maps on the Ecospace base map] "),
-           error = function(e) message("06b_ecospace_drivers.R failed (the other steps are not affected): ", conditionMessage(e)))
+  tryCatch(.run_step(6, "05b_ecospace_drivers.R", "[Ecospace: monthly ASCII driver maps on the Ecospace base map] "),
+           error = function(e) message("05b_ecospace_drivers.R failed (the other steps are not affected): ", conditionMessage(e)))
 
 if (!exists("RUN_VALIDATION", envir = .GlobalEnv, inherits = FALSE)) RUN_VALIDATION <- TRUE
-if (isTRUE(RUN_VALIDATION) && 5 %in% RUN_STEPS) {
-  tryCatch(.run_step(5, "05_diagnostics.R", "[comparison with the 1995 model + all checks] "),
-           error = function(e) message("05_diagnostics.R failed (steps 1-4 are complete): ", conditionMessage(e)))
+## 7 = diagnostics, always last
+if (isTRUE(RUN_VALIDATION) && 7 %in% RUN_STEPS) {
+  tryCatch(.run_step(7, "06_diagnostics.R", "[comparison with the 1995 model + all checks] "),
+           error = function(e) message("06_diagnostics.R failed (steps 1-4 are complete): ", conditionMessage(e)))
 } else {
-  if (5 %in% RUN_STEPS) message("--- Step 5/7: skipped (RUN_VALIDATION = FALSE) ---")
+  if (7 %in% RUN_STEPS) message("--- Step 7/7: skipped (RUN_VALIDATION = FALSE) ---")
 }
 
 ## Run record: settings, minutes per step, git commit, R and package

@@ -1,19 +1,19 @@
 ## WMed-EwEbuilder - building Ecopath with Ecosim inputs for the Western Mediterranean
-## (biomass, fisheries, P/B, Q/B, traits and diets). This file: 06b_ecospace_drivers.R
+## (biomass, fisheries, P/B, Q/B, traits and diets). This file: 05b_ecospace_drivers.R
 ## =================================================================
-## 06b_ecospace_drivers.R
+## 05b_ecospace_drivers.R
 ## Created by: Daniel Vilas
 ##
 ## Ecospace environmental drivers: monthly ASCII maps on YOUR Ecospace
 ## base map. Give a depth ASCII grid (ESRI .asc, any resolution, any
 ## extent inside the Western Med box; any projection when a .prj sits
-## next to it, else lon/lat WGS84) and every monthly map of 06 is
+## next to it, else lon/lat WGS84) and every monthly map of 05 is
 ## regridded onto it, cell for cell, ready to load in Ecospace
 ## (Spatial-temporal data framework, or Map > Import).
 ##
 ## INPUT - the base map, either
 ##   ECOSPACE_CELL_SIZE    a cell size in degrees (e.g. 1/12 = 5 arc-min):
-##                         06b MAKES the base map from the EMODnet
+##                         05b MAKES the base map from the EMODnet
 ##                         bathymetry (ECOSPACE_BATHY_FILE, 1 arc-min):
 ##                           water fraction f = share of the bathymetry
 ##                           cells below sea level in the map cell;
@@ -28,8 +28,8 @@
 ##   or (ECOSPACE_CELL_SIZE = NA, default)
 ##   ECOSPACE_DEPTH_FILE   your depth .asc (water depth in m; land = 0 or NODATA;
 ##                         negative depths (bathymetry) are read as -depth)
-##   <env>/<var>_monthly_native.tif   written by 06_environment.R (one layer
-##                         per month, 1/24 deg). 06b does not download
+##   <env>/<var>_monthly_native.tif   written by 05_environment.R (one layer
+##                         per month, 1/24 deg). 05b does not download
 ##                         anything, so it reruns in minutes for a new grid.
 ##
 ## METHOD, per variable and month
@@ -81,32 +81,32 @@ if (!exists("out_dir", envir = .GlobalEnv, inherits = FALSE) || !exists("pcloud_
 .esp_default("ECOSPACE_CLIP_MODEL_AREA", TRUE)
 .esp_default("ECOSPACE_DRIVER_VARS", c("temp_surf", "temp_bot", "sal_surf", "npp", "phyto_c"))
 .esp_default("ECOSPACE_DRIVER_YEARS", if (exists("ENV_YEARS", envir = .GlobalEnv)) ENV_YEARS else
-  if (exists("TS_YEARS", envir = .GlobalEnv)) TS_YEARS else NULL)          # NULL = every month 06 made
+  if (exists("TS_YEARS", envir = .GlobalEnv)) TS_YEARS else NULL)          # NULL = every month 05 made
 .esp_default("ECOSPACE_DRIVER_STEP", "monthly")                            # "monthly" or "annual"
 .esp_default("ECOSPACE_DRIVER_SCALING", "absolute")                        # "absolute" or "relative"
 .esp_default("ECOSPACE_FILL_PASSES", 10)                                   # 3 x 3 neighbour passes for coastal gaps
 .esp_default("ECOSPACE_DECIMALS", 4)
 .esp_default("ENV_BASE_YEAR", if (exists("YEAR_ECOPATH", envir = .GlobalEnv)) as.integer(round(stats::median(YEAR_ECOPATH))) else 1995L)
-.esp_default("ECOSPACE_ENV_DIR", file.path(out_dir, "environment"))       # where 06 wrote <var>_monthly_native.tif
+.esp_default("ECOSPACE_ENV_DIR", file.path(out_dir, "environment"))       # where 05 wrote <var>_monthly_native.tif
 
 .esp_units <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", npp = "g C m-2 d-1", phyto_c = "g C m-2")
 .esp_msg <- function(...) message(...)
 
-## --- Native maps from 06 -------------------------------------------------
-## The run folder first, then the main output folder (06 may have run there).
+## --- Native maps from 05 -------------------------------------------------
+## The run folder first, then the main output folder (05 may have run there).
 .env_dirs <- unique(c(ECOSPACE_ENV_DIR, if (exists("OUT_BASE_DIR", envir = .GlobalEnv)) file.path(OUT_BASE_DIR, "environment")))
 .native <- function(v) { f <- file.path(.env_dirs, paste0(v, "_monthly_native.tif")); f[file.exists(f)][1] }
 vars <- ECOSPACE_DRIVER_VARS[!is.na(vapply(ECOSPACE_DRIVER_VARS, .native, ""))]
-if (!length(vars)) stop("[06b] No monthly maps from 06_environment.R in ", paste(.env_dirs, collapse = " or "),
-                        " - run 06 (environment) first.", call. = FALSE)
+if (!length(vars)) stop("[05b] No monthly maps from 05_environment.R in ", paste(.env_dirs, collapse = " or "),
+                        " - run 05 (environment) first.", call. = FALSE)
 if (length(setdiff(ECOSPACE_DRIVER_VARS, vars)))
-  .esp_msg("[06b] Not made by 06 yet (skipped): ", paste(setdiff(ECOSPACE_DRIVER_VARS, vars), collapse = ", "))
+  .esp_msg("[05b] Not made by 05 yet (skipped): ", paste(setdiff(ECOSPACE_DRIVER_VARS, vars), collapse = ", "))
 
 ## --- Base map --------------------------------------------------------------
 .make_grid <- is.finite(suppressWarnings(as.numeric(ECOSPACE_CELL_SIZE))) && as.numeric(ECOSPACE_CELL_SIZE) > 0
 if (.make_grid) {
   cs <- as.numeric(ECOSPACE_CELL_SIZE)
-  if (!file.exists(ECOSPACE_BATHY_FILE)) stop("[06b] Bathymetry not found: ", ECOSPACE_BATHY_FILE, call. = FALSE)
+  if (!file.exists(ECOSPACE_BATHY_FILE)) stop("[05b] Bathymetry not found: ", ECOSPACE_BATHY_FILE, call. = FALSE)
   bathy <- terra::rast(ECOSPACE_BATHY_FILE); if (is.na(terra::crs(bathy)) || !nzchar(terra::crs(bathy))) terra::crs(bathy) <- "EPSG:4326"
   ## model area: the run's GSAs (or the custom region's box)
   .poly <- tryCatch({
@@ -133,18 +133,18 @@ if (.make_grid) {
     depth <- terra::ifel(is.na(inside), 0, depth)
   }
   names(depth) <- "depth"
-  .esp_msg(sprintf("[06b] Base map made at %.4g deg (%.3g arc-min) from %s: water = >= %d%% of the cell below sea level%s.",
+  .esp_msg(sprintf("[05b] Base map made at %.4g deg (%.3g arc-min) from %s: water = >= %d%% of the cell below sea level%s.",
                    cs, cs * 60, basename(ECOSPACE_BATHY_FILE), round(100 * ECOSPACE_MIN_WATER_FRACTION),
                    if (isTRUE(ECOSPACE_CLIP_MODEL_AREA) && !is.null(.poly)) ", outside the model area = land" else ""))
 } else {
-if (!file.exists(ECOSPACE_DEPTH_FILE)) stop("[06b] Ecospace depth file not found: ", ECOSPACE_DEPTH_FILE, call. = FALSE)
+if (!file.exists(ECOSPACE_DEPTH_FILE)) stop("[05b] Ecospace depth file not found: ", ECOSPACE_DEPTH_FILE, call. = FALSE)
 depth <- terra::rast(ECOSPACE_DEPTH_FILE)
 .prj <- sub("\\.asc$", ".prj", ECOSPACE_DEPTH_FILE, ignore.case = TRUE)
 if (!file.exists(.prj) || is.na(terra::crs(depth)) || !nzchar(terra::crs(depth))) terra::crs(depth) <- "EPSG:4326"
 }
 .dv <- terra::values(depth, mat = FALSE)
 if (sum(.dv < 0, na.rm = TRUE) > sum(.dv > 0, na.rm = TRUE)) {        # bathymetry (negative down) -> depth
-  depth <- -depth; .esp_msg("[06b] Depth file has negative depths (bathymetry): read as depth = -value.")
+  depth <- -depth; .esp_msg("[05b] Depth file has negative depths (bathymetry): read as depth = -value.")
 }
 water <- depth > 0
 n_water <- as.integer(terra::global(water, "sum", na.rm = TRUE)[1, 1])
@@ -152,7 +152,7 @@ map_name <- if (.make_grid) paste0("grid_", gsub("\\.", "p", format(signif(as.nu
   gsub("[^A-Za-z0-9_-]", "_", sub("\\.asc$", "", basename(ECOSPACE_DEPTH_FILE), ignore.case = TRUE))
 esp_dir <- file.path(ECOSPACE_ENV_DIR, "ecospace_drivers", map_name)
 dir.create(esp_dir, recursive = TRUE, showWarnings = FALSE)
-.esp_msg(sprintf("[06b] Base map %s: %d x %d cells of %.4g x %.4g (%s), %d water cells -> %s",
+.esp_msg(sprintf("[05b] Base map %s: %d x %d cells of %.4g x %.4g (%s), %d water cells -> %s",
                  if (.make_grid) map_name else basename(ECOSPACE_DEPTH_FILE), terra::ncol(depth), terra::nrow(depth), terra::res(depth)[1], terra::res(depth)[2],
                  if (terra::is.lonlat(depth)) "degrees" else "map units", n_water, esp_dir))
 terra::writeRaster(terra::ifel(is.na(depth), 0, depth), file.path(esp_dir, "depth_used.asc"),
@@ -195,14 +195,14 @@ for (v in vars) {
   yrs <- as.integer(substr(names(r), 1, 4)); mos <- as.integer(substr(names(r), 6, 7))
   keep <- if (is.null(ECOSPACE_DRIVER_YEARS)) rep(TRUE, length(yrs)) else yrs %in% ECOSPACE_DRIVER_YEARS
   base_keep <- yrs == ENV_BASE_YEAR
-  if (!any(keep)) { .esp_msg("[06b] ", v, ": no months in the selected years - skipped."); next }
+  if (!any(keep)) { .esp_msg("[05b] ", v, ": no months in the selected years - skipped."); next }
   method <- if (.cell_km(depth) >= .cell_km(r)) "average" else "bilinear"
-  .esp_msg("[06b] ", v, ": ", sum(keep), " month(s), native ", signif(.cell_km(r), 3), " km -> base map ",
+  .esp_msg("[05b] ", v, ": ", sum(keep), " month(s), native ", signif(.cell_km(r), 3), " km -> base map ",
            signif(.cell_km(depth), 3), " km (", method, ")")
   ## relative scaling: the map mean of the base year's months
   rel_den <- NA_real_
   if (identical(ECOSPACE_DRIVER_SCALING, "relative")) {
-    if (!any(base_keep)) stop("[06b] ECOSPACE_DRIVER_SCALING = 'relative' needs the base year ", ENV_BASE_YEAR, " in the 06 maps.", call. = FALSE)
+    if (!any(base_keep)) stop("[05b] ECOSPACE_DRIVER_SCALING = 'relative' needs the base year ", ENV_BASE_YEAR, " in the 05 maps.", call. = FALSE)
     b <- terra::project(r[[which(base_keep)]], depth, method = method)
     rel_den <- mean(terra::global(terra::mask(b, water, maskvalues = c(NA, 0)), "mean", na.rm = TRUE)[, 1], na.rm = TRUE)
   }
@@ -238,10 +238,10 @@ tryCatch({
   op <- par(mfrow = c(ceiling(length(mean_maps) / 2), 2), mar = c(2, 2, 2.5, 4))
   for (v in names(mean_maps)) terra::plot(mean_maps[[v]], main = paste0(v, " (", unique(index[variable == v, unit]), "), mean of the time steps"))
   par(op); dev.off()
-}, error = function(e) { try(dev.off(), silent = TRUE); .esp_msg("[06b] mean-map figure not drawn: ", conditionMessage(e)) })
+}, error = function(e) { try(dev.off(), silent = TRUE); .esp_msg("[05b] mean-map figure not drawn: ", conditionMessage(e)) })
 
 .mx <- index[, .(steps = .N, max_filled = max(filled_from_neighbours + filled_with_map_mean), any_map_mean = sum(filled_with_map_mean)), by = variable]
-.esp_msg("[06b] Ecospace drivers written: ", paste(sprintf("%s %d %s step(s) (up to %d of %d water cells filled from neighbours%s)",
+.esp_msg("[05b] Ecospace drivers written: ", paste(sprintf("%s %d %s step(s) (up to %d of %d water cells filled from neighbours%s)",
          .mx$variable, .mx$steps, ECOSPACE_DRIVER_STEP, .mx$max_filled, n_water,
          ifelse(.mx$any_map_mean > 0, ", some with the map mean", "")), collapse = "; "),
          ". Index: ", file.path(esp_dir, "ecospace_driver_index.csv"))

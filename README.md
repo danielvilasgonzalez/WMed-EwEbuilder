@@ -17,7 +17,7 @@ Created by: Daniel Vilas (iMARES, ICM-CSIC)
 - **R** (≥ 4.3) and **RStudio**.
 - **Quarto** (for the interactive page; it comes with recent RStudio versions).
 - **Internet** on the first run: several sources are downloaded once and cached.
-- **A free Copernicus Marine account**, only for step 06 (environmental drivers): <https://data.marine.copernicus.eu/register>.
+- **A free Copernicus Marine account**, only for step 05 (environmental drivers): <https://data.marine.copernicus.eu/register>.
 
 ## Quick start
 
@@ -70,7 +70,7 @@ On a new computer only `rmarkdown`, `knitr` and `shiny` must be installed before
 | 1 Model area | Click GSAs on the map, or a custom region (upload a shapefile, GeoJSON, GeoPackage or KML, or draw a lon/lat box). |
 | 2 Food web | Pick or upload the species → FG table (`FG_number`, `FG_name`, `species`; optional `FG_group`). The default is `FG_WMed_2026.csv` (80 FGs). |
 | 3 Years | Ecopath baseline and Ecosim years. Catch and effort years follow them. |
-| 4 Options | Survey estimator, outliers, Ecosim normalisation, filling missing Ecopath B, catchability, groups with F > 1, phytoplankton source, and the scripts to run (01–06). Enter your Copernicus login here for step 06. |
+| 4 Options | Survey estimator, outliers, Ecosim normalisation, filling missing Ecopath B, catchability, groups with F > 1, phytoplankton source, and the scripts to run (01–06). Enter your Copernicus login here for step 05. |
 | 5 Run | **Run pipeline** / **Stop**, with progress and time left per step. The *Settings block* shows the same run as R code: copy or download it, and **Load settings (.R)** fills the page again from a downloaded file (the file is read, never run). |
 | 6 Results | Download the workbook, diet matrices, review tables, all tables or the logs. A summary of the last run (errors, warnings, FGs with F > 1, FGs without Ecopath B). The **FG explorer** (one group's Ecosim biomass with the survey uncertainty band, and its catches), the key plots and every plot, with zoom. |
 
@@ -78,18 +78,18 @@ The floating **Run / Results / Methods** bar jumps around the page; **Hide metho
 
 ## Pipeline steps
 
-Each step reads files the earlier ones wrote. `run_pipeline_demo.R` runs the steps in `RUN_STEPS` (default `1:5`; `6` is optional and runs before 05 when both are ticked).
+Each step reads files the earlier ones wrote. `run_pipeline_demo.R` runs the steps in `RUN_STEPS` in this order: 1–4 = 01–04, 5 = 05 environment, 6 = 05b Ecospace maps, 7 = 06 diagnostics (always last). Default `c(1:4, 7)`; 5 and 6 are optional.
 
 | Step | Script | What it does |
 |---|---|---|
 | 1 | `01_biomass.R` (sources `01b_biomass_unsurveyed.R`) | **Biomass** from the MEDITS bottom-trawl and MEDIAS acoustic surveys, strata-weighted, with the sampling CV of every index. AquaMaps depth pseudo-strata cover 0–10 m, 800–1000 m and 1000 m to the seafloor (3,785 m). Stock assessments for assessed single-species FGs and hake stanzas. Small pelagics back-cast to 1994–96. Writes Ecopath_B, the Ecosim biomass series, their weights from the survey CV, and FG_spp. |
-| 1b | `01b_biomass_unsurveyed.R` | **Groups the surveys can't measure.** Seagrass, macroalgae and corals: density × mapped area × occupancy. Plankton: ISIMIP COBALT model, or Copernicus from step 06 (`PHYTO_SOURCE`). Detritus: Pauly et al. 1993. Macrozooplankton: MAREDAT. Cetaceans, seabirds, turtles and monk seal: survey density × body mass. Bluefin tuna and swordfish: ICCAT. Some FGs are left for Ecopath to estimate (EE = 0.95). |
+| 1b | `01b_biomass_unsurveyed.R` | **Groups the surveys can't measure.** Seagrass, macroalgae and corals: density × mapped area × occupancy. Plankton: ISIMIP COBALT model, or Copernicus from step 05 (`PHYTO_SOURCE`). Detritus: Pauly et al. 1993. Macrozooplankton: MAREDAT. Cetaceans, seabirds, turtles and monk seal: survey density × body mass. Bluefin tuna and swordfish: ICCAT. Some FGs are left for Ecopath to estimate (EE = 0.95). |
 | 2 | `02_fisheries.R` | **Catch, landings, discards, effort and F** by country, fleet and FG. Catch from GFCM, STECF FDI, Sea Around Us and ICCAT; effort from FishMIP and FDI, with technology creep. F by country, to find where a high F comes from. |
 | 3 | `03_pbqb-traits.R` | **P/B and Q/B** per FG from FishBase/SeaLifeBase traits and empirical equations, plus EcoBase. |
 | 4 | `04_diets.R` | **Diet matrix.** Sources in order: Mediterranean metaweb → MAISHA → FishBase/SeaLifeBase → EcoBase → literature fallback. FG order follows the FG table. |
-| 6 | `06_environment.R` (optional) | **Environmental drivers** from Copernicus Marine (Mediterranean reanalyses; global model scaled to the Med for 1994–98): bottom and surface temperature, surface salinity, NPP. Monthly maps on the native grid, time series with the 10–90 % range over the area, Ecosim forcing series, and phytoplankton B and P/B for Ecopath. |
-| 7 | `06b_ecospace_drivers.R` (optional) | **Ecospace driver maps**: the monthly maps of 06 regridded onto your Ecospace depth `.asc` (any resolution or projection), coastal gaps filled, one `.asc` per variable and month plus an index file. No download; rerun alone for a new base map. |
-| 5 | `05_diagnostics.R` | **Validation.** Compares with the 1995 Western Med model and runs the EwE plausibility checks (P/Q, diet sums, cannibalism, PREBAL, F). Writes one summary table and one PDF of all plots. |
+| 6 | `05_environment.R` (optional) | **Environmental drivers** from Copernicus Marine (Mediterranean reanalyses; global model scaled to the Med for 1994–98): bottom and surface temperature, surface salinity, NPP. Monthly maps on the native grid, time series with the 10–90 % range over the area, Ecosim forcing series, and phytoplankton B and P/B for Ecopath. |
+| 7 | `05b_ecospace_drivers.R` (optional) | **Ecospace driver maps**: the monthly maps of 05 regridded onto your Ecospace depth `.asc` (any resolution or projection), coastal gaps filled, one `.asc` per variable and month plus an index file. No download; rerun alone for a new base map. |
+| 5 | `06_diagnostics.R` | **Validation.** Compares with the 1995 Western Med model and runs the EwE plausibility checks (P/Q, diet sums, cannibalism, PREBAL, F). Writes one summary table and one PDF of all plots. |
 
 Every method, equation, assumption and reference is in `scripts/WMed-EwEbuilder.qmd`.
 
@@ -99,14 +99,14 @@ Set these on the page, or at the top of `scripts/run_pipeline_demo.R` (every opt
 
 | Option | Default | Meaning |
 |---|---|---|
-| `RUN_STEPS` | `1:5` | Scripts to run, e.g. `5` (only redraw the validation), `2:5` (keep the biomass), `6` (only the environment). |
+| `RUN_STEPS` | `c(1:4, 7)` | Scripts to run, e.g. `7` (only redraw the validation), `c(2:4, 7)` (keep the biomass), `5` (only the environment), `6` (only the Ecospace maps). |
 | `MODEL_GSAS` | `1:12` | GSAs in the model area. A subset filters area, survey data and catch countries together. |
 | `MODEL_AREA_BASIS` | `"whole_gsa"` | `"whole_gsa"` = coast to bottom; `"medits_10_800"` = MEDITS 10–800 m strata only. |
 | `AREA_MODE` | `"westmed"` | `"custom"` with `AREA_NAME` and `CUSTOM_AREA_TYPE = "shapefile"` (`CUSTOM_SHAPEFILE_PATH`) or `"bbox"` (`CUSTOM_BBOX`). Runs all steps for that region; outputs in `out_dir/<AREA_NAME>/`; catch from the GSA(s) it overlaps. |
 | `YEAR_ECOPATH` / `TS_YEARS` | `1994:1996` / `1995:2023` | Ecopath baseline / Ecosim years. |
 | `ECOPATH_B_FILL_MODE`, `ECOPATH_B_FILL_YEARS` | `"window_mean"`, `1995:2000` | FGs with no biomass in the Ecopath years take this mean; "Expanding" FGs get 0.00001. |
 | `HIGH_F_B_FIX` | `"none"` | FGs with F > 1: `"none"` reports them (`high_F_REVIEW.csv`); `"min_from_catch"` raises B to catch / 1; `"ecopath_estimate"` leaves B to Ecopath (EE = 0.95). |
-| `PHYTO_SOURCE` | `"isimip"` | Phytoplankton B and P/B: `"isimip"` (COBALT 1995, EcoBase P/B) or `"copernicus"` (from step 06; run 06 first). |
+| `PHYTO_SOURCE` | `"isimip"` | Phytoplankton B and P/B: `"isimip"` (COBALT 1995, EcoBase P/B) or `"copernicus"` (from step 05; run 05 first). |
 | `STOCK_ASSESSMENT_SOURCE` | `"GFCM"` | `"GFCM"` = the newest GFCM Stock Assessment Forms, downloaded and read automatically (check `biomass/gfcm_saf_parse_REVIEW.csv`); `"RAM"` = RAM Legacy. |
 | `STRATA`, `DROP_OUTLIERS`, `NORMALIZE_TS` | `TRUE` | Strata-weighted density; remove flagged outlier hauls; Ecosim series as a relative index. |
 | `APPLY_CATCHABILITY` | `TRUE` | Divide MEDITS density by the species catchability (default table in pCloud, or your own `CATCHABILITY_FILE`). |
@@ -115,7 +115,7 @@ Set these on the page, or at the top of `scripts/run_pipeline_demo.R` (every opt
 
 ## First run: downloads and time
 
-Steps 01–05 take about 10–30 minutes. The first run on a new computer can take up to about 70 minutes, because some sources are downloaded once and cached:
+Steps 01–06 take about 10–30 minutes. The first run on a new computer can take up to about 70 minutes, because some sources are downloaded once and cached:
 
 | What | Size | Used by | Notes |
 |---|---|---|---|
@@ -125,7 +125,7 @@ Steps 01–05 take about 10–30 minutes. The first run on a new computer can ta
 | ISIMIP3a COBALT plankton fields | hundreds of MB | 01b | plankton and primary production |
 | EUSeaMap 2025 geodatabase | > 1 GB | 01b | put it in `data/Complementary data/EUSeaMap_2025/` |
 | GFCM Stock Assessment Forms (PDF) | ~1 MB each, ~70 stocks | 01b, 02 | cached in `data/fisheries/GFCM_SAF/pdf/` |
-| Copernicus Marine | several GB | 06 | the first 06 run can take a few hours; later runs only fetch new years (~15 min) |
+| Copernicus Marine | several GB | 05 | the first 05 run can take a few hours; later runs only fetch new years (~15 min) |
 
 The GitHub-only packages (`rfishbase`, `duckdbfs`, `FishLife`) are installed by `install_packages.R`.
 
@@ -183,7 +183,7 @@ previous_runs/<time>/           # the workbook, logs and validation summary of t
 | "Folders not found" | Card 0 of the page, or copy `config.R.example` to `config.local.R` and set the paths. |
 | Errors after running chunks of the `.qmd` in the console | The page must be rendered (Run Document), not run chunk by chunk. Restart R and click Run Document. |
 | A step failed | Results → **Logs of the last run (.zip)**, or the `<date>_0N_..._log.txt` files in `out_dir`. The run summary on the page shows the first error of each script. |
-| 06 downloads nothing | Card 0 → **Check setup** (Copernicus tool and login), then card 4 → *enter or change the login*. |
+| 05 downloads nothing | Card 0 → **Check setup** (Copernicus tool and login), then card 4 → *enter or change the login*. |
 | Packages older than the reference | `source("scripts/install_packages.R")` and restart R. |
 | The input snapshot or first run is slow | The first run copies the shared data to the local copy (~2.5 GB); later runs read the local copy. |
 
@@ -197,7 +197,7 @@ scripts/
   wmed_paths.R                     # finds git_dir, pcloud_dir, out_dir on any computer
   install_packages.R  package_versions.csv
   01_biomass.R  01b_biomass_unsurveyed.R  02_fisheries.R  03_pbqb-traits.R  04_diets.R
-  05_diagnostics.R  06_environment.R  06b_ecospace_drivers.R
+  06_diagnostics.R  05_environment.R  05b_ecospace_drivers.R
   03b_ecobase.R                    # EcoBase fallbacks
   lib_*.R                          # shared functions (survey density, AquaMaps, FishBase diets,
                                    #   plankton, Copernicus, taxonomy, run record)

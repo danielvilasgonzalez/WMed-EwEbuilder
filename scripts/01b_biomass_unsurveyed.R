@@ -2863,12 +2863,12 @@ if (isTRUE(ESTIMATE_MACROZOO_IN_ECOPATH) && !is.null(plankton_model_rows) && nro
           " its Ecopath_B comes from the field-reference minimum (MACROZOO_SOURCE = '",
           if (exists("MACROZOO_SOURCE")) MACROZOO_SOURCE else "field_minimum", "').")
 }
-## PHYTO_SOURCE = "copernicus": Large/Small phytoplankton from 06_environment.R
+## PHYTO_SOURCE = "copernicus": Large/Small phytoplankton from 05_environment.R
 ## (Copernicus MedBFM, before 1999 PISCES scaled to MedBFM; size split from
 ## satellite size classes) instead of ISIMIP. One row per year of the
 ## annual series (environment_timeseries_annual.csv, phyto_c x C:WW x share),
-## so Ecopath uses the YEAR_ECOPATH mean and Ecosim every year. Needs 06 to
-## have run first (tick 06 on the page); otherwise ISIMIP stays.
+## so Ecopath uses the YEAR_ECOPATH mean and Ecosim every year. Needs 05 to
+## have run first (tick 05 on the page); otherwise ISIMIP stays.
 if (!exists("PHYTO_SOURCE", envir = .GlobalEnv, inherits = FALSE)) PHYTO_SOURCE <- "isimip"
 if (identical(PHYTO_SOURCE, "copernicus")) {
   .ef <- file.path(out_dir, "environment", "ecopath_phytoplankton_B_PB.csv")
@@ -2878,13 +2878,13 @@ if (identical(PHYTO_SOURCE, "copernicus")) {
     .c2w <- if (exists("PHYTO_C_TO_WW")) PHYTO_C_TO_WW else 9
     .cop <- rbindlist(lapply(seq_len(nrow(.e)), function(i) .a[, .(Year = as.integer(year), Group = .e$TargetGroup[i],
               Biomass_t = value * .c2w * .e$share[i] * study_area_km2,
-              Source_citation = paste0("COPERNICUS (06_environment.R, PHYTO_SOURCE = 'copernicus'): ", .e$Source_citation[i]))]))
+              Source_citation = paste0("COPERNICUS (05_environment.R, PHYTO_SOURCE = 'copernicus'): ", .e$Source_citation[i]))]))
     plankton_model_rows <- rbindlist(list(if (!is.null(plankton_model_rows)) plankton_model_rows[!tolower(Group) %in% c("largephytoplankton", "smallphytoplankton")],
                                           .cop), use.names = TRUE, fill = TRUE)
-    message("[Plankton biomass] PHYTO_SOURCE = 'copernicus': Large/Small phytoplankton from 06_environment.R (",
+    message("[Plankton biomass] PHYTO_SOURCE = 'copernicus': Large/Small phytoplankton from 05_environment.R (",
             nrow(.cop), " rows, ", paste(range(.a$year), collapse = "-"), ").")
-  } else message("[Plankton biomass] PHYTO_SOURCE = 'copernicus' but 06_environment.R outputs are not there yet (",
-                 basename(.ef), ") - ISIMIP kept. Run 06 first.")
+  } else message("[Plankton biomass] PHYTO_SOURCE = 'copernicus' but 05_environment.R outputs are not there yet (",
+                 basename(.ef), ") - ISIMIP kept. Run 05 first.")
 }
 if (!is.null(plankton_model_rows) && nrow(plankton_model_rows) > 0) {
   plankton_model_rows <- plankton_model_rows[tolower(Group) %in% plankton_missing]

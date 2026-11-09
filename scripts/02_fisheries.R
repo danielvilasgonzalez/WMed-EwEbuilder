@@ -7328,7 +7328,7 @@ if (!file.exists(SPECIES_DENSITY_PATH)) {
     ## than the "not applicable" it actually is. F is only computed
     ## where there is a real, nonzero matched catch; every zero-catch
     ## FG gets F = NA here, which then drops out of the F_by_fg plot
-    ## (05_diagnostics.R filters to !is.na(F_for_plot) when it builds
+    ## (06_diagnostics.R filters to !is.na(F_for_plot) when it builds
     ## F_by_fg.png from this file) instead of plotting as F = 0.
     F = fifelse(!is.na(Catch_t_avg) & Catch_t_avg > 0,
                 (Catch_t_avg * .kc(FG_num) / Total_Area_km2) / Biomass_density_avg, NA_real_)

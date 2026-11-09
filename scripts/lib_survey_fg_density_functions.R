@@ -5809,7 +5809,7 @@ add_pbqb_to_ecopath_workbook <- function(fg_weighted, out_path, species_pb_qb = 
   setorder(pbqb_sheet, FG_num)
 
   ## PHYTO_SOURCE = "copernicus": phytoplankton P/B = NPP / B from
-  ## 06_environment.R (out_dir/environment/ecopath_phytoplankton_B_PB.csv)
+  ## 05_environment.R (out_dir/environment/ecopath_phytoplankton_B_PB.csv)
   ## instead of the EcoBase value.
   if (identical(get0("PHYTO_SOURCE", envir = .GlobalEnv, ifnotfound = "isimip"), "copernicus")) {
     ef <- file.path(get0("out_dir", envir = .GlobalEnv, ifnotfound = ""), "environment", "ecopath_phytoplankton_B_PB.csv")
@@ -5820,10 +5820,10 @@ add_pbqb_to_ecopath_workbook <- function(fg_weighted, out_path, species_pb_qb = 
         k <- grepl(key, pbqb_sheet$FG_name, ignore.case = TRUE)
         if (any(k)) {
           pbqb_sheet[k, PB_FG := e$PB[i]]
-          if ("PB_source" %in% names(pbqb_sheet)) pbqb_sheet[k, PB_source := "Copernicus (06_environment.R): NPP / B"]
+          if ("PB_source" %in% names(pbqb_sheet)) pbqb_sheet[k, PB_source := "Copernicus (05_environment.R): NPP / B"]
         }
       }
-      message("add_pbqb_to_ecopath_workbook(): PHYTO_SOURCE = 'copernicus' - phytoplankton P/B = ", signif(e$PB[1], 3), " /yr from 06.")
+      message("add_pbqb_to_ecopath_workbook(): PHYTO_SOURCE = 'copernicus' - phytoplankton P/B = ", signif(e$PB[1], 3), " /yr from 05.")
     } else message("add_pbqb_to_ecopath_workbook(): PHYTO_SOURCE = 'copernicus' but ", ef, " not found - EcoBase P/B kept.")
   }
 

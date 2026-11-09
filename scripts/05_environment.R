@@ -1,12 +1,12 @@
 ## WMed-EwEbuilder - building Ecopath with Ecosim inputs for the Western Mediterranean
-## (biomass, fisheries, P/B, Q/B, traits and diets). This file: 06_environment.R
+## (biomass, fisheries, P/B, Q/B, traits and diets). This file: 05_environment.R
 ## =================================================================
-## 06_environment.R
+## 05_environment.R
 ## Created by: Daniel Vilas
 ##
 ## Environmental drivers from Copernicus Marine, for Ecosim (time series),
 ## Ecospace (monthly maps) and the Ecopath phytoplankton inputs (B, P/B).
-## Runs on its own (source("06_environment.R") from the scripts/ folder);
+## Runs on its own (source("05_environment.R") from the scripts/ folder);
 ## it does not need 01-05. Outputs in out_dir/environment/.
 ##
 ## WHAT IT MAKES
@@ -25,7 +25,7 @@
 ##  The PISCES gap fill keeps 0-ENV_INTEGRATION_DEPTH m: only its
 ##  year-to-year ratio is used, the level comes from MedBFM (see below).
 ##  For each: one GeoTIFF per variable on the native 1/24 deg grid (one
-##  layer per month; 06b_ecospace_drivers.R turns them into monthly ASCII
+##  layer per month; 05b_ecospace_drivers.R turns them into monthly ASCII
 ##  maps on any Ecospace base map), and the monthly and annual means over the model
 ##  area (area-weighted) with the value relative to 1995 (Ecosim forcing).
 ##  Ecopath: phytoplankton B (1995) and P/B (NPP 1994-1995 / B 1995) per
@@ -135,7 +135,7 @@ asc_dir   <- file.path(env_dir, "ecospace_asc")
 diag_dir  <- file.path(env_dir, "diagnostics")
 for (d in c(env_dir, cache_dir, nc_dir, asc_dir, diag_dir)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
 
-.env_log <- file.path(out_dir, paste0(format(Sys.Date(), "%Y%m%d"), "_06_environment_log.txt"))
+.env_log <- file.path(out_dir, paste0(format(Sys.Date(), "%Y%m%d"), "_05_environment_log.txt"))
 .env_msg <- function(...) {
   txt <- paste0(...)
   message(txt)
@@ -143,9 +143,9 @@ for (d in c(env_dir, cache_dir, nc_dir, asc_dir, diag_dir)) dir.create(d, recurs
 }
 cat("Run started: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n", sep = "", file = .env_log)
 .t0_env <- Sys.time()
-.env_tick <- function(what) .env_msg(sprintf("[time] %s: %.1f min since the start of 06", what,
+.env_tick <- function(what) .env_msg(sprintf("[time] %s: %.1f min since the start of 05", what,
                                              as.numeric(difftime(Sys.time(), .t0_env, units = "mins"))))
-.env_msg("[06_environment] out_dir/environment = ", env_dir, " | downloads cached in ", cache_dir)
+.env_msg("[05_environment] out_dir/environment = ", env_dir, " | downloads cached in ", cache_dir)
 
 ## --- Datasets (my = reanalysis, myint = interim for the latest months) --
 ENV_DATASETS <- list(
@@ -186,9 +186,9 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
   }
   ## A command-line error (not a missing year) is the same for every request: stop at once
   if (!file.exists(f) && any(grepl("^Usage: copernicusmarine|Got unexpected extra arguments|No such option", out)))
-    stop("[06_environment] copernicusmarine rejected the command: ", paste(utils::tail(out[nzchar(trimws(out))], 2), collapse = " | "))
+    stop("[05_environment] copernicusmarine rejected the command: ", paste(utils::tail(out[nzchar(trimws(out))], 2), collapse = " | "))
   if (!file.exists(f) && any(grepl("requires a Copernicus Marine username and password|Copernicus Marine username:|Invalid username or password", out)))
-    stop("[06_environment] Copernicus Marine refused the login (missing or wrong). Enter it again on the page (06 environment ->",
+    stop("[05_environment] Copernicus Marine refused the login (missing or wrong). Enter it again on the page (05 environment ->",
          " 'enter or change the login'), or in the R console:\n",
          "  source(\"", file.path(git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"), "\"); wmed_copernicus_login()")
   if (!file.exists(f)) {
@@ -362,7 +362,7 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
 ## =================================================================
 ecospace_grid <- if (file.exists(ECOSPACE_DEPTH_FILE)) {
   g <- terra::rast(ECOSPACE_DEPTH_FILE); terra::crs(g) <- "EPSG:4326"; g
-} else { .env_msg("[06_environment] Ecospace base map not found (", ECOSPACE_DEPTH_FILE, ") - no ASCII maps."); NULL }
+} else { .env_msg("[05_environment] Ecospace base map not found (", ECOSPACE_DEPTH_FILE, ") - no ASCII maps."); NULL }
 
 ## The run's model area: the custom region (CUSTOM_BBOX or the uploaded
 ## CUSTOM_SHAPEFILE_PATH) or the GSAs in MODEL_GSAS.
@@ -382,11 +382,11 @@ ecospace_grid <- if (file.exists(ECOSPACE_DEPTH_FILE)) {
     g <- sf::st_read(file.path(git_dir, "scripts", "gsa_boundaries_westmed.geojson"), quiet = TRUE)
     terra::vect(g[g$gsa_num %in% MODEL_GSAS, ])
   }
-}, error = function(e) { .env_msg("[06_environment] model area could not be read: ", conditionMessage(e)); NULL })
+}, error = function(e) { .env_msg("[05_environment] model area could not be read: ", conditionMessage(e)); NULL })
 .area_label <- if (ENV_DOMAIN == "ecospace") "the Ecospace map" else if (.is_custom_env)
   paste0("the custom region '", if (exists("AREA_NAME", envir = .GlobalEnv)) AREA_NAME else "custom", "'") else
   paste0("GSAs ", paste(MODEL_GSAS, collapse = ", "))
-.env_msg("[06_environment] Area: ", .area_label, " | years ", min(ENV_YEARS), "-", max(ENV_YEARS),
+.env_msg("[05_environment] Area: ", .area_label, " | years ", min(ENV_YEARS), "-", max(ENV_YEARS),
          " | Ecopath B ", ENV_ECOPATH_B_YEAR, ", P/B NPP ", paste(range(ENV_ECOPATH_PB_YEARS), collapse = "-"))
 
 ## Area-weighted (cos latitude) statistics of every layer over the model
@@ -420,7 +420,7 @@ ecospace_grid <- if (file.exists(ECOSPACE_DEPTH_FILE)) {
 }
 .env_domain_mean <- function(r) .env_domain_stats(r)$value
 
-## ASCII maps on the Ecospace base map are made by 06b_ecospace_drivers.R
+## ASCII maps on the Ecospace base map are made by 05b_ecospace_drivers.R
 ## (any base map, coastal gaps filled, index file). ENV_WRITE_ASCII = TRUE
 ## also writes the old unfilled copies here, in environment/ecospace_asc/.
 .env_default("ENV_WRITE_ASCII", FALSE)
@@ -438,7 +438,7 @@ ecospace_grid <- if (file.exists(ECOSPACE_DEPTH_FILE)) {
 ## STEP 1 - monthly maps per variable (MedPHY / MedBFM)
 ## =================================================================
 if (!ensure_copernicusmarine_cli(auto_install = FALSE))
-  stop("[06_environment] The copernicusmarine tool is not installed or not found. Install it (pip install copernicusmarine)",
+  stop("[05_environment] The copernicusmarine tool is not installed or not found. Install it (pip install copernicusmarine)",
        " and run 'copernicusmarine login' once, then rerun.")
 ## A login is needed before anything is downloaded: either saved with
 ## wmed_copernicus_login() (lib_cmems_phytoplankton_biomass.R) or by
@@ -447,20 +447,20 @@ if (!ensure_copernicusmarine_cli(auto_install = FALSE))
 .cm_file <- unique(c(path.expand("~/.copernicusmarine/.copernicusmarine-credentials"),
                      if (nzchar(Sys.getenv("USERPROFILE"))) file.path(Sys.getenv("USERPROFILE"), ".copernicusmarine", ".copernicusmarine-credentials")))
 if (is.null(.cm_creds) && !any(file.exists(.cm_file)))
-  stop("[06_environment] No Copernicus Marine login on this laptop. Enter it on the page (06 environment ->",
+  stop("[05_environment] No Copernicus Marine login on this laptop. Enter it on the page (05 environment ->",
        " 'enter or change the login'), or once in the R console:\n",
        "  source(\"", file.path(git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"), "\"); wmed_copernicus_login()\n",
-       "then run 06 again (free account: https://data.marine.copernicus.eu/register).")
+       "then run 05 again (free account: https://data.marine.copernicus.eu/register).")
 
 env_maps <- list()
 for (nm in names(ENV_DATASETS)) {
   ds <- ENV_DATASETS[[nm]]
-  .env_msg("[06_environment] ", nm, " (", ds$var, ") ...")
+  .env_msg("[05_environment] ", nm, " (", ds$var, ") ...")
   yrs <- lapply(ENV_YEARS, function(y) .env_year(nm, y, ds$ids, ds$var, ds$depth, ds$integrate))
   yrs <- Filter(Negate(is.null), yrs)
-  if (!length(yrs)) { .env_msg("[06_environment] ", nm, ": no data downloaded - skipped."); next }
+  if (!length(yrs)) { .env_msg("[05_environment] ", nm, ": no data downloaded - skipped."); next }
   env_maps[[nm]] <- do.call(c, yrs)
-  .env_msg("[06_environment] ", nm, ": ", terra::nlyr(env_maps[[nm]]), " months, ", names(env_maps[[nm]])[1], " to ",
+  .env_msg("[05_environment] ", nm, ": ", terra::nlyr(env_maps[[nm]]), " months, ", names(env_maps[[nm]])[1], " to ",
            names(env_maps[[nm]])[terra::nlyr(env_maps[[nm]])], ".")
   .env_tick(nm)
 }
@@ -561,8 +561,8 @@ if (nrow(env_ts)) {
     fwrite(a[, .(year, forcing = round(relative_to_base, 4), value, n_months, source)],
            file.path(env_dir, paste0("ecosim_forcing_", nm, "_annual.csv")))
   }
-  .env_msg("[06_environment] Ecosim forcing functions (relative to ", ENV_BASE_YEAR, "): ecosim_forcing_<variable>_monthly.csv / _annual.csv")
-  .env_msg("[06_environment] Time series: environment_timeseries_monthly.csv and _annual.csv (value = area-weighted mean,",
+  .env_msg("[05_environment] Ecosim forcing functions (relative to ", ENV_BASE_YEAR, "): ecosim_forcing_<variable>_monthly.csv / _annual.csv")
+  .env_msg("[05_environment] Time series: environment_timeseries_monthly.csv and _annual.csv (value = area-weighted mean,",
            " p10/p90 = 10th/90th percentile across the grid cells of the area; relative_to_base = value / ",
            ENV_BASE_YEAR, " mean, the Ecosim forcing shape).")
 }
@@ -597,8 +597,8 @@ if (nrow(env_ts)) tryCatch({
          x = NULL, y = NULL) +
     theme_minimal(base_size = 11) + theme(strip.text = element_text(hjust = 0, face = "bold"))
   ggplot2::ggsave(file.path(plot_dir_env, "environment_timeseries.png"), p, width = 10, height = 12, dpi = 200, bg = "white")
-  .env_msg("[06_environment] Plot: plots/environment/environment_timeseries.png")
-}, error = function(e) .env_msg("[06_environment] plot skipped - ", conditionMessage(e)))
+  .env_msg("[05_environment] Plot: plots/environment/environment_timeseries.png")
+}, error = function(e) .env_msg("[05_environment] plot skipped - ", conditionMessage(e)))
 
 ## =================================================================
 ## STEP 4 - Large / Small share from satellite size classes
@@ -640,11 +640,11 @@ for (id in if (is.null(pft_share)) ENV_PFT_DATASETS else character(0)) {
 if (!is.null(pft_share)) {
   share_large <- sum(pft_share$MICRO) / sum(pft_share$MICRO + pft_share$NANO + pft_share$PICO)
   fwrite(pft_share, .pft_file)
-  .env_msg("[06_environment] Size classes (", pft_share$dataset[1], ", ", min(pft_share$year), "-", max(pft_share$year),
+  .env_msg("[05_environment] Size classes (", pft_share$dataset[1], ", ", min(pft_share$year), "-", max(pft_share$year),
            "): micro ", round(100 * share_large), " % of chlorophyll -> Large; nano + pico ", round(100 * (1 - share_large)), " % -> Small.")
 } else {
   share_large <- 0.55
-  .env_msg("[06_environment] No satellite size classes could be downloaded - FALLBACK Large/Small 0.55/0.45 (Delgado et al. 1992).")
+  .env_msg("[05_environment] No satellite size classes could be downloaded - FALLBACK Large/Small 0.55/0.45 (Delgado et al. 1992).")
 }
 
 ## =================================================================
@@ -656,7 +656,7 @@ tryCatch(if (nrow(env_ts) && all(c("npp", "phyto_c") %in% env_ts$variable)) {
   npp_y <- env_annual[variable == "npp" & year %in% ENV_ECOPATH_PB_YEARS & n_months == 12]
   npp_c <- mean(npp_y$value)
   if (!is.finite(b_c) || !nrow(npp_y) || !is.finite(npp_c))
-    stop("[06_environment] no phytoplankton carbon for ", ENV_ECOPATH_B_YEAR, " or no full year of NPP in ",
+    stop("[05_environment] no phytoplankton carbon for ", ENV_ECOPATH_B_YEAR, " or no full year of NPP in ",
          paste(range(ENV_ECOPATH_PB_YEARS), collapse = "-"), " (before 1999 these come from the PISCES gap fill,",
          " which needs at least 3 overlap years; see the [gap fill] lines above) - no Ecopath phytoplankton values.")
   pb <- npp_c / b_c
@@ -675,11 +675,11 @@ tryCatch(if (nrow(env_ts) && all(c("npp", "phyto_c") %in% env_ts$variable)) {
                              if (!is.null(pft_share)) paste0(" (", pft_share$dataset[1], ", ", min(pft_share$year), "-", max(pft_share$year), ")") else " (fallback 0.55/0.45, Delgado et al. 1992)",
                              ", same P/B for both (FLAGGED)."))
   fwrite(ecopath_phyto, file.path(env_dir, "ecopath_phytoplankton_B_PB.csv"))
-  .env_msg("[06_environment] Ecopath phytoplankton: B ", signif(b_ww, 3), " t WW/km2 (", signif(b_c, 3), " g C/m2, ",
+  .env_msg("[05_environment] Ecopath phytoplankton: B ", signif(b_ww, 3), " t WW/km2 (", signif(b_c, 3), " g C/m2, ",
            ENV_ECOPATH_B_YEAR, "), NPP ", signif(npp_c, 3), " g C/m2/yr (", paste(range(npp_y$year), collapse = "-"),
            "), P/B ", signif(pb, 3), " /yr; Large ", signif(b_ww * share_large, 3), ", Small ", signif(b_ww * (1 - share_large), 3),
            " t/km2 -> ecopath_phytoplankton_B_PB.csv")
 } else {
-  .env_msg("[06_environment] NPP or phytoplankton carbon missing - no Ecopath phytoplankton values.")
+  .env_msg("[05_environment] NPP or phytoplankton carbon missing - no Ecopath phytoplankton values.")
 }, error = function(e) .env_msg(conditionMessage(e)))
 .env_tick("done")

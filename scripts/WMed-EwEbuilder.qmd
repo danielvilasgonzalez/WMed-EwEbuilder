@@ -36,9 +36,9 @@ params:
   ts_years: "1995:2023"           # Ecosim biomass years
   ## catch/effort years follow the Ecopath and Ecosim years (run_pipeline_demo.R)
   ## What the render reruns before building the HTML:
-  ##   "all"        - the whole pipeline 01 -> 05 with the inputs above
+  ##   "all"        - the whole pipeline 01 -> 06 with the inputs above
   ##                  (about 10 min; the first run after a change needs internet)
-  ##   "validation" - only 05_diagnostics.R (redraws the validation plots)
+  ##   "validation" - only 06_diagnostics.R (redraws the validation plots)
   ##   "none"       - nothing; uses the outputs already on disk
   regenerate: "none"
 server: shiny
@@ -267,7 +267,7 @@ message("git_dir: ", .wp$git_dir, "\npcloud_dir: ", .wp$pcloud_dir, "\nout_dir: 
 ## in out_dir as usual; a failed step stops the render with its message.
 .regen <- if (exists("params") && !is.null(params$regenerate)) params$regenerate else "none"
 if (!identical(.regen, "none")) {
-  .steps <- switch(.regen, validation = "5", all = "1:5",
+  .steps <- switch(.regen, validation = "7", all = "c(1:4, 7)",
                    stop("params$regenerate must be \"none\", \"validation\" or \"all\" (got \"", .regen, "\")."))
   .demo <- file.path(git_dir, "scripts", "run_pipeline_demo.R")
   message("Regenerating pipeline outputs (", .regen, ", steps ", .steps, ") with ", .demo, " ...")
@@ -291,14 +291,14 @@ if (!identical(.regen, "none")) {
 ## Configure and run the pipeline {#sec-configure}
 
 Pick the model area on the map, set the years and options, and click
-**Run pipeline**. The run (01 → 05) goes in the background with exactly
+**Run pipeline**. The run (01 → 06) goes in the background with exactly
 the settings shown in the *Settings block* box; when it finishes, the
 plots at the bottom and the tables in the output folder are updated.
-**How long:** scripts 01–05 take about 10–30 minutes, depending on the
+**How long:** scripts 01–06 take about 10–30 minutes, depending on the
 computer. The first run on a new computer can take up to about 70
 minutes, because it downloads and caches the bathymetry, the FishBase
 and SeaLifeBase tables and the taxonomy (it needs internet; later runs
-reuse them). 06 environment downloads several GB from Copernicus Marine
+reuse them). 05 environment downloads several GB from Copernicus Marine
 the first time, which can take a few hours depending on the connection;
 later runs only fetch the new years (about 15 minutes). The same
 settings block can be copied or downloaded to run the pipeline from the
@@ -331,7 +331,7 @@ source(file.path(normalizePath(".."), "scripts", "app_server.R"), local = TRUE)
 |------------------------|------------------------|------------------------|
 | GSAs (map, checkboxes) | `MODEL_GSAS` (→ `FILTER_AREAS`) | GSAs of the model area (default 1-12). Survey data only from these GSAs; GSAs 3, 4 and 12 (no MEDITS) take the survey density per km² of the others (assumption). Catch kept for every coastal state of these GSAs. |
 | Area basis | `MODEL_AREA_BASIS` | `whole_gsa`: A_model is the whole sea area of the GSAs, coast to bottom. `medits_10_800`: only the 10-800 m MEDITS strata. |
-| Custom region | `AREA_MODE = "custom"`, `AREA_NAME`, `CUSTOM_AREA_TYPE`, `CUSTOM_SHAPEFILE_PATH` or `CUSTOM_BBOX` | A region from an uploaded shapefile (.zip, or .shp + .shx + .dbf + .prj), GeoJSON, GeoPackage or KML, or a lon/lat box, instead of GSAs. Runs all steps (01–05) for that region; outputs in `out_dir/runs/<AREA_NAME>__EP<years>_TS<years>/` (@sec-area-definition, Approach B). Catch: the GSA(s) holding ≥ 5 % of the region (`custom_gsa_overlap.csv`), per km² of their sea area. |
+| Custom region | `AREA_MODE = "custom"`, `AREA_NAME`, `CUSTOM_AREA_TYPE`, `CUSTOM_SHAPEFILE_PATH` or `CUSTOM_BBOX` | A region from an uploaded shapefile (.zip, or .shp + .shx + .dbf + .prj), GeoJSON, GeoPackage or KML, or a lon/lat box, instead of GSAs. Runs all steps (01–06) for that region; outputs in `out_dir/runs/<AREA_NAME>__EP<years>_TS<years>/` (@sec-area-definition, Approach B). Catch: the GSA(s) holding ≥ 5 % of the region (`custom_gsa_overlap.csv`), per km² of their sea area. |
 | Ecopath baseline | `YEAR_ECOPATH` | Years averaged into Ecopath_B, F and P/B (01, 02, 03). |
 | Ecosim biomass series | `TS_YEARS` | Years of the Ecosim biomass series (01). |
 | (no input) | `START_YEAR`, `END_YEAR` | Catch, landings, discards and effort series (02) follow the other years: from the first Ecopath or Ecosim year to the last Ecosim year (set in `run_pipeline_demo.R`). |
@@ -340,9 +340,9 @@ source(file.path(normalizePath(".."), "scripts", "app_server.R"), local = TRUE)
 | Relative Ecosim series | `NORMALIZE_TS` (default `TRUE`) | Ecosim series as an index (first value = 1) or raw density. |
 | Fill missing Ecopath_B | `ECOPATH_B_FILL_MODE`, `ECOPATH_B_FILL_YEARS` (default on, 1995-2000) | An FG with no biomass in the Ecopath years gets its mean over these years (else the nearest year with data); off = nearest single year only. Expanding FGs always get 0.00001 t/km². |
 | FGs with high F | (no choice: reported only) threshold `F_MAX` = 1, raised per FG to the highest F in its species' stock assessments (RAM Legacy v4.44 stocks of the model GSAs, or your `assessment_F_thresholds.csv`: species, F_max, reference; `F_THRESHOLD_FROM_ASSESSMENT`; `assessment_F_threshold_by_fg.csv`) | Flagged when F > threshold and listed in `high_F_REVIEW.csv` with a recommendation per FG (biomass source, catchability, how far F is above the threshold, the B that would give F = threshold). Ecopath_B is not changed: the modeller decides (manual density, survey biomass upload, catch check, or leaving B to Ecopath in EwE). |
-| Phytoplankton B and P/B | `PHYTO_SOURCE` (default `"isimip"`) | `"isimip"`: ISIMIP COBALT2 1995 biomass and EcoBase P/B. `"copernicus"`: B and P/B from 06 environment (@sec-environment; run 06 first). |
+| Phytoplankton B and P/B | `PHYTO_SOURCE` (default `"isimip"`) | `"isimip"`: ISIMIP COBALT2 1995 biomass and EcoBase P/B. `"copernicus"`: B and P/B from 05 environment (@sec-environment; run 05 first). |
 | (no input) Output folder | `RUN_NAME`, `RUN_DIR` (set in `run_pipeline_demo.R`) | Each set of inputs has its own folder, so runs never overwrite each other's results. Default inputs (GSAs 1-12, whole GSA, Ecopath 1994-1996, Ecosim 1995-2023, `FG_WMed_2026.csv`): the main output folder. Any other area, years or FG table: `out_dir/runs/<area>__EP<years>_TS<years>[__FG-<table>]`, e.g. `runs/GSA6-7__EP1994-1996_TS1995-2023`. The same inputs again replace that folder's results (the previous ones are kept in its `previous_runs/`). Own survey files add `__survey-own`. Other options (strata, outliers, F > 1, phytoplankton source...) do not change the folder. Downloads and caches stay in the main folder, shared by every run. Results card: *Show the results of* picks the run to show. |
-| Scripts to run | `RUN_STEPS` | Tick any of 01–06 (`1:5` the main pipeline; `6` = environmental drivers, @sec-environment, run before 05; `2:5` reuses the biomass on disk; `5` redraws the validation only; e.g. `c(1, 5)`). A script left unticked is not rerun: the ticked ones read its outputs from the previous run. The page stops a run when a ticked script needs a file that is not there yet, and warns when later outputs on disk will no longer match, or when the settings differ from those of the last run. |
+| Scripts to run | `RUN_STEPS` | Tick any of 01–06; they run in this order and 06 diagnostics runs last (`c(1:4, 7)` the main pipeline; `5` = 05 environment, @sec-environment; `6` = 05b Ecospace maps; `7` = 06 diagnostics; `c(2:4, 7)` reuses the biomass on disk; `7` alone redraws the validation; e.g. `c(1, 7)`). A script left unticked is not rerun: the ticked ones read its outputs from the previous run. The page stops a run when a ticked script needs a file that is not there yet, and warns when later outputs on disk will no longer match, or when the settings differ from those of the last run. |
 
 The model-area figure in the summary is a preview from the simplified
 map polygons (about 1 % above the real value); the A_model used in the
@@ -357,7 +357,7 @@ Western Mediterranean: biomass per Functional Group (FG) for the Ecopath
 baseline and the Ecosim time series, catch, landings, discards and
 effort by fleet, fishing mortality, P/B and Q/B, the diet matrix, and a
 validation against the 1995 Western Mediterranean model. It runs as five
-R scripts (01 biomass, 02 fisheries, 03 P/B and Q/B, 04 diets, 05
+R scripts (01 biomass, 02 fisheries, 03 P/B and Q/B, 04 diets, 06
 validation) from the page above, or from the R console, and writes
 everything to one Excel workbook plus review tables.
 
@@ -478,7 +478,7 @@ reference tables, each with a citation per row.
 | 01 | `catchability_factors_ecotrans_medits_2021_spp.csv` | `data/Complementary data/` | catchability q (`APPLY_CATCHABILITY`; or your own `CATCHABILITY_FILE`) | optional |
 | 01 | `manual_density_ecopath.csv`, `manual_density_ecosim.csv` | `data/Complementary data/` | user densities (t/km²) that override any other source | optional |
 | 01 | biomass from any survey: csv with `species` (scientific name), `year`, `biomass_t_km2` [, `area_km2`, `reference`] (page: card 2b *Biomass data: surveys*) | anywhere (`OTHER_SURVEY_FILE`) | a species in the file takes its biomass only from it, in every year: its MEDITS/MEDIAS value is removed from its FG, the file's values are used in its years and the species adds 0 in the others (an FG name: the whole FG, blank in other years); Ecopath B = mean of its Ecopath-year rows (none: its first three years); with `area_km2`, model-area biomass = biomass × `area_km2` / $A_{model}$ | optional |
-| 07 (06b) | Ecospace base map: depth `.asc` (+ `.prj`) | anywhere (`ECOSPACE_DEPTH_FILE`; default `data/Bathymetry/depth_wmed.asc`) | grid of the Ecospace driver maps | optional |
+| 05b | Ecospace base map: depth `.asc` (+ `.prj`) | anywhere (`ECOSPACE_DEPTH_FILE`; default `data/Bathymetry/depth_wmed.asc`) | grid of the Ecospace driver maps | optional |
 | 02 | `assessment_F_thresholds.csv` | `data/Complementary data/` | F threshold per species (species, F_max, reference), ahead of RAM Legacy | optional |
 | 01 | `small_pelagics_acoustic_pre_medias.csv`, `multistanza_reference_tables/` | `data/Complementary data/` | pre-MEDIAS acoustics; hake stanza parameters | yes |
 | 01, 02 | `fisheries/GFCM_SAF/` | `data/` | GFCM stock assessments (downloaded and cached here), hand-transcribed SAFs | yes |
@@ -491,7 +491,7 @@ reference tables, each with a citation per row.
 | 02 | `fisheries_reference_tables/`, `GFCM-FleetRegister.xlsx` | `data/Complementary data/` | gear → fleet maps, fleet register, technology creep, country codes | yes |
 | 03 | `pbqb_reference_tables/` | `data/Complementary data/` | method references, mammal survivorship type, mean body masses | yes |
 | 04 | `diet/MAISHA/`, `diet_reference_tables/`, `data_entry_metaweb_empty.xlsx` | `data/` and `data/Complementary data/` | diet sources, prey category rules, literature fallback | yes |
-| 05 | `WMed_EwE.xlsx`, `validation_reference_tables/` | `data/` and `data/Complementary data/` | 1995 model, crosswalk, other models | yes |
+| 06 | `WMed_EwE.xlsx`, `validation_reference_tables/` | `data/` and `data/Complementary data/` | 1995 model, crosswalk, other models | yes |
 | 01 | custom region shapefile | uploaded on the page → `out_dir/shapefiles/custom/<area name>/` | custom study area | custom runs |
 | downloaded | GFCM GSA shapefile, NOAA bathymetry (only if `BATHY_SOURCE = "noaa"` or as fallback), AquaMaps, ISIMIP3a COBALT, FishBase/SeaLifeBase | `out_dir/` caches | GSA polygons, depths, depth suitability, plankton, traits | first run |
 
@@ -838,7 +838,7 @@ FG are in `fisheries/custom_catch_overlap_weights_REVIEW.csv`.
 ASSUMPTIONS: FDI's split of an FG's catch among GSAs (2013 onwards) also
 held in the Ecopath years, and catch per km² is the same everywhere
 inside a GSA, so a region on a fishing ground (or in a closed area) will
-differ. - **P/B, Q/B, diets, validation (03–05)** read the region's
+differ. - **P/B, Q/B, diets, validation (03–06)** read the region's
 workbook and files, so they follow its biomass and species composition.
 
 ::: callout-warning
@@ -850,7 +850,7 @@ the region. The smaller the region, the less likely that is: a coastal
 bay, a canyon or an offshore bank can hold much more or much less of
 these groups than the Western Med average. When the region is smaller
 than the smallest GSA it overlaps, 01 prints a warning and marks these
-FGs *REVIEW* in `custom_fg_biomass_from_westmed_REVIEW.csv`, and 05
+FGs *REVIEW* in `custom_fg_biomass_from_westmed_REVIEW.csv`, and 06
 counts them in `validation_summary_ALL.csv`. Replace them with local
 values where you have them. Their pedigree is 0.2 (from another area)
 and the mapped habitats 0.4, so the pedigree plot shows them too.
@@ -1192,7 +1192,7 @@ a depth stratum, $\bar D_{g,s,y}$ the mean density in GSA $g$, stratum
 $s$ and year $y$, and $A_{g,s}$ the stratum area (km²).
 
 Ecopath_B, catch per km², F and every 01b group use this same
-$A_{model}$ (`model_area_by_gsa.csv` is read by 02, 03 and 05; the
+$A_{model}$ (`model_area_by_gsa.csv` is read by 02, 03 and 06; the
 COBALT plankton mean covers all depths of the GSAs). Alternative:
 `MODEL_AREA_BASIS = "medits_10_800"` uses only the 10–800 m MEDITS
 strata (175,660 km² for the surveyed GSAs), with pseudo-strata down to
@@ -1291,7 +1291,7 @@ MEDITS index without q):
 | \+ haul cap + coverage | 4 | 20 | 0.02 |
 | \+ spike filter | 3 | 20 | 0.05 |
 
-The effect on the full pipeline is in 05 block 12.
+The effect on the full pipeline is in 06 block 12.
 
 ```{r}
 #| label: show-fig-regional-timeseries
@@ -2087,7 +2087,7 @@ wm_figure("fig-pb-qb-scatter", r"---(Chosen PB vs. QB by Functional Group.)---",
 #| label: show-fig-f-by-fg
 #| eval: true
 #| echo: false
-wm_figure("fig-f-by-fg", r"---(Fishing mortality F by Functional Group, 1994-1996.)---", "F_by_fg.png", r"---(05_diagnostics.R)---")
+wm_figure("fig-f-by-fg", r"---(Fishing mortality F by Functional Group, 1994-1996.)---", "F_by_fg.png", r"---(06_diagnostics.R)---")
 ```
 
 Where a high F comes from: for each FG with $F \ge 0.5$, the F of each
@@ -2103,7 +2103,7 @@ low there. Table: `validation/F_by_country_REVIEW.csv`.
 #| label: show-fig-f-by-country
 #| eval: true
 #| echo: false
-wm_figure("fig-f-by-country", r"---(F by country for the FGs with F >= 0.5: red cells show where the catch is high for the biomass the survey sees.)---", "12b_F_by_country.png", r"---(05_diagnostics.R)---")
+wm_figure("fig-f-by-country", r"---(F by country for the FGs with F >= 0.5: red cells show where the catch is high for the biomass the survey sees.)---", "12b_F_by_country.png", r"---(06_diagnostics.R)---")
 ```
 
 ------------------------------------------------------------------------
@@ -2224,9 +2224,9 @@ wm_figure("fig-diet-matrix-heatmap", r"---(Diet-composition matrix: prey FG in r
 
 ------------------------------------------------------------------------
 
-## Diagnostics (`05_diagnostics.R`) {#sec-validation}
+## Diagnostics (`06_diagnostics.R`) {#sec-validation}
 
-`05_diagnostics.R` reads what 01–04 wrote; it does not change any input
+`06_diagnostics.R` reads what 01–04 wrote; it does not change any input
 sheet.
 
 ### Comparison with the 1995 Western Mediterranean model
@@ -2269,7 +2269,7 @@ cannibalism \> 0.1 (EwE User Guide); missing diets; EcoBase evaluations;
 FGs without Ecopath_B; even species splits; temporal mismatches; fleet
 coverage; zero-catch FGs; unmatched old FG names.
 
-Three more checks are written by `05_diagnostics.R` itself and added to
+Three more checks are written by `06_diagnostics.R` itself and added to
 the same summary:
 
 - **Fishing mortality above 1** (`F_above_1_REVIEW.csv`): FGs with
@@ -2419,11 +2419,11 @@ above the field value.
 
 Phytoplankton B and P/B side by side: the Ecopath inputs now in the
 workbook (B from ISIMIP3a COBALT2, P/B from EcoBase), ISIMIP3a COBALT2
-1995, the Copernicus values of `06_environment.R` and the old 1995
+1995, the Copernicus values of `05_environment.R` and the old 1995
 model as published (phytoplankton is a density, so no area rescaling).
 The right panel shows total phytoplankton B per year, ISIMIP vs
 Copernicus. Table: `validation/phytoplankton_sources_REVIEW.csv`. The
-Copernicus rows appear once 06 has run.
+Copernicus rows appear once 05 has run.
 
 ### Outputs
 
@@ -2437,49 +2437,49 @@ Copernicus rows appear once 06 has run.
 #| label: show-fig-all-models-b
 #| eval: true
 #| echo: false
-wm_figure("fig-all-models-b", r"---(Biomass by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_B.png", r"---(05_diagnostics.R)---")
+wm_figure("fig-all-models-b", r"---(Biomass by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_B.png", r"---(06_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-all-models-pb
 #| eval: true
 #| echo: false
-wm_figure("fig-all-models-pb", r"---(P/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_PB.png", r"---(05_diagnostics.R)---")
+wm_figure("fig-all-models-pb", r"---(P/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_PB.png", r"---(06_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-all-models-qb
 #| eval: true
 #| echo: false
-wm_figure("fig-all-models-qb", r"---(Q/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_QB.png", r"---(05_diagnostics.R)---")
+wm_figure("fig-all-models-qb", r"---(Q/B by FG: new pipeline vs the 1995 Western Med model and the NW Med model, with the values and the change of the new pipeline against each model (red = higher, blue = lower, bold = outside 0.5-2x). Table: all_models_comparison_REVIEW.csv.)---", "15d_all_models_QB.png", r"---(06_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-zooplankton-check
 #| eval: true
 #| echo: false
-wm_figure("fig-zooplankton-check", r"---(Total zooplankton: model vs. field (Fernández de Puelles et al. 2023).)---", "11_zooplankton_total_field_check.png", r"---(05_diagnostics.R)---")
+wm_figure("fig-zooplankton-check", r"---(Total zooplankton: model vs. field (Fernández de Puelles et al. 2023).)---", "11_zooplankton_total_field_check.png", r"---(06_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-phyto-sources
 #| eval: true
 #| echo: false
-wm_figure("fig-phyto-sources", r"---(Phytoplankton B and P/B: Ecopath inputs vs ISIMIP, Copernicus (06) and the old 1995 model; total B per year, ISIMIP vs Copernicus.)---", "11b_phytoplankton_sources.png", r"---(05_diagnostics.R, after 06_environment.R)---")
+wm_figure("fig-phyto-sources", r"---(Phytoplankton B and P/B: Ecopath inputs vs ISIMIP, Copernicus (05) and the old 1995 model; total B per year, ISIMIP vs Copernicus.)---", "11b_phytoplankton_sources.png", r"---(06_diagnostics.R, after 05_environment.R)---")
 ```
 
 ```{r}
 #| label: show-fig-prebal
 #| eval: true
 #| echo: false
-wm_figure("fig-prebal", r"---(PREBAL: log biomass, P/B and Q/B against trophic level; red = more than 2 SD from the line.)---", "15_prebal.png", r"---(05_diagnostics.R)---")
+wm_figure("fig-prebal", r"---(PREBAL: log biomass, P/B and Q/B against trophic level; red = more than 2 SD from the line.)---", "15_prebal.png", r"---(06_diagnostics.R)---")
 ```
 
 ```{r}
 #| label: show-fig-pedigree
 #| eval: true
 #| echo: false
-wm_figure("fig-pedigree", r"---(Data pedigree index by FG and input.)---", "16_pedigree.png", r"---(05_diagnostics.R)---")
+wm_figure("fig-pedigree", r"---(Data pedigree index by FG and input.)---", "16_pedigree.png", r"---(06_diagnostics.R)---")
 ```
 
 ```{r}
@@ -2491,10 +2491,10 @@ wm_figure("fig-outlier-effect", r"---(Mean haul density before and after haul-ou
 
 ------------------------------------------------------------------------
 
-## Environmental drivers (06) {#sec-environment}
+## Environmental drivers (05) {#sec-environment}
 
-`06_environment.R` (tick **06 environment** on the page, or
-`RUN_STEPS <- 6`) gets monthly environmental drivers from the Copernicus
+`05_environment.R` (tick **05 environment** on the page, or
+`RUN_STEPS <- 5`) gets monthly environmental drivers from the Copernicus
 Marine Service for Ecosim and Ecospace, and the Ecopath phytoplankton
 inputs:
 
@@ -2548,7 +2548,7 @@ area differs inside itself, not an error of the model. Years filled from
 PISCES are shaded.
 
 Outputs in `out_dir/environment/`: one GeoTIFF per variable on the
-native 1/24° grid (one layer per month), the input of 06b below,
+native 1/24° grid (one layer per month), the input of 05b below,
 `environment_timeseries_monthly.csv` and `_annual.csv` (with the value
 relative to 1995, the Ecosim forcing shape),
 `ecopath_phytoplankton_B_PB.csv`, and `diagnostics/` (units and depth
@@ -2558,16 +2558,16 @@ levels of every file, gap-fill ratios, satellite size classes).
 #| label: show-fig-environment
 #| eval: true
 #| echo: false
-wm_figure("fig-environment", r"---(Environment of the model area over the run's years: monthly (grey) and annual (red) area-weighted means, with the 10th-90th percentile across grid cells as the band; shaded years are PISCES scaled to MedBFM; dashed line = Ecopath year.)---", "environment_timeseries.png", r"---(06_environment.R)---")
+wm_figure("fig-environment", r"---(Environment of the model area over the run's years: monthly (grey) and annual (red) area-weighted means, with the 10th-90th percentile across grid cells as the band; shaded years are PISCES scaled to MedBFM; dashed line = Ecopath year.)---", "environment_timeseries.png", r"---(05_environment.R)---")
 ```
 
-### Ecospace driver maps (`06b_ecospace_drivers.R`)
+### Ecospace driver maps (`05b_ecospace_drivers.R`)
 
-06b turns the monthly maps of 06 into Ecospace input maps on a base
+05b turns the monthly maps of 05 into Ecospace input maps on a base
 map chosen on the page (Settings → *Ecospace drivers*):
 
 - **At a resolution** (`ECOSPACE_CELL_SIZE`, in degrees; the page asks
-  arc-minutes, default 10): 06b makes the base map from the EMODnet
+  arc-minutes, default 10): 05b makes the base map from the EMODnet
   bathymetry (`data/Bathymetry/EMODnet_WMed_1arcmin.tif`). A cell is
   water when at least half of it is below sea level
   (`ECOSPACE_MIN_WATER_FRACTION`), with the mean depth of that part;
@@ -2580,8 +2580,8 @@ map chosen on the page (Settings → *Ecospace drivers*):
   any projection. Depth > 0 = water; negative depths (bathymetry) are
   read as −depth.
 
-06b downloads nothing, so it reruns in minutes for another resolution
-(step "06b Ecospace maps"; 06 must have run once). The page shows the
+05b downloads nothing, so it reruns in minutes for another resolution
+(step "05b Ecospace maps"; 05 must have run once). The page shows the
 full path of the output folder.
 
 Per variable and month:

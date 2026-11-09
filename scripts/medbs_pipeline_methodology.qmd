@@ -36,7 +36,7 @@ params:
   ts_years: "1995:2023"           # Ecosim biomass years
   ## catch/effort years follow the Ecopath and Ecosim years (run_pipeline_demo.R)
   ## What the render reruns before building the HTML:
-  ##   "all"        - the whole pipeline 01 -> 05 with the inputs above
+  ##   "all"        - the whole pipeline 01 -> 06 with the inputs above
   ##                  (about 10 min; the first run after a change needs internet)
   ##   "validation" - only 05_validation.R (redraws the validation plots)
   ##   "none"       - nothing; uses the outputs already on disk
@@ -156,7 +156,7 @@ message("git_dir: ", .wp$git_dir, "\npcloud_dir: ", .wp$pcloud_dir, "\nout_dir: 
 ## in out_dir as usual; a failed step stops the render with its message.
 .regen <- if (exists("params") && !is.null(params$regenerate)) params$regenerate else "none"
 if (!identical(.regen, "none")) {
-  .steps <- switch(.regen, validation = "5", all = "1:5",
+  .steps <- switch(.regen, validation = "7", all = "c(1:4, 7)",
                    stop("params$regenerate must be \"none\", \"validation\" or \"all\" (got \"", .regen, "\")."))
   .demo <- file.path(git_dir, "scripts", "run_pipeline_demo.R")
   message("Regenerating pipeline outputs (", .regen, ", steps ", .steps, ") with ", .demo, " ...")
@@ -179,7 +179,7 @@ if (!identical(.regen, "none")) {
 
 ## Configure and run the pipeline {#sec-configure}
 
-Pick the model area on the map, set the years and options, and click **Run pipeline**. The run (01 → 05) goes in the background with exactly the settings shown in the *Settings block* box; when it finishes, the plots at the bottom and the tables in the output folder are updated. A full run takes about 10 minutes (the first run after a change of GSAs needs internet for the bathymetry). The same settings block can be copied or downloaded to run the pipeline from the R console instead.
+Pick the model area on the map, set the years and options, and click **Run pipeline**. The run (01 → 06) goes in the background with exactly the settings shown in the *Settings block* box; when it finishes, the plots at the bottom and the tables in the output folder are updated. A full run takes about 10 minutes (the first run after a change of GSAs needs internet for the bathymetry). The same settings block can be copied or downloaded to run the pipeline from the R console instead.
 
 This works when the document is opened with **Run Document** in RStudio (or `quarto serve medbs_pipeline_methodology.qmd` in a terminal). A plain HTML file opened from disk shows the page but cannot run R.
 
@@ -340,7 +340,7 @@ tagList(
         fileInput("catch_upload", "Own catchability table (CATCHABILITY_FILE, optional)", accept = ".csv", width = "100%",
                   placeholder = "csv with ScientificName and q")),
       radioButtons("steps", "Scripts to run", inline = TRUE,
-                   choices = c("All 01-05" = "1:5", "Only 01 biomass (and maps)" = "1", "02-05 (keep biomass)" = "2:5", "Only 05 validation" = "5"), selected = "1:5")))),
+                   choices = c("All 01-04 + 06" = "c(1:4, 7)", "Only 01 biomass (and maps)" = "1", "02-04 + 06 (keep biomass)" = "c(2:4, 7)", "Only 06 validation" = "7"), selected = "c(1:4, 7)")))),
 
   ## 4. Run ----------------------------------------------------------------
   .card("4", "Run", "\u25B6\ufe0f",
@@ -677,7 +677,7 @@ output$fg_summary <- renderUI({
 ## Expected minutes per script (01..05), from the 2026-10-15 run; 01 is much
 ## slower the first time after a change of GSAs (bathymetry download).
 .step_min <- c(1.1, 1.5, 5.2, 1.2, 0.8)
-.step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 validation")
+.step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 environment", "05b Ecospace maps", "06 validation")
 
 ## --- Custom region from an uploaded shapefile / polygon file ---------------
 custom_shape <- reactiveVal(NULL)   # list(path, sf) of the uploaded region
@@ -845,7 +845,7 @@ output$dl_config <- downloadHandler(
 run_state <- reactiveVal("idle")          # idle | running | done | error
 run_started <- reactiveVal(NULL)
 run_finished <- reactiveVal(NULL)
-run_steps <- reactiveVal(1:5)
+run_steps <- reactiveVal(c(1:4, 7))
 step_seen <- reactiveVal(list())          # step number -> time its start line was first seen
 last_finished <- reactiveVal(Sys.time())  # changes after every run -> images reload
 run_note <- reactiveVal("")
@@ -861,7 +861,7 @@ run_note <- reactiveVal("")
 if (file.exists(.settings_file)) {
   run_started(file.mtime(.settings_file))
   .st <- grep("^RUN_STEPS", .settings_lines(), value = TRUE)
-  run_steps(tryCatch(eval(parse(text = sub("^[^<]*<-", "", .st[1]))), error = function(e) 1:5))
+  run_steps(tryCatch(eval(parse(text = sub("^[^<]*<-", "", .st[1]))), error = function(e) c(1:4, 7)))
   if (file.exists(.status_file)) {
     run_state(if (identical(readLines(.status_file, warn = FALSE)[1], "done")) "done" else "error")
     run_finished(file.mtime(.status_file))
@@ -937,8 +937,8 @@ output$run_progress <- renderUI({
                                                    paste(.step_names[steps], collapse = ", "))))
   }
   lines <- if (file.exists(.progress_file)) readLines(.progress_file, warn = FALSE) else character(0)
-  started <- as.integer(sub("^--- Step (\\d)/5:.*", "\\1", grep("^--- Step \\d/5: ", lines, value = TRUE)))
-  finished <- as.integer(sub("^--- Step (\\d)/5 done.*", "\\1", grep("^--- Step \\d/5 done", lines, value = TRUE)))
+  started <- as.integer(sub("^--- Step (\\d)/\\d:.*", "\\1", grep("^--- Step \\d/\\d: ", lines, value = TRUE)))
+  finished <- as.integer(sub("^--- Step (\\d)/\\d done.*", "\\1", grep("^--- Step \\d/\\d done", lines, value = TRUE)))
   seen <- isolate(step_seen())
   for (k in setdiff(started, as.integer(names(seen)))) seen[[as.character(k)]] <- Sys.time()
   isolate(step_seen(seen))
@@ -965,7 +965,7 @@ output$run_progress <- renderUI({
   })
   tagList(
     tags$div(style = "font-size: 1.15rem; font-weight: 600; margin-bottom: .35rem;",
-             switch(st, running = if (!is.na(current)) paste0("Step ", current, "/5: ", .step_names[current]) else "Starting...",
+             switch(st, running = if (!is.na(current)) paste0("Step ", current, "/7: ", .step_names[current]) else "Starting...",
                     done = "Finished", error = "Stopped with an error")),
     tags$div(class = "progress mb-2", style = "height: 34px; border-radius: 17px; font-size: 1.05rem;",
              tags$div(class = paste("progress-bar progress-bar-striped", colour, if (st == "running") "progress-bar-animated"),
@@ -1176,7 +1176,7 @@ output$results <- renderUI({
 |---|---|---|
 | GSAs (map, checkboxes) | `MODEL_GSAS` (→ `FILTER_AREAS`) | GSAs of the model area (default 1-12). Survey data only from these GSAs; GSAs 3, 4 and 12 (no MEDITS) take the survey density per km² of the others (assumption). Catch kept for every coastal state of these GSAs. |
 | Area basis | `MODEL_AREA_BASIS` | `whole_gsa`: A_model is the whole sea area of the GSAs, coast to bottom. `medits_10_800`: only the 10-800 m MEDITS strata. |
-| Custom region | `AREA_MODE = "custom"`, `AREA_NAME`, `CUSTOM_AREA_TYPE`, `CUSTOM_SHAPEFILE_PATH` or `CUSTOM_BBOX` | A region from an uploaded shapefile (.zip, or .shp + .shx + .dbf + .prj), GeoJSON, GeoPackage or KML, or a lon/lat box, instead of GSAs. Runs all steps (01–05) for that region; outputs in `out_dir/<AREA_NAME>/` (@sec-area-definition, Approach B). Catch: the GSA(s) holding ≥ 5 % of the region (`custom_gsa_overlap.csv`), per km² of their sea area. |
+| Custom region | `AREA_MODE = "custom"`, `AREA_NAME`, `CUSTOM_AREA_TYPE`, `CUSTOM_SHAPEFILE_PATH` or `CUSTOM_BBOX` | A region from an uploaded shapefile (.zip, or .shp + .shx + .dbf + .prj), GeoJSON, GeoPackage or KML, or a lon/lat box, instead of GSAs. Runs all steps (01–06) for that region; outputs in `out_dir/<AREA_NAME>/` (@sec-area-definition, Approach B). Catch: the GSA(s) holding ≥ 5 % of the region (`custom_gsa_overlap.csv`), per km² of their sea area. |
 | Ecopath baseline | `YEAR_ECOPATH` | Years averaged into Ecopath_B, F and P/B (01, 02, 03). |
 | Ecosim biomass series | `TS_YEARS` | Years of the Ecosim biomass series (01). |
 | (no input) | `START_YEAR`, `END_YEAR` | Catch, landings, discards and effort series (02) follow the other years: from the first Ecopath or Ecosim year to the last Ecosim year (set in `run_pipeline_demo.R`). |
@@ -1184,7 +1184,7 @@ output$results <- renderUI({
 | Remove outliers | `DROP_OUTLIERS` (default `TRUE`) | Flagged outlier hauls removed, or only reported in `survey_outliers_flagged.csv`. |
 | Relative Ecosim series | `NORMALIZE_TS` (default `TRUE`) | Ecosim series as an index (first value = 1) or raw density. |
 | Fill missing Ecopath_B | `ECOPATH_B_FILL_MODE`, `ECOPATH_B_FILL_YEARS` (default on, 1995-2000) | An FG with no biomass in the Ecopath years gets its mean over these years (else the nearest year with data); off = nearest single year only. Expanding FGs always get 0.00001 t/km². |
-| Scripts to run | `RUN_STEPS` | `1:5` all; `2:5` reuses the biomass on disk; `5` redraws the validation only. |
+| Scripts to run | `RUN_STEPS` | `c(1:4, 7)` all main scripts (01-04 and 06 diagnostics); `5` = 05 environment, `6` = 05b Ecospace maps; `c(2:4, 7)` reuses the biomass on disk; `7` redraws the validation only. |
 
 The model-area figure in the summary is a preview from the simplified map polygons (about 1 % above the real value); the A_model used in the outputs is the one 01 computes and writes to `model_area_by_gsa.csv`.
 
@@ -1192,7 +1192,7 @@ The model-area figure in the summary is a preview from the simplified map polygo
 
 ## Overview
 
-This tool builds the inputs of Ecopath with Ecosim (EwE) models of the Western Mediterranean: biomass per Functional Group (FG) for the Ecopath baseline and the Ecosim time series, catch, landings, discards and effort by fleet, fishing mortality, P/B and Q/B, the diet matrix, and a validation against the 1995 Western Mediterranean model. It runs as five R scripts (01 biomass, 02 fisheries, 03 P/B and Q/B, 04 diets, 05 validation) from the page above, or from the R console, and writes everything to one Excel workbook plus review tables.
+This tool builds the inputs of Ecopath with Ecosim (EwE) models of the Western Mediterranean: biomass per Functional Group (FG) for the Ecopath baseline and the Ecosim time series, catch, landings, discards and effort by fleet, fishing mortality, P/B and Q/B, the diet matrix, and a validation against the 1995 Western Mediterranean model. It runs as five R scripts (01 biomass, 02 fisheries, 03 P/B and Q/B, 04 diets, 06 validation) from the page above, or from the R console, and writes everything to one Excel workbook plus review tables.
 
 **Biomass first:** the starting point is a time series of biomass density per Functional Group — how much of each modeled group is really out there, year by year, for whichever region and time window is configured. Everything else in the wider pipeline (catches, mortality, production, diet) is expressed relative to this density, so getting it right — correctly weighted by survey stratum and area, not just averaged naively — is what lets the rest of the model be trusted.
 
@@ -1257,7 +1257,7 @@ Paths below are relative to `pcloud_dir/data/` unless the Location column says o
 | 02 | `fisheries_reference_tables/`, `GFCM-FleetRegister.xlsx` | `data/Complementary data/` | gear → fleet maps, fleet register, technology creep, country codes | yes |
 | 03 | `pbqb_reference_tables/` | `data/Complementary data/` | method references, mammal survivorship type, mean body masses | yes |
 | 04 | `diet/MAISHA/`, `diet_reference_tables/`, `data_entry_metaweb_empty.xlsx` | `data/` and `data/Complementary data/` | diet sources, prey category rules, literature fallback | yes |
-| 05 | `WMed_EwE.xlsx`, `validation_reference_tables/` | `data/` and `data/Complementary data/` | 1995 model, crosswalk, other models | yes |
+| 06 | `WMed_EwE.xlsx`, `validation_reference_tables/` | `data/` and `data/Complementary data/` | 1995 model, crosswalk, other models | yes |
 | 01 | custom region shapefile | uploaded on the page → `out_dir/shapefiles/custom/<area name>/` | custom study area | custom runs |
 | downloaded | GFCM GSA shapefile, NOAA bathymetry, AquaMaps, ISIMIP3a COBALT, FishBase/SeaLifeBase | `out_dir/` caches | GSA polygons, depths, depth suitability, plankton, traits | first run |
 
@@ -1448,11 +1448,11 @@ c_{f,region} = \frac{C_f}{\sum_{g \in G} A_g}\, k_f, \qquad k_f = \sum_{g \in G}
 $$
 
 $k_f = 1$ when the region lies in one GSA, or when FDI has no catch of the FG in these GSAs (catch then assumed spread like area). Juvenile stanzas take their adult's $k_f$. The weights, FDI shares and $k_f$ per FG are in `fisheries/custom_catch_overlap_weights_REVIEW.csv`. ASSUMPTIONS: FDI's split of an FG's catch among GSAs (2013 onwards) also held in the Ecopath years, and catch per km² is the same everywhere inside a GSA, so a region on a fishing ground (or in a closed area) will differ.
-- **P/B, Q/B, diets, validation (03–05)** read the region's workbook and files, so they follow its biomass and species composition.
+- **P/B, Q/B, diets, validation (03–06)** read the region's workbook and files, so they follow its biomass and species composition.
 
 ::: {.callout-warning}
 ### Review the borrowed biomass when the region is smaller than a GSA
-The FGs filled from the Western Med run (megafauna, plankton, groups MEDITS does not sample) assume the Western Med density per km² holds in the region. The smaller the region, the less likely that is: a coastal bay, a canyon or an offshore bank can hold much more or much less of these groups than the Western Med average. When the region is smaller than the smallest GSA it overlaps, 01 prints a warning and marks these FGs *REVIEW* in `custom_fg_biomass_from_westmed_REVIEW.csv`, and 05 counts them in `validation_summary_ALL.csv`. Replace them with local values where you have them. Their pedigree is 0.2 (from another area) and the mapped habitats 0.4, so the pedigree plot shows them too.
+The FGs filled from the Western Med run (megafauna, plankton, groups MEDITS does not sample) assume the Western Med density per km² holds in the region. The smaller the region, the less likely that is: a coastal bay, a canyon or an offshore bank can hold much more or much less of these groups than the Western Med average. When the region is smaller than the smallest GSA it overlaps, 01 prints a warning and marks these FGs *REVIEW* in `custom_fg_biomass_from_westmed_REVIEW.csv`, and 06 counts them in `validation_summary_ALL.csv`. Replace them with local values where you have them. Their pedigree is 0.2 (from another area) and the mapped habitats 0.4, so the pedigree plot shows them too.
 :::
 
 ---
@@ -1604,7 +1604,7 @@ This is the version used for Ecopath/Ecosim-facing outputs - the per-area index 
 $$\bar D_y = \frac{\sum_{g \in G_y}\sum_{s} \bar D_{g,s,y} A_{g,s}}{\sum_{g \in G_y}\sum_{s} A_{g,s}}, \quad s \in \{0\text{–}10, \text{MEDITS strata}, 800\text{–}1000, 1000\text{–}3785\}$$
 where $y$ is the year, $G_y$ the set of GSAs with data in year $y$, $s$ a depth stratum, $\bar D_{g,s,y}$ the mean density in GSA $g$, stratum $s$ and year $y$, and $A_{g,s}$ the stratum area (km²).
 
-Ecopath_B, catch per km², F and every 01b group use this same $A_{model}$ (`model_area_by_gsa.csv` is read by 02, 03 and 05; the COBALT plankton mean covers all depths of the GSAs). Alternative: `MODEL_AREA_BASIS = "medits_10_800"` uses only the 10–800 m MEDITS strata (175,660 km² for the surveyed GSAs), with pseudo-strata down to 1000 m.
+Ecopath_B, catch per km², F and every 01b group use this same $A_{model}$ (`model_area_by_gsa.csv` is read by 02, 03 and 06; the COBALT plankton mean covers all depths of the GSAs). Alternative: `MODEL_AREA_BASIS = "medits_10_800"` uses only the 10–800 m MEDITS strata (175,660 km² for the surveyed GSAs), with pseudo-strata down to 1000 m.
 
 **FGs with no biomass in the Ecopath years.** When an FG has no biomass (missing or 0) in `YEAR_ECOPATH` (1994–1996), its Ecopath_B is the mean of its values over `ECOPATH_B_FILL_YEARS` (default 1995–2000, every year with data in that window, zeros included):
 $$B_f = \frac{1}{|Y_f|}\sum_{y \in Y_f} \bar D_{f,y}, \quad Y_f = \{y \in 1995\ldots2000 : \bar D_{f,y} \text{ available}\}$$
@@ -1635,7 +1635,7 @@ Effect of each rule, tested against the 1995 model's series (simplified MEDITS i
 | + haul cap + coverage | 4 | 20 | 0.02 |
 | + spike filter | 3 | 20 | 0.05 |
 
-The effect on the full pipeline is in 05 block 12.
+The effect on the full pipeline is in 06 block 12.
 
 ```{r}
 #| label: show-fig-regional-timeseries
