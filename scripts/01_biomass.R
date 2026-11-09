@@ -1462,6 +1462,21 @@ dt <- if (identical(OUTLIER_METHOD, "haul")) {
   remove_sample_outliers(dt, threshold = 70, min_samples = 5, drop_outliers = DROP_OUTLIERS)
 }
 
+## Haul-level density for the page's survey map (Results: "Survey hauls
+## map"): every MEDITS haul of the model area (position, year, GSA,
+## depth) and the density of each species in it, with q (Density, t/km2
+## swept, as used by the estimates, outliers already handled) and
+## without q (Density x q). biomass/haul_density.rds.
+tryCatch({
+  .hl <- unique(dt[!is.na(Lat) & !is.na(Lon), .(SampleID, Year, GSA = AreaID, Lat = round(Lat, 4), Lon = round(Lon, 4), Depth = round(Depth))], by = "SampleID")
+  .hs <- dt[!is.na(FG_num) & is.finite(Density) & Density > 0 & SampleID %in% .hl$SampleID,
+            .(d = sum(Density), d_raw = sum(Density * if ("q_resolved" %in% names(dt)) fifelse(is.finite(q_resolved), q_resolved, 1) else 1)),
+            by = .(SampleID, FG_num, FG_name, ScientificName)]
+  saveRDS(list(hauls = .hl, sp = .hs, made = Sys.time(), q_applied = "q_resolved" %in% names(dt)),
+          file.path(csv_out_dir, "haul_density.rds"), compress = "xz")
+  message("Saved haul_density.rds (", nrow(.hl), " hauls, ", nrow(.hs), " species x haul densities) for the survey map of the page.")
+}, error = function(e) message("[haul_density] not written - ", conditionMessage(e)))
+
 ## save right here, before dt moves on to compute_fg_densities_by_stratum()
 ## etc. below - those functions weren't designed to know about or
 ## preserve the flagged_outliers attribute, so it needs to be pulled
@@ -4352,6 +4367,51 @@ message("Saved to biomass_proportion_by_species_fg.csv (Species x FG, prop_sp_fg
         " Density = Biomass_t_km2 = prop_sp_fg x that FG's own Ecopath_B Biomass, so it always sums to Ecopath_B exactly",
         " within each FG, whatever sourced that FG's total; Density_survey_raw is the original MEDITS/MEDIAS-observed",
         " density, kept for audit - it's what prop_sp_fg was computed from, but is NOT what 'Density' means in this sheet any more.)")
+
+## --- Species biomass with and without catchability (q) ----------------
+## fg_species_biomass_q.csv (page: Results, FG explorer table): every
+## species of every FG, Ecopath years.
+##   B_with_q_t_km2     = Biomass_t_km2 above (the Ecopath B of the FG x
+##                        the species' share), the value the model uses
+##   prop_with_q        = prop_sp_fg, the species' share of its FG
+##   survey_with_q / survey_without_q = mean survey density over
+##                        YEAR_ECOPATH (MEDITS density / q, MEDITS raw =
+##                        density x q; MEDIAS acoustic has no q; a species
+##                        in both surveys takes the mean, as in the index)
+##   prop_without_q     = the species' share of the FG survey biomass
+##                        without q
+##   B_without_q_t_km2  = for an FG whose Ecopath B is a MEDITS value: the
+##                        FG's B scaled by survey_without / survey_with,
+##                        split by prop_without_q; any other FG (acoustic
+##                        series, stock assessment, literature): q does not
+##                        change the FG total, only the split, so FG B x
+##                        prop_without_q.
+tryCatch({
+  .qf <- file.path(csv_out_dir, "catchability_q_by_species.csv")
+  .qtab <- if (file.exists(.qf)) unique(fread(.qf)[, .(FG_num, ScientificName, q = q_resolved, q_match = match_level)], by = c("FG_num", "ScientificName")) else
+    data.table(FG_num = numeric(), ScientificName = character(), q = numeric(), q_match = character())
+  .sv <- if (exists("sp_index_combined_raw")) copy(sp_index_combined_raw[Year %in% YEAR_ECOPATH]) else data.table()
+  if (nrow(.sv)) {
+    .sv <- merge(.sv, .qtab, by = c("FG_num", "ScientificName"), all.x = TRUE)
+    .sv[, wo := fifelse(Survey == "MEDITS" & is.finite(q) & q > 0, mean_density * q, mean_density)]
+    .sv <- .sv[, .(w = mean(mean_density, na.rm = TRUE), wo = mean(wo, na.rm = TRUE)), by = .(Year, FG_num, ScientificName)]
+    .sv <- .sv[, .(survey_with_q = mean(w, na.rm = TRUE), survey_without_q = mean(wo, na.rm = TRUE)), by = .(FG_num, Species = ScientificName)]
+  } else .sv <- data.table(FG_num = numeric(), Species = character(), survey_with_q = numeric(), survey_without_q = numeric())
+  .bq <- merge(FG_spp_Ecopath[, .(FG_num, FG_name, Species, B_with_q_t_km2 = Biomass_t_km2, prop_with_q = prop_sp_fg, prop_basis = prop_sp_fg_basis, FG_B = Ecopath_B_Biomass)],
+               .sv, by = c("FG_num", "Species"), all.x = TRUE)
+  .bq <- merge(.bq, .qtab[, .(FG_num, Species = ScientificName, q, q_match)], by = c("FG_num", "Species"), all.x = TRUE)
+  .src <- fg_index_regional_combined[Year %in% YEAR_ECOPATH & !is.na(biomass_source), .(FG_source = biomass_source[1]), by = FG_num]
+  .bq <- merge(.bq, .src, by = "FG_num", all.x = TRUE)
+  .bq[, `:=`(sw = sum(survey_with_q, na.rm = TRUE), swo = sum(survey_without_q, na.rm = TRUE)), by = FG_num]
+  .bq[, prop_without_q := fifelse(swo > 0, fifelse(is.na(survey_without_q), 0, survey_without_q) / swo, prop_with_q)]
+  .bq[, q_changes_FG_total := grepl("^MEDITS", FG_source) & sw > 0]
+  .bq[, B_without_q_t_km2 := fifelse(q_changes_FG_total, FG_B * (swo / sw) * prop_without_q, FG_B * prop_without_q)]
+  .bq <- .bq[, .(FG_num, FG_name, Species, q, q_match, B_with_q_t_km2, B_without_q_t_km2, prop_with_q, prop_without_q,
+                 survey_with_q_t_km2 = survey_with_q, survey_without_q_t_km2 = survey_without_q, q_changes_FG_total, FG_source, prop_basis)]
+  setorder(.bq, FG_num, -B_with_q_t_km2)
+  fwrite(.bq, file.path(csv_out_dir, "fg_species_biomass_q.csv"))
+  message("Saved fg_species_biomass_q.csv (", nrow(.bq), " species): biomass with and without q and the share of each species in its FG.")
+}, error = function(e) message("[fg_species_biomass_q] not written - ", conditionMessage(e)))
 
 ## --- Species coverage per FG: how many of the FG file's species have
 ## biomass in this run (e.g. 5/7 = 5 of the 7 species listed for that FG).

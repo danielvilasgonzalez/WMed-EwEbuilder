@@ -16,6 +16,11 @@ library(shiny)
 ## vertices for display; GSA 11 has two polygons, W and E Sardinia).
 .gsa_geojson <- if (file.exists("gsa_boundaries_westmed.geojson"))
   paste(readLines("gsa_boundaries_westmed.geojson", warn = FALSE), collapse = "") else "null"
+## Land for the survey hauls map (Natural Earth 1:10m land, public domain,
+## clipped to 8W-18E, 33-46.5N and simplified), so the coast shows even
+## without the online basemap.
+.land_geojson <- if (file.exists("land_westmed.geojson"))
+  paste(readLines("land_westmed.geojson", warn = FALSE), collapse = "") else "null"
 .gsa_names <- c("Northern Alboran", "Alboran Island", "Southern Alboran", "Algeria", "Balearic Islands",
                 "Northern Spain", "Gulf of Lion", "Corsica", "Ligurian & N Tyrrhenian", "S & C Tyrrhenian", "Sardinia", "Northern Tunisia")
 .card <- function(step, title, icon, ..., class = "") {
@@ -374,6 +379,24 @@ tagList(
       downloadButton("dl_logs", "Logs of the last run (.zip)", class = "btn-sm btn-outline-secondary"),
       uiOutput("dl_info", inline = TRUE)),
     uiOutput("run_summary"),
+    tags$details(class = "card mb-3", id = "wm-haul-map-box",
+      tags$summary(class = "card-header py-2", tags$strong("Survey hauls map"), " - MEDITS density in each haul, by year: zoom, move and filter"),
+      tags$div(class = "card-body py-2",
+        div(class = "d-flex flex-wrap align-items-end gap-3",
+            selectInput("hm_fg", "Functional group", choices = NULL, width = "300px"),
+            selectInput("hm_sp", "Species", choices = c("All species of the FG" = ""), width = "280px"),
+            radioButtons("hm_q", "Density", inline = TRUE, choices = c("With q" = "q", "Without q (raw)" = "raw"), selected = "q"),
+            checkboxInput("hm_zero", "Show hauls without it", TRUE)),
+        div(class = "d-flex flex-wrap align-items-end gap-3",
+            div(style = "min-width:320px; flex:1;", sliderInput("hm_year", "Year", min = 1994, max = 2023, value = 1995, step = 1, sep = "", width = "100%",
+                                                                 animate = animationOptions(interval = 1500, loop = FALSE))),
+            checkboxInput("hm_all_years", "All years together", FALSE),
+            div(style = "min-width:260px;", sliderInput("hm_depth", "Depth (m)", min = 0, max = 800, value = c(0, 800), step = 10, width = "100%")),
+            selectizeInput("hm_gsa", "GSAs", choices = NULL, multiple = TRUE, width = "220px", options = list(placeholder = "all"))),
+        tags$div(id = "wm-haul-map", style = "height: 520px; border-radius: 6px; border: 1px solid #c7d3dc; background: #dbe8f1;"),
+        uiOutput("hm_info"),
+        plotOutput("hm_trend", height = "180px"),
+        tags$div(class = "wm-help", "Each circle is a haul: area ∝ density (t/km² swept), colour on one log scale for all years of the FG or species, so the years can be compared (press ▶ under the year slider to play them). Grey dots: hauls without it. Dashed lines: GSA boundaries; land from Natural Earth (shown also without internet). Click a haul for its density and its species. With q = the density used by the estimates (raw / q); without q = what the trawl caught. Outlier hauls removed by the pipeline are not shown. The line below: mean density per haul each year for the hauls in the filter, with the selected year marked. File: biomass/haul_density.rds (01)."))),
     tags$details(class = "card mb-3", open = NA, id = "wm-fg-explorer",
       tags$summary(class = "card-header py-2", tags$strong("FG explorer"), " - one group's Ecosim series from the workbook"),
       tags$div(class = "card-body py-2",
@@ -391,10 +414,109 @@ tagList(
                        hover = hoverOpts("fg_explore_hover_catch", delay = 80, delayType = "throttle", nullOutside = TRUE)),
             uiOutput("fg_explore_tip_catch")))),
         uiOutput("fg_explore_info"),
+        tags$details(class = "mt-2", open = NA,
+          tags$summary(tags$strong("Species of this FG: biomass with and without catchability (q), and share of the FG")),
+          tags$div(class = "d-flex gap-2 my-2 flex-wrap",
+            downloadButton("dl_fg_sp_q_one", "This FG (csv)", class = "btn-sm btn-outline-secondary"),
+            downloadButton("dl_fg_sp_q_all", "All FGs (csv)", class = "btn-sm btn-outline-secondary")),
+          tags$div(style = "max-height: 360px; overflow: auto;", tableOutput("fg_sp_q_table")),
+          tags$div(class = "wm-help", "Ecopath years. B with q = the value the model uses (FG Ecopath B \u00d7 the species\u2019 share). B without q: for an FG whose B is a MEDITS value, the FG B scaled by the raw / q-corrected survey biomass and split by the raw shares; for other FGs (acoustic series, stock assessment, literature) q only changes the split, not the FG total. MEDIAS acoustic has no q. File: biomass/fg_species_biomass_q.csv.")),
         tags$div(class = "wm-help", "Band: survey sampling uncertainty of the index (index x (1 \u00b1 1.96 CV)), for the FGs measured by MEDITS. Grey: the Ecopath baseline years; their B (t/km\u00b2) is in the subtitle and below, with its source. Point the mouse at a year of the biomass plot to see the share of each species in the FG biomass that year (survey species from MEDITS and MEDIAS; in the Ecopath years, and for groups without a survey split, the Ecopath baseline composition from all sources). On the catches plot, the species in that year\u2019s landings or discards (STECF FDI from 2014 for Spain, France and Italy; else GFCM landings, with NEI groups as reported)."))),
     tags$div(class = "wm-results", uiOutput("results"))),
 
+  ## Survey hauls map (Results): Leaflet, drawn from the server's
+  ## "wm_haul_map" message; created when its box is first opened.
+  tags$script(HTML(r"---(
+(function () {
+  var map = null, layer = null, legend = null, pending = null, fitted = false;
+  var st = document.createElement('style');
+  st.textContent = '.wm-gsa-lab{font:600 11px/1 system-ui,sans-serif;color:#0b4f6c;white-space:nowrap;' +
+    'text-shadow:0 0 3px #fff,0 0 3px #fff;transform:translate(-50%,-50%);}';
+  document.head.appendChild(st);
+  var STOPS = [[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+  function col(t) {
+    t = Math.max(0, Math.min(1, t)) * (STOPS.length - 1);
+    var i = Math.min(Math.floor(t), STOPS.length - 2), f = t - i, a = STOPS[i], b = STOPS[i + 1];
+    return 'rgb(' + [0,1,2].map(function (k) { return Math.round(a[k] + f * (b[k] - a[k])); }).join(',') + ')';
+  }
+  function fmt(v) { return v >= 100 ? v.toFixed(0) : v >= 1 ? v.toPrecision(3) : v.toPrecision(2); }
+  function visible() { var b = document.getElementById('wm-haul-map-box'); return b && b.open; }
+  function ensure() {
+    if (map) return true;
+    if (typeof L === 'undefined' || !document.getElementById('wm-haul-map') || !visible()) return false;
+    map = L.map('wm-haul-map', { zoomSnap: 0.25 });
+    var base = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles &copy; Esri - GEBCO, NOAA, Garmin', maxZoom: 10 }).addTo(map);
+    var fails = 0;
+    base.on('tileerror', function () { if (++fails === 3) { map.removeLayer(base);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors', maxZoom: 12 }).addTo(map); } });
+    map.setView([40, 4], 5);
+    // land (always drawn, also offline) and the GSA boundaries with their numbers
+    map.createPane('wmLand'); map.getPane('wmLand').style.zIndex = 380;
+    map.createPane('wmGsa');  map.getPane('wmGsa').style.zIndex = 390;
+    try {
+      var land = JSON.parse(document.getElementById('wm-land-geojson').textContent);
+      if (land) L.geoJSON(land, { pane: 'wmLand', interactive: false,
+        style: { color: '#7a7466', weight: 0.6, fillColor: '#e9e4d8', fillOpacity: 1 } }).addTo(map);
+    } catch (e) {}
+    try {
+      var gsa = JSON.parse(document.getElementById('wm-gsa-geojson').textContent);
+      if (gsa) {
+        var gl = L.geoJSON(gsa, { pane: 'wmGsa', interactive: false,
+          style: { color: '#0b4f6c', weight: 1.2, dashArray: '5 4', fill: false } }).addTo(map);
+        var seen = {};
+        gl.eachLayer(function (l) {
+          var g = l.feature.properties.gsa_num;
+          if (seen[g]) return; seen[g] = true;
+          L.marker(l.getBounds().getCenter(), { interactive: false, pane: 'wmGsa',
+            icon: L.divIcon({ className: 'wm-gsa-lab', html: 'GSA ' + g, iconSize: null }) }).addTo(map);
+        });
+      }
+    } catch (e) {}
+    legend = L.control({ position: 'bottomright' });
+    legend.onAdd = function () { var d = L.DomUtil.create('div', 'wm-legend'); d.id = 'wm-haul-legend'; return d; };
+    legend.addTo(map);
+    return true;
+  }
+  function draw(m) {
+    pending = m;
+    if (!ensure()) return;
+    if (layer) map.removeLayer(layer);
+    layer = L.featureGroup();
+    var l0 = Math.log10(m.vmin), l1 = Math.log10(m.vmax), idx = [], n = (m.lat || []).length;
+    for (var i = 0; i < n; i++) idx.push(i);
+    idx.sort(function (a, b) { return m.d[a] - m.d[b]; });       // big circles on top
+    idx.forEach(function (i) {
+      var d = m.d[i], o;
+      if (!(d > 0)) {
+        if (!m.zero) return;
+        o = { radius: 2, stroke: false, fillColor: '#7d8b96', fillOpacity: 0.55 };
+      } else {
+        var t = (Math.log10(d) - l0) / ((l1 - l0) || 1);
+        o = { radius: 3 + 11 * Math.sqrt(Math.min(d / m.vmax, 1)), color: '#1f2a33', weight: 0.5, fillColor: col(t), fillOpacity: 0.85 };
+      }
+      L.circleMarker([m.lat[i], m.lon[i]], o).bindPopup(m.tip[i]).addTo(layer);
+    });
+    layer.addTo(map);
+    if (!fitted && n) { map.fitBounds(layer.getBounds(), { padding: [12, 12] }); fitted = true; }
+    var lg = document.getElementById('wm-haul-legend');
+    if (lg) lg.innerHTML = '<div style="font-weight:600;margin-bottom:3px">' + m.label + '</div>' +
+      '<div style="width:170px;height:10px;border:1px solid #000;background:linear-gradient(to right,' +
+      [0, .25, .5, .75, 1].map(col).join(',') + ')"></div>' +
+      '<div style="display:flex;justify-content:space-between;width:172px;font-size:11px"><span>' + fmt(m.vmin) +
+      '</span><span>' + fmt(Math.sqrt(m.vmin * m.vmax)) + '</span><span>' + fmt(m.vmax) + '+</span></div>' +
+      (m.zero ? '<div style="margin-top:3px"><i style="background:#7d8b96;border-radius:50%;width:8px;height:8px;display:inline-block;margin-right:4px"></i>without it</div>' : '');
+  }
+  document.addEventListener('toggle', function (e) {
+    if (e.target && e.target.id === 'wm-haul-map-box' && e.target.open)
+      setTimeout(function () { if (ensure()) { map.invalidateSize(); if (pending) draw(pending); } }, 50);
+  }, true);
+  function reg() { Shiny.addCustomMessageHandler('wm_haul_map', draw); }
+  if (window.Shiny && Shiny.addCustomMessageHandler) reg(); else $(document).on('shiny:connected', reg);
+})();
+)---")),
   tags$script(type = "application/json", id = "wm-gsa-geojson", HTML(.gsa_geojson)),
+  tags$script(type = "application/json", id = "wm-land-geojson", HTML(.land_geojson)),
   tags$script(HTML(r"---(
 (function () {
   var UNSURVEYED = [3, 4, 12];

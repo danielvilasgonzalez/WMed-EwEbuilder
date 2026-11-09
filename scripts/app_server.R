@@ -1727,6 +1727,115 @@ output$fg_explore_tip_catch <- renderUI({
            empty = "No species detail for this FG and year.")
 })
 
+## Species of the FG: biomass with and without q, share of the FG
+## (fg_species_biomass_q.csv, 01)
+.sp_q <- reactive({
+  .ecosim_ts()
+  f <- file.path(.out_dir, "biomass", "fg_species_biomass_q.csv")
+  if (is.na(.out_dir) || !file.exists(f)) return(NULL)
+  tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+})
+.sp_q_fg <- function() {
+  x <- .sp_q(); fg <- suppressWarnings(as.numeric(input$fg_explore))
+  if (is.null(x) || !is.finite(fg)) return(NULL)
+  x[x$FG_num == fg, , drop = FALSE]
+}
+output$fg_sp_q_table <- renderTable({
+  x <- .sp_q_fg()
+  validate(need(!is.null(.sp_q()), "No fg_species_biomass_q.csv yet: run 01 biomass."),
+           need(!is.null(x) && nrow(x) > 0, "No species recorded for this FG."))
+  sig <- function(v) ifelse(is.finite(v), formatC(signif(v, 3), format = "g"), "")
+  pct <- function(v) ifelse(is.finite(v), sprintf("%.1f%%", 100 * v), "")
+  out <- data.frame(x$Species, ifelse(is.finite(x$q), formatC(x$q, format = "g", digits = 3), ""),
+                    sig(x$B_with_q_t_km2), sig(x$B_without_q_t_km2), pct(x$prop_with_q), pct(x$prop_without_q))
+  names(out) <- c("Species", "q", "B with q (t/km\u00b2)", "B without q (t/km\u00b2)", "Share of FG, with q", "Share of FG, without q")
+  out
+}, striped = TRUE, spacing = "xs", width = "100%", align = "lrrrrr")
+output$dl_fg_sp_q_one <- downloadHandler(
+  function() paste0("fg_", input$fg_explore, "_species_biomass_q.csv"),
+  function(file) { x <- .sp_q_fg(); data.table::fwrite(if (is.null(x)) data.frame() else x, file) })
+output$dl_fg_sp_q_all <- downloadHandler("fg_species_biomass_q.csv",
+  function(file) { x <- .sp_q(); data.table::fwrite(if (is.null(x)) data.frame() else x, file) })
+
+## --- Survey hauls map (haul_density.rds, 01) --------------------------
+## Each MEDITS haul with the density of the chosen FG (or one species), for
+## one year or all; drawn by the Leaflet code in app_ui.R (message
+## "wm_haul_map"). Colour: one log scale over all years of the selection.
+.hd <- reactive({
+  .ecosim_ts()
+  f <- file.path(.out_dir, "biomass", "haul_density.rds")
+  if (is.na(.out_dir) || !file.exists(f)) return(NULL)
+  tryCatch(readRDS(f), error = function(e) NULL)
+})
+observe({
+  h <- .hd(); req(h, nrow(h$sp))
+  fgs <- unique(h$sp[, .(FG_num, FG_name)])[order(FG_num)]
+  ch <- stats::setNames(as.character(fgs$FG_num), paste(fgs$FG_num, "-", fgs$FG_name))
+  cur <- isolate(input$hm_fg)
+  updateSelectInput(session, "hm_fg", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else ch[1])
+  yr <- range(h$hauls$Year, na.rm = TRUE); y0 <- isolate(input$hm_year)
+  updateSliderInput(session, "hm_year", min = yr[1], max = yr[2], value = if (!is.null(y0) && y0 >= yr[1] && y0 <= yr[2]) y0 else yr[1])
+  dm <- ceiling(max(h$hauls$Depth, na.rm = TRUE) / 50) * 50
+  updateSliderInput(session, "hm_depth", min = 0, max = dm, value = c(0, dm))
+  updateSelectizeInput(session, "hm_gsa", choices = sort(unique(h$hauls$GSA)), selected = isolate(input$hm_gsa))
+})
+observeEvent(list(.hd(), input$hm_fg), {
+  h <- .hd(); req(h, input$hm_fg)
+  x <- h$sp[FG_num == as.numeric(input$hm_fg), .(B = sum(d)), by = ScientificName][order(-B)]
+  updateSelectInput(session, "hm_sp", choices = c("All species of the FG" = "", stats::setNames(x$ScientificName, x$ScientificName)), selected = "")
+})
+.hm_sp_sel <- function() { v <- input$hm_sp; if (is.null(v)) "" else v }
+## hauls in the filter (depth, GSA) with the density of the selection, all years
+.hm_data <- reactive({
+  h <- .hd(); req(h, input$hm_fg)
+  hl <- h$hauls
+  if (!is.null(input$hm_depth)) hl <- hl[is.na(Depth) | (Depth >= input$hm_depth[1] & Depth <= input$hm_depth[2])]
+  if (length(input$hm_gsa)) hl <- hl[GSA %in% as.numeric(input$hm_gsa)]
+  sp <- h$sp[FG_num == as.numeric(input$hm_fg) & SampleID %in% hl$SampleID]
+  if (nzchar(.hm_sp_sel())) sp <- sp[ScientificName == input$hm_sp]
+  sp[, v := if (identical(input$hm_q, "raw")) d_raw else d]
+  top <- sp[order(-v)][, .(dens = sum(v), top = paste0(head(sprintf("<i>%s</i> %s", ScientificName, formatC(signif(v, 3), format = "g")), 5), collapse = "<br>")), by = SampleID]
+  out <- merge(hl, top, by = "SampleID", all.x = TRUE)
+  out[is.na(dens), dens := 0]
+  out
+})
+observe({
+  x <- .hm_data(); req(nrow(x))
+  yr <- input$hm_year; all_y <- isTRUE(input$hm_all_years)
+  pos <- x$dens[x$dens > 0]
+  vmax <- if (length(pos)) as.numeric(stats::quantile(pos, 0.99)) else 1
+  vmin <- if (length(pos)) max(as.numeric(stats::quantile(pos, 0.02)), vmax / 1e4) else vmax / 100
+  y <- if (all_y) x else x[Year == yr]
+  if (!all_y && !isTRUE(input$hm_zero)) y <- y[dens > 0]
+  if (all_y) y <- y[dens > 0 | isTRUE(input$hm_zero)]
+  what <- if (nzchar(.hm_sp_sel())) paste0("<i>", input$hm_sp, "</i>") else
+    { f <- unique(.hd()$sp[FG_num == as.numeric(input$hm_fg), FG_name])[1]; f }
+  qlab <- if (identical(input$hm_q, "raw")) "without q" else "with q"
+  tip <- sprintf("<b>%s</b><br>%s &middot; GSA %s &middot; %s m<br>%s (%s): <b>%s t/km&sup2;</b>%s",
+                 y$SampleID, y$Year, y$GSA, ifelse(is.na(y$Depth), "?", y$Depth), what, qlab,
+                 formatC(signif(y$dens, 3), format = "g"),
+                 ifelse(!nzchar(.hm_sp_sel()) & !is.na(y$top) & y$dens > 0, paste0("<br><span style='font-size:.85em'>", y$top, "</span>"), ""))
+  session$sendCustomMessage("wm_haul_map", list(lat = y$Lat, lon = y$Lon, d = y$dens, tip = tip, vmin = vmin, vmax = vmax,
+    label = paste0(what, ", ", if (all_y) "all years" else yr, " (t/km&sup2;, ", qlab, ")"), zero = isTRUE(input$hm_zero)))
+})
+output$hm_info <- renderUI({
+  h <- .hd()
+  if (is.null(h)) return(tags$div(class = "text-muted small mt-1", "No haul_density.rds yet: run 01 biomass."))
+  x <- .hm_data(); req(nrow(x))
+  y <- if (isTRUE(input$hm_all_years)) x else x[Year == input$hm_year]
+  tags$div(class = "small text-muted mt-1", sprintf("%s: %d hauls, %d with it (%.0f%%), mean %s t/km² per haul.",
+           if (isTRUE(input$hm_all_years)) "All years" else input$hm_year, nrow(y), sum(y$dens > 0),
+           if (nrow(y)) 100 * mean(y$dens > 0) else 0, formatC(signif(mean(y$dens), 3), format = "g")))
+})
+output$hm_trend <- renderPlot({
+  x <- .hm_data(); req(nrow(x))
+  tr <- x[, .(m = mean(dens), n = .N), by = Year][order(Year)]
+  ggplot2::ggplot(tr, ggplot2::aes(Year, m)) +
+    ggplot2::geom_line(colour = "#1b7f9e") + ggplot2::geom_point(colour = "#1b7f9e", size = 1.6) +
+    { if (!isTRUE(input$hm_all_years)) ggplot2::geom_vline(xintercept = input$hm_year, colour = "#d1495b", linetype = "dashed") } +
+    ggplot2::labs(x = NULL, y = "t/km² per haul") + ggplot2::theme_minimal(base_size = 11)
+}, res = 96)
+
 ## --- Load a settings file (presets) -------------------------------------
 ## A settings .R from 'Download .R' (or written by hand) sets the inputs
 ## again. The file is NOT run: only its simple assignments are read
