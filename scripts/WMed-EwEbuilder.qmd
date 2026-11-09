@@ -1684,11 +1684,17 @@ skips the online check.
 
 Hake is the only multi-stanza species. By default
 (`MULTISTANZA_B_SOURCE = "medits_tc"`) the hake survey biomass is split
-into juvenile and adult with the MEDITS length/maturity records
-(`TC.csv`, `YEAR_ECOPATH`, model GSAs): the juvenile share
-$p_{juv}$ is the biomass-weighted share of immature fish (maturity stage
-1), so $B_{juv} = p_{juv}\,B_{hake}$ and $B_{adult} = (1-p_{juv})\,B_{hake}$,
-for Ecopath and every Ecosim year (`multistanza_biomass_split_REVIEW.csv`).
+into juvenile and adult with the MEDITS length records (`TC.csv`,
+`YEAR_ECOPATH`, model GSAs), by length at first maturity: juvenile = not
+yet mature = length < $L_{50}$ (33 cm; GFCM SAFs GSA 5 and 8-11 2019;
+`L50_cm` in `hake_multistanza_parameters.csv`), adult = length ≥ $L_{50}$
+(`MULTISTANZA_SPLIT_BY = "length"`; `"maturity"` uses the MEDITS maturity
+stage instead). The juvenile share $p_{juv}$ is the biomass-weighted share
+(each fish weighted by $L^3$), so $B_{juv} = p_{juv}\,B_{hake}$ and $B_{adult} = (1-p_{juv})\,B_{hake}$,
+for Ecopath and every Ecosim year (`multistanza_biomass_split_REVIEW.csv`). On 1994–1996: adults 24% of the biomass with the length split
+(L50 26–36 cm: 37–20%), 29% with the maturity stage, against 42%
+(40–52%) SSB / total biomass in the stock assessments: trawl surveys
+catch few large adults (`multistanza_split_comparison.png` / `.csv`).
 The stock assessment below stays in `Ecopath_multistanza` as a reference
 column, and is used for the stanza biomasses only when the `TC.csv`
 split is missing or with `MULTISTANZA_B_SOURCE = "assessment"`.

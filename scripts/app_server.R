@@ -190,8 +190,33 @@ output$esp_view_plot_ui <- renderUI({
   plotOutput("esp_view_plot", height = paste0(h, "px"))
 })
 .esp_raster <- function(f) { r <- terra::rast(f); terra::NAflag(r) <- -9999; r }
-output$esp_view_plot <- renderPlot({
+## Climatology of a variable and month (mean over all years of that month),
+## cached; used by the "difference from the average year" view.
+.esp_clim_memo <- new.env()
+.esp_clim <- function(base, ix, vv, mo) {
+  key <- paste(base, vv, mo, sep = "|")
+  if (!is.null(.esp_clim_memo[[key]])) return(.esp_clim_memo[[key]])
+  f <- ix[variable == vv & (if (is.na(mo)) is.na(month) else month == mo), file]
+  cl <- terra::app(terra::rast(lapply(file.path(base, f), .esp_raster)), mean, na.rm = TRUE)
+  assign(key, cl, envir = .esp_clim_memo); cl
+}
+## one map: the value, or its difference from the average year
+.esp_get <- function(base, ix, row, anom) {
+  r <- .esp_raster(file.path(base, row$file))
+  if (isTRUE(anom)) r - .esp_clim(base, ix, row$variable, row$month) else r
+}
+.esp_pal <- function(v, anom = FALSE) {
+  if (isTRUE(anom)) return(grDevices::hcl.colors(101, "Blue-Red 3"))
+  if (grepl("^temp", v)) grDevices::hcl.colors(100, "RdYlBu", rev = TRUE) else if (v == "sal_surf") grDevices::hcl.colors(100, "Viridis") else
+    grDevices::hcl.colors(100, "YlGn", rev = TRUE)
+}
+.esp_sym <- function(rs) { m <- max(abs(unlist(lapply(rs, function(r) terra::global(r, "range", na.rm = TRUE)))), na.rm = TRUE); if (!is.finite(m) || m == 0) m <- 1; c(-m, m) }
+.esp_ulab <- function(u, anom) if (isTRUE(anom)) paste0("difference from the mean year, ", u) else u
+
+## Draws the selected view (also used for the PNG download)
+.esp_draw <- function() {
   ix <- .esp_index(); v <- input$esp_view_var; m <- input$esp_view_map; req(v, m)
+  anom <- identical(input$esp_view_values, "anom") && v != "depth"
   base <- file.path(.esp_root(), m)
   dep <- .esp_raster(file.path(base, "depth_used.asc"))
   land <- terra::ifel(is.na(dep) | dep <= 0, 1, NA)
@@ -201,35 +226,32 @@ output$esp_view_plot <- renderPlot({
     terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
     return(invisible())
   }
-  .pal <- function(v) if (grepl("^temp", v)) grDevices::hcl.colors(100, "RdYlBu", rev = TRUE) else if (v == "sal_surf") grDevices::hcl.colors(100, "Viridis") else
-    grDevices::hcl.colors(100, "YlGn", rev = TRUE)
-  if (v == "all") {   # every driver: a year = one row per driver x 12 months; a month = one map per driver
+  fixed <- identical(input$esp_view_scale, "fixed") && !anom
+  if (v == "all") {   # every driver: a year = months as rows x drivers as columns; a month = one map per driver
     vars <- unique(ix$variable); i1 <- ix[variable == vars[1]][order(time_step)]
-    if (identical(input$esp_view_mode, "year")) {   # months as rows, drivers as columns, a colour bar under each column
+    if (identical(input$esp_view_mode, "year")) {
       y <- input$esp_view_year; if (is.null(y) || !y %in% i1$year) y <- min(i1$year)
       nm <- max(ix[year == y, .N, by = variable]$N); nv <- length(vars)
-      mat <- rbind(c(0, seq_len(nv)),                                              # driver titles
-                   cbind(nv + seq_len(nm), matrix(nv + nm + seq_len(nm * nv), nm, nv)),  # month label + maps (column-wise per driver)
-                   c(0, nv + nm + nm * nv + seq_len(nv)))                          # colour bars
+      mat <- rbind(c(0, seq_len(nv)), cbind(nv + seq_len(nm), matrix(nv + nm + seq_len(nm * nv), nm, nv)), c(0, nv + nm + nm * nv + seq_len(nv)))
       layout(mat, widths = c(0.25, rep(1, nv)), heights = c(0.25, rep(1, nm), 0.42))
       par(mar = c(0, 0, 0, 0))
-      for (vv in vars) { plot.new(); text(0.5, 0.4, paste0(vv, " (", ix[variable == vv, unit][1], ")"), font = 2, cex = 1.15) }
+      for (vv in vars) { plot.new(); text(0.5, 0.4, paste0(vv, " (", .esp_ulab(ix[variable == vv, unit][1], anom), ")"), font = 2, cex = if (anom) 0.95 else 1.15) }
       mlab <- ix[variable == vars[1] & year == y][order(time_step)]
-      for (i in seq_len(nm)) { plot.new(); text(0.6, 0.5, if (i <= nrow(mlab)) (if (is.na(mlab$month[i])) y else month.abb[mlab$month[i]]) else "", srt = 90, font = 2, cex = 1.1) }
+      for (i in seq_len(nm)) { plot.new(); text(0.6, 0.5, if (i <= nrow(mlab)) (if (is.na(mlab$month[i])) y else paste(month.abb[mlab$month[i]], y)) else "", srt = 90, font = 2, cex = 1.05) }
       rngs <- list()
       for (vv in vars) {
         iy <- ix[variable == vv & year == y][order(time_step)]; iall <- ix[variable == vv]
-        rngs[[vv]] <- if (identical(input$esp_view_scale, "fixed")) range(c(iall$min, iall$max), na.rm = TRUE) else range(c(iy$min, iy$max), na.rm = TRUE)
+        rs <- lapply(seq_len(nrow(iy)), function(i) .esp_get(base, ix, iy[i], anom))
+        rngs[[vv]] <- if (anom) .esp_sym(rs) else if (fixed) range(c(iall$min, iall$max), na.rm = TRUE) else range(c(iy$min, iy$max), na.rm = TRUE)
         for (i in seq_len(nm)) {
-          if (i > nrow(iy)) { plot.new(); next }
-          terra::plot(.esp_raster(file.path(base, iy$file[i])), col = .pal(vv), range = rngs[[vv]], colNA = NA, legend = FALSE, axes = FALSE,
-                      mar = c(0.15, 0.15, 0.15, 0.15))
+          if (i > length(rs)) { plot.new(); next }
+          terra::plot(rs[[i]], col = .esp_pal(vv, anom), range = rngs[[vv]], colNA = NA, legend = FALSE, axes = FALSE, mar = c(0.15, 0.15, 0.15, 0.15))
           terra::plot(land, col = "grey80", legend = FALSE, add = TRUE, axes = FALSE)
         }
       }
       for (vv in vars) {
         par(mar = c(2.4, 1.2, 0.8, 1.2)); z <- seq(rngs[[vv]][1], rngs[[vv]][2], length.out = 101)
-        image(x = z, y = 0:1, z = matrix(z[-1], ncol = 1), col = .pal(vv), axes = FALSE, xlab = "", ylab = "")
+        image(x = z, y = 0:1, z = matrix(z[-1], ncol = 1), col = .esp_pal(vv, anom), axes = FALSE, xlab = "", ylab = "")
         .esp_bar_axis(rngs[[vv]])
       }
       return(invisible())
@@ -239,49 +261,75 @@ output$esp_view_plot <- renderPlot({
     op <- par(mfrow = c(ceiling(length(vars) / 3), min(3, length(vars))))
     for (vv in vars) {
       iv2 <- ix[variable == vv]; row <- iv2[year == y & (is.na(month) | month == mo)][1]
-      rng <- if (identical(input$esp_view_scale, "fixed")) range(c(iv2$min, iv2$max), na.rm = TRUE) else c(row$min, row$max)
-      terra::plot(.esp_raster(file.path(base, row$file)), col = .pal(vv), range = rng, colNA = NA, mar = c(1.5, 1.5, 2.5, 4.5), plg = list(box = TRUE),
-                  main = sprintf("%s (%s) %s", vv, row$unit, if (is.na(mo)) y else sprintf("%d-%02d", y, mo)), cex.main = 1)
+      r <- .esp_get(base, ix, row, anom)
+      rng <- if (anom) .esp_sym(list(r)) else if (fixed) range(c(iv2$min, iv2$max), na.rm = TRUE) else c(row$min, row$max)
+      terra::plot(r, col = .esp_pal(vv, anom), range = rng, colNA = NA, mar = c(1.5, 1.5, 2.5, 4.5), plg = list(box = TRUE),
+                  main = sprintf("%s (%s) %s", vv, .esp_ulab(row$unit, anom), if (is.na(mo)) y else sprintf("%d-%02d", y, mo)), cex.main = 0.95)
       terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
     }
     par(op); return(invisible())
   }
   iv <- ix[variable == v][order(time_step)]
-  pal <- .pal(v)
+  pal <- .esp_pal(v, anom)
   if (identical(input$esp_view_mode, "year")) {   # the 12 months of one year, one colour scale
     y <- input$esp_view_year; if (is.null(y) || !y %in% iv$year) y <- min(iv$year)
     iy <- iv[year == y]
-    rs <- terra::rast(lapply(file.path(base, iy$file), .esp_raster))
-    names(rs) <- if (all(is.na(iy$month))) as.character(y) else month.abb[iy$month]
-    rng <- if (identical(input$esp_view_scale, "fixed")) range(c(iv$min, iv$max), na.rm = TRUE) else range(c(iy$min, iy$max), na.rm = TRUE)
-    nc <- if (terra::nlyr(rs) > 6) 4 else min(3, terra::nlyr(rs))
-    nr <- ceiling(terra::nlyr(rs) / nc)
+    rs <- lapply(seq_len(nrow(iy)), function(i) .esp_get(base, ix, iy[i], anom))
+    labs <- if (all(is.na(iy$month))) as.character(y) else month.abb[iy$month]
+    rng <- if (anom) .esp_sym(rs) else if (fixed) range(c(iv$min, iv$max), na.rm = TRUE) else range(c(iy$min, iy$max), na.rm = TRUE)
+    nc <- if (length(rs) > 6) 4 else min(3, length(rs)); nr <- ceiling(length(rs) / nc)
     layout(rbind(matrix(seq_len(nr * nc), nr, nc, byrow = TRUE), nr * nc + 1), heights = c(rep(1, nr), 0.3))
     for (i in seq_len(nr * nc)) {
-      if (i > terra::nlyr(rs)) { plot.new(); next }
+      if (i > length(rs)) { plot.new(); next }
+      mu <- terra::global(rs[[i]], "mean", na.rm = TRUE)[1, 1]
       terra::plot(rs[[i]], col = pal, range = rng, colNA = NA, legend = FALSE, axes = FALSE, mar = c(0.3, 0.3, 1.6, 0.3),
-                  main = sprintf("%s  (mean %.3g)", names(rs)[i], iy$mean[i]), cex.main = 1)
+                  main = sprintf("%s %d  (mean %s%.3g)", labs[i], y, if (anom && mu > 0) "+" else "", mu), cex.main = 1)
       terra::plot(land, col = "grey80", legend = FALSE, add = TRUE, axes = FALSE)
     }
-    par(mar = c(2.2, 6, 0.6, 6))   # one colour bar for all months
+    par(mar = c(2.2, 6, 0.6, 6))
     z <- seq(rng[1], rng[2], length.out = 101)
     image(x = z, y = 0:1, z = matrix(z[-1], ncol = 1), col = pal, axes = FALSE, xlab = "", ylab = "")
-    .esp_bar_axis(rng, 0.9); mtext(sprintf("%s (%s) - %d", v, iv$unit[1], y), side = 3, line = 0.2, cex = 0.85, font = 2)
+    .esp_bar_axis(rng, 0.9); mtext(sprintf("%s (%s) - %d", v, .esp_ulab(iv$unit[1], anom), y), side = 3, line = 0.2, cex = 0.85, font = 2)
     return(invisible())
   }
   k <- input$esp_view_step; if (is.null(k) || k > nrow(iv)) k <- 1
-  r <- .esp_raster(file.path(base, iv$file[k]))
-  rng <- if (identical(input$esp_view_scale, "fixed")) range(c(iv$min, iv$max), na.rm = TRUE) else range(terra::values(r), na.rm = TRUE)
+  r <- .esp_get(base, ix, iv[k], anom)
+  rng <- if (anom) .esp_sym(list(r)) else if (fixed) range(c(iv$min, iv$max), na.rm = TRUE) else range(terra::values(r), na.rm = TRUE)
   when <- if (is.na(iv$month[k])) iv$year[k] else sprintf("%d-%02d", iv$year[k], iv$month[k])
   layout(matrix(1:2, ncol = 1), heights = c(4, 1.3))
   terra::plot(r, col = pal, range = rng, colNA = NA, mar = c(2, 3, 3, 5), plg = list(box = TRUE),
-              main = sprintf("%s (%s) - %s   mean %.3g, %.3g-%.3g", v, iv$unit[k], when, iv$mean[k], iv$min[k], iv$max[k]))
+              main = sprintf("%s (%s) - %s   mean %.3g, range %.3g to %.3g", v, .esp_ulab(iv$unit[k], anom), when,
+                             terra::global(r, "mean", na.rm = TRUE)[1, 1], rng[1], rng[2]))
   terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
   tt <- if (all(is.na(iv$month))) iv$year else iv$year + (iv$month - 0.5) / 12
   par(mar = c(3, 4, 0.5, 5.5))
   plot(tt, iv$mean, type = "l", col = "grey30", xlab = "", ylab = "map mean", las = 1, cex.axis = 0.8)
   abline(v = tt[k], col = "firebrick", lwd = 2)
-})
+}
+output$esp_view_plot <- renderPlot(.esp_draw())
+.esp_fig_size <- function() {
+  v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year")
+  if (identical(v, "all")) (if (yr) c(1300, 12 * 125 + 120) else c(1300, 700)) else if (yr && !identical(v, "depth")) c(1300, 860) else c(1100, 640)
+}
+output$dl_esp_fig <- downloadHandler(
+  filename = function() paste0("ecospace_", input$esp_view_var, "_", if (identical(input$esp_view_mode, "year")) input$esp_view_year else "month",
+                               if (identical(input$esp_view_values, "anom")) "_anomaly" else "", ".png"),
+  content = function(file) {
+    sz <- .esp_fig_size()
+    grDevices::png(file, width = sz[1], height = sz[2], res = 110)
+    on.exit(grDevices::dev.off())
+    .esp_draw()
+  })
+## all the .asc files of the base map shown (+ depth_used.asc and the index)
+output$dl_esp_zip <- downloadHandler(
+  filename = function() paste0("ecospace_drivers_", input$esp_view_map, ".zip"),
+  content = function(file) {
+    d <- file.path(.esp_root(), input$esp_view_map)
+    if (!dir.exists(d)) stop("No maps for this base map - run 06b first.")
+    old <- setwd(d); on.exit(setwd(old))
+    f <- list.files(".", recursive = TRUE)
+    if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, f) else utils::zip(file, f, flags = "-q")
+  })
 output$ecospace_depth_info <- renderUI({
   f <- ecospace_depth()
   tags$div(class = "wm-help", if (is.na(f)) "Default base map: data/Bathymetry/depth_wmed.asc (1/6 deg)." else paste("Base map:", basename(f)))

@@ -6347,7 +6347,14 @@ compute_multistanza_age_proportion_from_medits_tc <- function(multistanza_fg_pai
                                                               code_overrides = NULL,
                                                               juvenile_stage_cutoff = 2,
                                                               year_range = NULL, area_filter = NULL,
-                                                              stage0_as_juvenile = TRUE, lw_b = 3) {
+                                                              stage0_as_juvenile = TRUE, lw_b = 3,
+                                                              split_by = c("maturity", "length"), l50_mm = NULL) {
+  ## split_by = "length": juvenile = not yet mature = length < L50 (length at
+  ## first maturity, l50_mm, per species: a named vector or one value);
+  ## adult = length >= L50. Every measured fish counts, whatever its
+  ## maturity stage. split_by = "maturity": MEDITS maturity stage <
+  ## juvenile_stage_cutoff = juvenile (stage 0 as set by stage0_as_juvenile).
+  split_by <- match.arg(split_by)
   empty_result <- data.table()
   if (nrow(multistanza_fg_pairs) == 0) {
     message("\n[Multistanza age split - MEDITS TC] No multistanza FG pair to compute a proportion for - skipped.")
@@ -6418,6 +6425,25 @@ compute_multistanza_age_proportion_from_medits_tc <- function(multistanza_fg_pai
   ## In MEDITS these are overwhelmingly small, unsexed fish, so they are
   ## counted as Juvenile here. Excluding them instead would bias the split
   ## strongly toward adults. Set stage0_as_juvenile = FALSE to exclude.
+  if (split_by == "length") {
+    tc <- tc[!is.na(n_individuals) & n_individuals > 0 & is.finite(length_mm)]
+    .l50 <- if (length(l50_mm) > 1 && !is.null(names(l50_mm))) l50_mm[tc$ScientificName] else rep(l50_mm[1], nrow(tc))
+    if (is.null(l50_mm) || all(is.na(.l50))) { message("\n[Multistanza age split - MEDITS TC] split_by = 'length' needs l50_mm - skipped."); return(empty_result) }
+    tc[, stanza := fifelse(length_mm < .l50, "Juvenile", "Adult")]
+    tc[, w_rel := n_individuals * length_mm^lw_b]
+    agg <- tc[, .(n = sum(n_individuals), w = sum(w_rel)), by = .(ScientificName, stanza)]
+    wide <- dcast(agg, ScientificName ~ stanza, value.var = c("n", "w"), fill = 0)
+    for (cc in c("n_Juvenile", "n_Adult", "w_Juvenile", "w_Adult")) if (!cc %in% names(wide)) wide[, (cc) := 0]
+    wide[, `:=`(Juvenile = n_Juvenile, Adult = n_Adult)]
+    wide[, prop_juvenile_numbers := fifelse((n_Juvenile + n_Adult) > 0, n_Juvenile / (n_Juvenile + n_Adult), NA_real_)]
+    wide[, prop_juvenile := fifelse((w_Juvenile + w_Adult) > 0, w_Juvenile / (w_Juvenile + w_Adult), NA_real_)]
+    wide[, l50_cm := (if (length(l50_mm) > 1) l50_mm[ScientificName] else l50_mm[1]) / 10]
+    wide[, source_file := paste0("MEDITS TC.csv length split (juvenile = length < L50 ", l50_cm, " cm, not yet mature; biomass-weighted by length^", lw_b, ")")]
+    result <- wide[!is.na(prop_juvenile)]
+    message("[Multistanza age split - MEDITS TC] Length split (juvenile = length < L50, not yet mature; adult = length >= L50):")
+    print(result[, .(ScientificName, l50_cm, Juvenile, Adult, prop_juvenile_numbers, prop_juvenile)])
+    return(result)
+  }
   if (stage0_as_juvenile) {
     tc[stage_num == 0, stage_num := 1]
     message("[Multistanza age split - MEDITS TC] ", round(n_stage0), " individual(s) at maturity stage 0",

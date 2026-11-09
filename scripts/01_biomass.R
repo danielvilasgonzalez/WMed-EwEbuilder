@@ -2906,12 +2906,46 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
     ## and for code_overrides if a species' genus/species MEDITS code isn't
     ## the standard 4+3-letter truncation.
     TC_SURVEY_FILE <- MEDITS_TC_FILE
+    ## Split by LENGTH (project decision 2026-11-09): juvenile = not yet
+    ## mature = length < L50 (length at first maturity), adult = length >=
+    ## L50, every measured fish counted. L50 per species from the parameter
+    ## "L50_cm" of multistanza_reference_tables/<genus_species>_multistanza_
+    ## parameters.csv (hake: 33 cm, GFCM SAFs GSA 5 and 8-11 2019), else
+    ## MULTISTANZA_L50_CM (named vector, cm). MULTISTANZA_SPLIT_BY =
+    ## "maturity" goes back to the maturity-stage split.
+    if (!exists("MULTISTANZA_SPLIT_BY", envir = .GlobalEnv, inherits = FALSE)) MULTISTANZA_SPLIT_BY <- "length"
+    if (!exists("MULTISTANZA_L50_CM", envir = .GlobalEnv, inherits = FALSE)) MULTISTANZA_L50_CM <- c("Merluccius merluccius" = 33)
+    .l50 <- vapply(multistanza_fg_pairs$ScientificName, function(sp) {
+      f <- file.path(pcloud_dir, "data/Complementary data/multistanza_reference_tables",
+                     paste0(if (sp == "Merluccius merluccius") "hake" else gsub(" ", "_", tolower(sp)), "_multistanza_parameters.csv"))
+      v <- if (file.exists(f)) tryCatch({ x <- fread(f); suppressWarnings(as.numeric(x[parameter == "L50_cm", value][1])) }, error = function(e) NA_real_) else NA_real_
+      if (!is.finite(v) && sp %in% names(MULTISTANZA_L50_CM)) v <- MULTISTANZA_L50_CM[[sp]]
+      v }, numeric(1))
+    names(.l50) <- multistanza_fg_pairs$ScientificName
+    .ms_cmp <- NULL
+    .tc_split <- function(by) compute_multistanza_age_proportion_from_medits_tc(multistanza_fg_pairs, TC_SURVEY_FILE,
+                   year_range = YEAR_ECOPATH, area_filter = FILTER_AREAS, split_by = by, l50_mm = .l50 * 10)
     multistanza_age_proportion <- if (file.exists(TC_SURVEY_FILE)) {
       ## Restricted to the Ecopath baseline years and the study GSAs - the
       ## raw TC.csv covers every MEDITS country/GSA/year (Black Sea, Aegean...).
-      compute_multistanza_age_proportion_from_medits_tc(multistanza_fg_pairs, TC_SURVEY_FILE,
-                                                        year_range = YEAR_ECOPATH,
-                                                        area_filter = FILTER_AREAS)
+      .ms_len <- tryCatch(.tc_split("length"), error = function(e) { message("[Multistanza] length split failed: ", conditionMessage(e)); data.table() })
+      .ms_mat <- tryCatch(.tc_split("maturity"), error = function(e) data.table())
+      ## comparison of the adult biomass share: length split, maturity-stage
+      ## split, stock assessment SSB / total biomass (hake parameter table)
+      tryCatch({
+        .cmp <- rbindlist(list(
+          if (nrow(.ms_len)) .ms_len[, .(ScientificName, method = paste0("MEDITS length split (L50 ", l50_cm, " cm) - USED"), adult_share = 1 - prop_juvenile, lo = NA_real_, hi = NA_real_)],
+          if (nrow(.ms_mat)) .ms_mat[, .(ScientificName, method = "MEDITS maturity stage (stage 0 = juvenile)", adult_share = 1 - prop_juvenile, lo = NA_real_, hi = NA_real_)],
+          if ("Merluccius merluccius" %in% multistanza_fg_pairs$ScientificName) {
+            .hp <- file.path(pcloud_dir, "data/Complementary data/multistanza_reference_tables/hake_multistanza_parameters.csv")
+            if (file.exists(.hp)) { .x <- fread(.hp)[parameter == "SSB_over_TB"]
+              .rg <- suppressWarnings(as.numeric(strsplit(gsub("[^0-9.]+", " ", .x$range[1]), " ")[[1]])); .rg <- .rg[is.finite(.rg)]
+              data.table(ScientificName = "Merluccius merluccius", method = "Stock assessment: SSB / total biomass (GFCM SAF a4a, XSA)",
+                         adult_share = as.numeric(.x$value[1]), lo = if (length(.rg) >= 2) .rg[1] else NA_real_, hi = if (length(.rg) >= 2) .rg[2] else NA_real_) }
+          }), fill = TRUE)
+        .ms_cmp <- .cmp   # drawn after the hake assessment block (shares and t/km2)
+      }, error = function(e) { .ms_cmp <<- NULL; message("[Multistanza] comparison table skipped - ", conditionMessage(e)) })
+      if (identical(MULTISTANZA_SPLIT_BY, "maturity")) .ms_mat else .ms_len
     } else {
       message("[Multistanza biomass split] TC.csv not found at '", TC_SURVEY_FILE, "' - falling back to the",
               " STECF FDI catch-at-age proxy.")
@@ -2924,7 +2958,8 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
     stecf_bio_dir_biomass <- file.path(stecf_fdi_dir_biomass, "Biological")
     
     multistanza_biomass_split_applied <- data.table()
-    multistanza_source_label <- "MEDITS TC.csv maturity staging (maturity stage, biomass-weighted)"
+    multistanza_source_label <- if (identical(MULTISTANZA_SPLIT_BY, "maturity")) "MEDITS TC.csv maturity staging (maturity stage, biomass-weighted)" else
+      "MEDITS TC.csv length split (length < L50 = juvenile, biomass-weighted)"
     if (nrow(multistanza_age_proportion) == 0) {
       multistanza_source_label <- "STECF FDI Biological Age data's juvenile:adult catch proportion"
       fao_species_biomass <- tryCatch(resolve_fao_species_reference(pcloud_dir, csv_out_dir), error = function(e) {
@@ -3089,14 +3124,19 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
   }
   .hk_lab <- if (.hk_gfcm) "GFCM SAF SSB" else "STECF XSA SSB, RAM Legacy v4.44"
   HAKE_PARAM_PATH <- file.path(pcloud_dir, "data/Complementary data/multistanza_reference_tables/hake_multistanza_parameters.csv")
-  if (isTRUE(HAKE_STANZA_FROM_ASSESSMENT) && file.exists(HAKE_SA_PATH) &&
-      !all(.hk_keys[c("k1567", "k911")] %in% fread(HAKE_SA_PATH)[species == "Merluccius merluccius", unique(stock_key)])) {
+  .hk_sa_ok <- file.exists(HAKE_SA_PATH) &&
+    all(.hk_keys[c("k1567", "k911")] %in% fread(HAKE_SA_PATH)[species == "Merluccius merluccius", unique(stock_key)])
+  if (isTRUE(HAKE_STANZA_FROM_ASSESSMENT) && !.hk_sa_ok) {
     message("[Hake stanzas] ", basename(HAKE_SA_PATH), " has no hake rows for ", paste(.hk_keys[c("k1567", "k911")], collapse = " and "),
-            " - hake stanzas keep the survey (MEDITS maturity) split. Add the GFCM SAF SSB series to use the assessment.")
+            " - hake stanzas keep the survey (MEDITS) split. Add the GFCM SAF SSB series to use the assessment.")
     HAKE_STANZA_FROM_ASSESSMENT <- FALSE
   }
   hp <- if (exists("multistanza_fg_pairs")) multistanza_fg_pairs[ScientificName == "Merluccius merluccius"] else data.table()
-  if (isTRUE(HAKE_STANZA_FROM_ASSESSMENT) && nrow(hp) == 1 && file.exists(HAKE_SA_PATH)) {
+  ## The assessment stanza biomasses are always computed (as a reference for
+  ## the comparison figure); they replace the survey split only when
+  ## HAKE_STANZA_FROM_ASSESSMENT is TRUE.
+  hake_stanza_assessment_B <- NULL
+  if (.hk_sa_ok && nrow(hp) == 1) {
     fg_j <- hp$FG_num_juv; fg_a <- hp$FG_num_adult
     r_ssb <- 0.42
     if (file.exists(HAKE_PARAM_PATH)) { .pp <- fread(HAKE_PARAM_PATH); if ("SSB_over_TB" %in% .pp$parameter) r_ssb <- as.numeric(.pp[parameter == "SSB_over_TB", value][1]) }
@@ -3124,6 +3164,11 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
       B_juv0 <- B_adult0 * (1 - r_ssb) / r_ssb
       ser[, `:=`(B_juv_check = B_adult * (1 - r_ssb) / r_ssb)]
       fwrite(ser, file.path(csv_out_dir, "hake_stanza_stock_assessment_REVIEW.csv"))
+      hake_stanza_assessment_B <- data.table(ScientificName = "Merluccius merluccius", B_juv = B_juv0, B_adult = B_adult0,
+                                             note = paste0(.hk_lab, ", SSB back-cast to ", paste(range(YEAR_ECOPATH), collapse = "-"),
+                                                           " with the MEDITS index; juvenile = SSB x (1-r)/r, r = ", r_ssb))
+      }
+      if (isTRUE(HAKE_STANZA_FROM_ASSESSMENT) && nrow(ser) && is.finite(bc) && bc > 0) {
       yrs_all_h <- sort(unique(c(YEAR_ECOPATH, if (exists("TS_YEARS")) TS_YEARS, fg_index_regional_combined[FG_num %in% c(fg_j, fg_a), Year])))
       tmpl <- unique(fg_index_regional_combined[FG_num == fg_j, .(FG_name, FG_ECOLOGY_TYPE)])[1]
       adult_rows <- data.table(Year = yrs_all_h, FG_num = fg_a, FG_name = hp$FG_name_adult,
@@ -3145,10 +3190,60 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
               " t/km2, juvenile (FG", fg_j, ") ", signif(B_juv0, 3), " t/km2 (stock-assessment SSB, back-cast x", round(bc, 2),
               " with MEDITS; r = SSB/TB = ", r_ssb, "). Adult Ecosim: ", nrow(ser), " assessment years (", paste(range(ser$Year), collapse = "-"),
               "); juvenile Ecosim: MEDITS index. Written to hake_stanza_stock_assessment_REVIEW.csv.")
-    } else {
+    } else if (isTRUE(HAKE_STANZA_FROM_ASSESSMENT)) {
       message("[Hake stanzas] No usable assessment series or MEDITS back-cast ratio - previous stanza split kept.")
     }
   }
+
+  ## ---- Stanza split comparison: MEDITS (length, maturity) vs assessment --
+  ## Adult share of the biomass and the juvenile / adult Ecopath B (t/km2,
+  ## YEAR_ECOPATH mean) of each method: MEDITS total stanza biomass x the
+  ## method's share, and the assessment route (SSB back-cast + r = SSB/TB).
+  ## multistanza_split_comparison.png / .csv
+  if (exists(".ms_cmp") && !is.null(.ms_cmp) && nrow(.ms_cmp) && exists("multistanza_fg_pairs")) tryCatch({
+    .cmp <- copy(.ms_cmp)
+    .tot <- rbindlist(lapply(seq_len(nrow(multistanza_fg_pairs)), function(i) data.table(ScientificName = multistanza_fg_pairs$ScientificName[i],
+      B_total = fg_index_regional_combined[FG_num %in% c(multistanza_fg_pairs$FG_num_juv[i], multistanza_fg_pairs$FG_num_adult[i]) & Year %in% YEAR_ECOPATH,
+                                           sum(mean_density, na.rm = TRUE) / length(YEAR_ECOPATH)])))
+    if (isTRUE(HAKE_STANZA_FROM_ASSESSMENT) && exists("ms_survey_series") && !is.null(ms_survey_series))   # total of the survey, before the assessment replaced it
+      .tot <- ms_survey_series[Year %in% YEAR_ECOPATH, .(B_total = sum(mean_density, na.rm = TRUE) / length(YEAR_ECOPATH))][, ScientificName := multistanza_fg_pairs$ScientificName[1]]
+    .cmp <- merge(.cmp, .tot, by = "ScientificName", all.x = TRUE)
+    .cmp[grepl("^MEDITS", method), `:=`(B_juv = B_total * (1 - adult_share), B_adult = B_total * adult_share)]
+    if (!is.null(hake_stanza_assessment_B)) {
+      .cmp[grepl("^Stock assessment", method) & ScientificName %in% hake_stanza_assessment_B$ScientificName,
+           `:=`(B_juv = hake_stanza_assessment_B$B_juv, B_adult = hake_stanza_assessment_B$B_adult)]
+    }
+    .cmp[, B_total_method := B_juv + B_adult]
+    fwrite(.cmp, file.path(csv_out_dir, "multistanza_split_comparison.csv"))
+    .cmp[, method := factor(method, levels = rev(unique(method)))]
+    p_share <- ggplot(.cmp, aes(adult_share, method)) +
+      geom_errorbarh(aes(xmin = lo, xmax = hi), height = 0.25, colour = "grey45", na.rm = TRUE) +
+      geom_point(aes(colour = grepl("USED", method)), size = 3.5) +
+      geom_text(aes(label = sprintf("%.0f%%", 100 * adult_share)), vjust = -1.1, size = 3.3) +
+      scale_colour_manual(values = c(`TRUE` = "#1b7f9e", `FALSE` = "grey35"), guide = "none") +
+      scale_x_continuous(labels = function(x) paste0(round(100 * x), "%"), limits = c(0, max(0.7, max(c(.cmp$adult_share, .cmp$hi), na.rm = TRUE) + 0.05))) +
+      facet_wrap(~ScientificName, ncol = 1) +
+      labs(title = "Adult share of the stanza biomass", x = NULL, y = NULL) + theme_minimal(base_size = 10)
+    .lv <- melt(.cmp[is.finite(B_juv) & is.finite(B_adult)], id.vars = c("ScientificName", "method"), measure.vars = c("B_juv", "B_adult"),
+                variable.name = "stanza", value.name = "B")
+    .lv[, stanza := factor(stanza, levels = c("B_adult", "B_juv"), labels = c("adult", "juvenile"))]   # juvenile drawn on top of each pair
+    p_val <- ggplot(.lv, aes(B, method, fill = stanza)) +
+      geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+      geom_text(aes(label = signif(B, 2)), position = position_dodge(width = 0.75), hjust = -0.15, size = 3) +
+      scale_fill_manual(values = c(juvenile = "#9fd3e3", adult = "#1b7f9e"), name = NULL, breaks = c("juvenile", "adult")) +
+      scale_x_continuous(expand = expansion(mult = c(0, 0.2))) +
+      facet_wrap(~ScientificName, ncol = 1) +
+      labs(title = paste0("Ecopath B by stanza (t/km\u00b2, ", paste(range(YEAR_ECOPATH), collapse = "-"), ")"), x = NULL, y = NULL) +
+      theme_minimal(base_size = 10) + theme(legend.position = "bottom", axis.text.y = element_blank())
+    p_ms <- patchwork::wrap_plots(p_share, p_val, widths = c(1.25, 1)) +
+      patchwork::plot_annotation(title = "Multistanza split: MEDITS lengths vs maturity stage vs stock assessment",
+        subtitle = paste0("MEDITS TC.csv, model GSAs, weighted by length^3; MEDITS B = total MEDITS stanza biomass x share. ",
+                          "Assessment: SSB back-cast with the MEDITS index, bar = SSB/TB range.\nTrawl surveys catch few large adults."),
+        theme = theme(plot.title = element_text(size = 12), plot.subtitle = element_text(size = 9)))
+    ggsave(file.path(plot_dir, "multistanza_split_comparison.png"), p_ms, width = 12, height = 2.4 + 1.6 * uniqueN(.cmp$ScientificName), dpi = PLOT_DPI)
+    message("[Multistanza] split comparison: ", paste(.cmp[, sprintf("%s %s: adults %.0f%%, juv %.3g / adult %.3g t/km2", ScientificName, sub(" - USED", "", method),
+                                                                    100 * adult_share, B_juv, B_adult)], collapse = "; "), " -> multistanza_split_comparison.png")
+  }, error = function(e) message("[Multistanza] comparison figure skipped - ", conditionMessage(e)))
 
   ## ---- Multistanza parameters (EwE stanza inputs) ---------------------
   ## For every juvenile/adult FG pair: Ecopath B from the pipeline, the
