@@ -286,12 +286,32 @@ if (isTRUE(RUN_VALIDATION) && 7 %in% RUN_STEPS) {
                 "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE",
                 "ECOSIM_CATCH_COUNTRIES", "ECOSIM_CATCH_START_YEAR", "ECOSIM_CATCH_SCALING", "MULTISTANZA_B_SOURCE",
                 "MEDITS_TA_FILE", "MEDITS_TB_FILE", "MEDITS_TC_FILE", "MEDIAS_DIR", "F_MAX", "F_THRESHOLD_FROM_ASSESSMENT",
-                "ECOSPACE_DEPTH_FILE", "ECOSPACE_CELL_SIZE", "ECOSPACE_DRIVER_STEP", "ECOSPACE_DRIVER_SCALING", "OTHER_SURVEY_FILE")
+                "ECOSPACE_DEPTH_FILE", "ECOSPACE_CELL_SIZE", "ECOSPACE_DRIVER_STEP", "ECOSPACE_DRIVER_SCALING", "OTHER_SURVEY_FILE",
+                "EWE_MODEL_NAME", "EWE_EXPORT_FORMAT", "EWE_DECIMAL")
 .rec_settings <- Filter(Negate(is.null), lapply(stats::setNames(.rec_names, .rec_names), function(n)
   if (exists(n, envir = .GlobalEnv, inherits = FALSE)) get(n, envir = .GlobalEnv) else NULL))
 if (exists("FG_SPECIES_FILE", envir = .GlobalEnv)) .rec_settings$FG_SPECIES_FILE <- basename(FG_SPECIES_FILE)
 tryCatch(wmed_write_run_record(out_dir, git_dir, pcloud_dir, .t0, .rec_settings, .step_minutes),
          error = function(e) message("[run record] not written: ", conditionMessage(e)))
+
+## EwE import tables (lib_ewe_export.R): the workbook's Ecopath inputs in
+## the layout of EwE's own csv export, to out_dir/ewe_import/:
+## <EWE_MODEL_NAME>-Basic_input.csv, -Diet_composition, -Landings,
+## -Discards, -Definition_of_fleets, -Pedigree, -Traits (EWE_EXPORT_FORMAT
+## "csv"), one <EWE_MODEL_NAME>-EwE_input.xlsx ("xlsx"), or both.
+## EWE_DECIMAL: decimal separator of the csv files, as EwE writes them on
+## the computer that runs it ("," Spanish/French/Italian settings, ".").
+if (!exists("EWE_MODEL_NAME")) EWE_MODEL_NAME <- "Western_Mediterranean_Sea"
+if (!exists("EWE_EXPORT_FORMAT")) EWE_EXPORT_FORMAT <- "both"
+if (!exists("EWE_DECIMAL")) EWE_DECIMAL <- ","
+tryCatch({
+  source(file.path(git_dir, "scripts", "lib_ewe_export.R"))
+  .wbp <- file.path(out_dir, "ecopath_ecosim_inputs.xlsx")
+  if (file.exists(.wbp)) {
+    .ew <- write_ewe_tables(.wbp, file.path(out_dir, "ewe_import"), EWE_MODEL_NAME, EWE_EXPORT_FORMAT, EWE_DECIMAL)
+    message("[EwE import] ", length(.ew), " file(s) in ", file.path(out_dir, "ewe_import"), ": ", paste(basename(.ew), collapse = ", "))
+  }
+}, error = function(e) message("[EwE import] tables not written: ", conditionMessage(e)))
 
 ## intermediate tables to <block>/intermediate/ (lib_output_tidy.R)
 tryCatch(wmed_tidy_intermediate(out_dir), error = function(e) message("[Outputs] intermediate tables not moved: ", conditionMessage(e)))

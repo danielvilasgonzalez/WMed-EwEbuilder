@@ -757,7 +757,10 @@ config_code <- reactive({
     if (!is.null(survey_files()$TC)) sprintf("MEDITS_TC_FILE   <- \"%s\"   # own MEDITS length/maturity", .fwd(survey_files()$TC$path)),
     if (!is.null(survey_files()$MEDIAS_abundance) && !is.null(survey_files()$MEDIAS_biomass))
       sprintf("MEDIAS_DIR       <- \"%s\"   # own MEDIAS abundance.csv + biomass.csv", .fwd(dirname(survey_files()$MEDIAS_biomass$path))),
-    sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (05)", if (is.null(input$phyto_src)) "isimip" else input$phyto_src))
+    sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (05)", if (is.null(input$phyto_src)) "isimip" else input$phyto_src),
+    sprintf("EWE_MODEL_NAME   <- \"%s\"   # EwE import files (ewe_import/): file name start", if (is.null(input$ewe_model) || !nzchar(input$ewe_model)) "Western_Mediterranean_Sea" else input$ewe_model),
+    sprintf("EWE_EXPORT_FORMAT <- \"both\"   # csv files and one xlsx"),
+    sprintf("EWE_DECIMAL      <- \"%s\"   # decimal separator of the EwE csv files", if (is.null(input$ewe_dec)) "," else input$ewe_dec))
   head <- c(sprintf("## WMed-EwEbuilder settings - from WMed-EwEbuilder.qmd, %s", format(Sys.time(), "%Y-%m-%d %H:%M")),
             "## Run from the scripts/ folder of the repo (folders found by wmed_paths.R).",
             "CLEAN_START      <- FALSE   # keep the settings below")
@@ -1207,6 +1210,21 @@ output$dl_workbook <- downloadHandler(function() paste0("ecopath_ecosim_inputs_"
 output$dl_diet     <- downloadHandler(function() paste0("diet_matrix_main_vs_reference_", .stamp(), ".xlsx"), .send_file(function() .diet_path))
 output$dl_review   <- downloadHandler(function() paste0("WMed_EwE_REVIEW_tables_", .stamp(), ".zip"), .send_zip("REVIEW"))
 output$dl_all      <- downloadHandler(function() paste0("WMed_EwE_all_tables_", .stamp(), ".zip"), .send_zip("."))
+## EwE import tables (lib_ewe_export.R) from the workbook of the run shown
+output$dl_ewe <- downloadHandler(
+  function() { m <- gsub("[^A-Za-z0-9_.-]+", "_", if (nzchar(.or(input$ewe_model, ""))) input$ewe_model else "EwE_model")
+               if (identical(input$ewe_fmt, "xlsx")) paste0(m, "-EwE_input.xlsx") else paste0(m, "-EwE_input_csv.zip") },
+  function(file) {
+    if (is.na(.wb_path) || !file.exists(.wb_path)) stop("No workbook yet - run the pipeline.")
+    if (!exists("write_ewe_tables", mode = "function")) source("lib_ewe_export.R", local = FALSE)
+    td <- tempfile("ewe"); dir.create(td)
+    m <- if (nzchar(.or(input$ewe_model, ""))) input$ewe_model else "EwE_model"
+    p <- write_ewe_tables(.wb_path, td, m, if (identical(input$ewe_fmt, "xlsx")) "xlsx" else "csv", if (is.null(input$ewe_dec)) "," else input$ewe_dec)
+    if (identical(input$ewe_fmt, "xlsx")) file.copy(p[1], file, overwrite = TRUE) else {
+      old <- setwd(td); on.exit(setwd(old), add = TRUE)
+      if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, basename(p)) else utils::zip(file, basename(p), flags = "-q")
+    }
+  })
 output$dl_info <- renderUI({
   last_finished()
   if (is.na(.wb_path) || !file.exists(.wb_path)) return(tags$small(class = "text-muted", " No workbook yet - run the pipeline."))
@@ -1934,6 +1952,9 @@ observeEvent(input$settings_upload, {
   if (!is.null(s$ECOPATH_B_FILL_YEARS)) { updateSliderInput(session, "fill_years", value = rng(s$ECOPATH_B_FILL_YEARS)); u("ECOPATH_B_FILL_YEARS") }
   ## HIGH_F_B_FIX: no longer a choice (high F is reported only)
   if (!is.null(s$PHYTO_SOURCE)) { updateSelectInput(session, "phyto_src", selected = s$PHYTO_SOURCE); u("PHYTO_SOURCE") }
+  if (!is.null(s$EWE_MODEL_NAME)) { updateTextInput(session, "ewe_model", value = s$EWE_MODEL_NAME); u("EWE_MODEL_NAME") }
+  if (!is.null(s$EWE_DECIMAL))    { updateRadioButtons(session, "ewe_dec", selected = s$EWE_DECIMAL); u("EWE_DECIMAL") }
+  if (!is.null(s$EWE_EXPORT_FORMAT)) u("EWE_EXPORT_FORMAT")
   if (!is.null(s$RUN_STEPS))    { updateCheckboxGroupInput(session, "steps_chk", selected = as.character(s$RUN_STEPS)); u("RUN_STEPS") }
   if (identical(s$AREA_MODE, "custom")) {
     updateRadioButtons(session, "area_mode", selected = "custom"); u("AREA_MODE")
