@@ -128,7 +128,12 @@ while (sink.number() > 0) sink()
 ## (2) Haul density:  d_s,k = W_s,k / a_k, W = catch weight (t).
 ## (3) Catchability: d*_s,k = d_s,k / q_s, q from the ECOTRANS MEDITS
 ##     catchability table (catchability_factors_ecotrans_medits_2021_
-##     spp.csv); q = 1 for pelagic/planktonic/seagrass/algae FGs.
+##     spp.csv; Lloret-Lloret, E. 2023, PhD thesis, Universitat de
+##     Barcelona, hdl.handle.net/2445/204664, suppl. Chapter 2.4: fish q
+##     from Fraser et al. 2007 ICES J Mar Sci 64:1800-1819, pelagic q from
+##     Fiorentino et al. 2013, hake / red mullet / deep-water rose shrimp /
+##     Norway lobster from STECF 2021, cephalopods 0.2 from Gascuel et al.
+##     2007); q = 1 for pelagic/planktonic/seagrass/algae FGs.
 ## (4) Outliers (haul level): log1p(d) above Q3 + 3 x IQR of the same
 ##     species x GSA x stratum x year are removed unless 2+ hauls are
 ##     high (Tukey 1977, Exploratory Data Analysis; fence width 3 =
@@ -2860,7 +2865,7 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
                                `:=`(mean_density = proxy,
                                     biomass_source = paste0("MEDITS ", min(rec$Year), "-", max(rec$Year), " mean (systematic invertebrate",
                                                             " recording from 2012) as 1994-96 proxy, q-corrected with the ECOTRANS MEDITS",
-                                                            " catchability table - pre-2012 MEDITS values are recording artefacts"))]
+                                                            " catchability table (Lloret-Lloret 2023) - pre-2012 MEDITS values are recording artefacts"))]
     fg_index_regional_combined[FG_name == fg_nm & Year < min(MEDITS_RECORDING_ERA_YEARS) & !Year %in% YEAR_ECOPATH, mean_density := NA_real_]
     message("[MEDITS recording era] ", fg_nm, ": baseline = mean ", min(rec$Year), "-", max(rec$Year), " = ", signif(proxy, 3),
             " t/km2 (", nrow(rec), " yr); pre-", min(MEDITS_RECORDING_ERA_YEARS), " years set to NA.")

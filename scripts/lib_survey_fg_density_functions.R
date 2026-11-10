@@ -5411,6 +5411,13 @@ build_fg_references_sheet <- function(out_path,
                          if (length(other)) paste0(" [other years only: ", paste(sort(other), collapse = " | "), "]") else ""))
       }, by = FG_num]
       refs <- merge(refs, b_by_fg, by = "FG_num", all.x = TRUE)
+      ## MEDITS values are divided by the catchability q: cite its source
+      .q_on <- !exists("APPLY_CATCHABILITY", inherits = TRUE) || isTRUE(get("APPLY_CATCHABILITY", inherits = TRUE))
+      .q_own <- exists("CATCHABILITY_FILE", inherits = TRUE) && !is.null(get("CATCHABILITY_FILE", inherits = TRUE)) &&
+                !is.na(get("CATCHABILITY_FILE", inherits = TRUE)) && nzchar(get("CATCHABILITY_FILE", inherits = TRUE))
+      if (.q_on) refs[!is.na(B_ref) & grepl("MEDITS", B_ref), B_ref := paste0(B_ref, "; MEDITS q-corrected: ",
+        if (.q_own) "catchability table supplied by the user (CATCHABILITY_FILE)" else
+          "catchability q from Lloret-Lloret, E. (2023) PhD thesis, Universitat de Barcelona, hdl.handle.net/2445/204664 (fish: Fraser et al. 2007; sardine, anchovy: Fiorentino et al. 2013; hake, red mullet, deep-water rose shrimp, Norway lobster: STECF 2021; cephalopods: Gascuel et al. 2007)")]
     } else {
       message("build_fg_references_sheet(): '", biomass_src_path, "' has no biomass_source column",
               " (older run?) - B_ref left blank.")

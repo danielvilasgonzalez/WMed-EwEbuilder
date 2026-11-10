@@ -250,7 +250,7 @@ tagList(
         .switch("strata", "Strata-weighted density (STRATA)", "Off = simple mean density instead of the depth-stratum (area-weighted) estimator.", TRUE),
         .switch("drop_outliers", "Remove flagged outlier hauls (DROP_OUTLIERS)", "Off = outliers are only reported in survey_outliers_flagged.csv.", TRUE),
         .switch("catch_q", "Catchability correction (APPLY_CATCHABILITY)",
-                "Divides MEDITS density by the species catchability q. Default table: catchability_factors_ecotrans_medits_2021_spp.csv (pCloud). Upload your own below (columns ScientificName, q).", TRUE),
+                "Divides MEDITS density by the species catchability q. Default table: catchability_factors_ecotrans_medits_2021_spp.csv (pCloud), from Lloret-Lloret (2023, PhD thesis, Universitat de Barcelona): Fraser et al. (2007) for fish, Fiorentino et al. (2013) for sardine and anchovy, stock assessments (STECF 2021) for hake, red mullet, deep-water rose shrimp and Norway lobster, 0.2 for cephalopods. Upload your own below (columns ScientificName, q).", TRUE),
         conditionalPanel("input.catch_q",
           fileInput("catch_upload", "Own catchability table (CATCHABILITY_FILE, optional)", accept = ".csv", width = "100%",
                     placeholder = "csv with ScientificName and q"),
