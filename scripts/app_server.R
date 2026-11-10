@@ -1907,8 +1907,29 @@ output$dl_fw_sp <- downloadHandler(
     if (!is.null(fg) && all(c("FG_number", "species") %in% names(fg))) {
       fg[, `.k` := paste(FG_number, trimws(species))]; b[, `.k` := paste(FG_num, Species)]
       out <- merge(fg, b[, c(".k", setdiff(names(b), c(".k", "FG_num", "Species"))), with = FALSE], by = ".k", all.x = TRUE, sort = FALSE)[, `.k` := NULL]
-    } else out <- data.table::as.data.table(x)
-    data.table::fwrite(out, file, sep = if (!is.null(f) && !is.na(f) && file.exists(f) && grepl(";", readLines(f, n = 1))) ";" else ",")
+    } else { out <- data.table::as.data.table(x); data.table::setnames(out, c("FG_num", "Species"), c("FG_number", "species"), skip_absent = TRUE) }
+    ## B proportions over the FG's species in this table: each species once
+    ## per FG, shares = its B / sum of the FG's B, so they add up to 1 in
+    ## every FG (species of the run's catalogue that are not in the FG file
+    ## are left out of the sum; an FG whose species all have B = 0 gets an
+    ## even split)
+    if (all(c("FG_number", "species", "B_with_q_t_km2") %in% names(out))) {
+      out[, `.sp` := trimws(species)]
+      u <- unique(out[!is.na(FG_number) & nzchar(.sp), .(FG_number, .sp, Bw = B_with_q_t_km2, Bwo = B_without_q_t_km2)], by = c("FG_number", ".sp"))
+      sh <- function(v) { v <- ifelse(is.finite(v) & v > 0, v, 0); if (sum(v) > 0) v / sum(v) else rep(1 / length(v), length(v)) }
+      u[, `:=`(prop_with_q = sh(Bw), prop_without_q = if (all(is.na(Bwo))) NA_real_ else sh(Bwo)), by = FG_number]
+      out[, c("prop_with_q", "prop_without_q") := NULL]
+      out <- merge(out, u[, .(FG_number, .sp, prop_with_q, prop_without_q)], by = c("FG_number", ".sp"), all.x = TRUE, sort = FALSE)
+      ## a species listed twice in the same FG: the share on its first row only
+      out[duplicated(out[, .(FG_number, .sp)]), c("prop_with_q", "prop_without_q") := 0]
+      out[, `.sp` := NULL]
+      data.table::setorder(out, FG_number)
+    }
+    ## Ready to open in Excel: ";" and decimal comma for a computer set to
+    ## Spanish/French/Italian, "," and decimal point for English (the
+    ## "Decimal separator" choice of the EwE files in Results); UTF-8 with BOM
+    euro <- !identical(input$ewe_dec, ".")
+    data.table::fwrite(out, file, sep = if (euro) ";" else ",", dec = if (euro) "," else ".", bom = TRUE)
   })
 
 ## --- Survey hauls map (haul_density.rds, 01) --------------------------
