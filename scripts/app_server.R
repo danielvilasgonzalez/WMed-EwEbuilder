@@ -1246,7 +1246,7 @@ output$dl_info <- renderUI({
   out[[7]] <- row("Copernicus tool (05 only)", isTRUE(cli), if (isTRUE(cli)) Sys.which("copernicusmarine") else "copernicusmarine not found",
                   "Only for 05 environment: install Python, then 'pip install copernicusmarine'.")
   out[[8]] <- row("Copernicus login (05 only)", .cm_has_login(), if (.cm_has_login()) "saved on this computer" else "not saved",
-                  "Use 'enter or change the login' in card 6 (environment and Ecospace).")
+                  "Use 'enter or change the login' in card 5 (environment and Ecospace).")
   do.call(rbind, out)
 }
 observeEvent(input$setup_check, {
@@ -1259,7 +1259,7 @@ observeEvent(input$setup_check, {
   })
 })
 
-## --- Run summary (card 8): what to look at after a run ----------------------
+## --- Run summary (card 7): what to look at after a run ----------------------
 ## Per script: the log of the last run, its errors and warnings; then the
 ## FGs with F > 1 and the FGs with no Ecopath B (from the REVIEW tables).
 .last_logs <- function() {
@@ -1507,6 +1507,14 @@ observe({
 ## The two panels are built here and drawn as two plots (biomass, catches),
 ## so the biomass plot can be hovered: Shiny maps the mouse to data
 ## coordinates only for a single ggplot.
+## FG biomass without q / with q per year (fg_biomass_q_by_year.csv, 01)
+.fg_q_all <- reactive({
+  .ecosim_ts()
+  f <- file.path(.out_dir, "biomass", "fg_biomass_q_by_year.csv")
+  if (is.na(.out_dir) || !file.exists(f)) return(NULL)
+  tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+})
+.fg_q_year <- function(fg) { x <- .fg_q_all(); if (is.null(x)) NULL else x[x$FG_num == fg, , drop = FALSE] }
 .fg_panels <- reactive({
   d <- .ecosim_ts()
   validate(need(!is.null(d) && nrow(d), "No Ecosim_ts sheet yet - run the pipeline (01 and 02)."))
@@ -1526,7 +1534,7 @@ observe({
   ## One colour per series, one legend for both panels (patchwork collects it)
   ## show.legend = TRUE on every line/point layer and the same fixed scale in
   ## both panels make the two legends identical, so patchwork shows one
-  cols <- c("Biomass" = "#0072B2", "Catches" = "#D55E00", "Discards" = "#009E73")
+  cols <- c("Biomass" = "#0072B2", "Biomass without q" = "#56B4E9", "Catches" = "#D55E00", "Discards" = "#009E73")
   sc <- function(keys) ggplot2::scale_colour_manual(values = cols[keys], limits = keys, breaks = keys, drop = FALSE, name = NULL,
                                                     guide = ggplot2::guide_legend(override.aes = list(linewidth = 1.1, size = 2)))
   th <- ggplot2::theme_minimal(base_size = 11) +
@@ -1572,9 +1580,23 @@ observe({
     ## left to Ecopath (EE) or the reference is not the Ecopath years.
     b_abs <- absolute && !is.null(r0) && nrow(r0) && is.finite(r0$B) && r0$B > 0 && rb$lab == "Ecopath years"
     if (b_abs) { b$value <- b$value * r0$B; if ("lo" %in% names(b)) { b$lo <- b$lo * r0$B; b$hi <- b$hi * r0$B } }
-    p <- ggplot2::ggplot(b, ggplot2::aes(Year, value, colour = series))
+    ## Without catchability: the same series x (FG biomass without q / with
+    ## q) of each year (fg_biomass_q_by_year.csv, 01), on the same scale
+    ## (relative to the with-q Ecopath B, or t/km2), so the gap shows.
+    bq <- .fg_q_year(.fg_now); has_noq <- FALSE; noq_txt <- NULL
+    if (!is.null(bq) && any(bq$q_applies & abs(bq$ratio_without_over_with - 1) > 1e-9)) {
+      bn <- merge(b[, c("Year", "value")], bq[, c("Year", "ratio_without_over_with")], by = "Year")
+      bn$value <- bn$value * bn$ratio_without_over_with; bn$series <- "Biomass without q"
+      b_plot <- rbind(b[, c("Year", "value", "series")], bn[, c("Year", "value", "series")]); has_noq <- TRUE
+      e_r <- if (length(base_yrs)) mean(bq$ratio_without_over_with[bq$Year %in% base_yrs], na.rm = TRUE) else NA
+      if (!is.null(r0) && nrow(r0) && is.finite(r0$B) && is.finite(e_r))
+        noq_txt <- paste0("without q: ", .fmt_b(r0$B * e_r), " t/km\u00b2 (\u00d7", formatC(e_r, format = "g", digits = 3), ")")
+    } else b_plot <- b[, c("Year", "value", "series")]
+    if (is.null(bq)) noq_txt <- "without q: rerun 01 (fg_biomass_q_by_year.csv)"
+    else if (!has_noq) noq_txt <- "q does not change this FG (not a MEDITS value, or q = 1)"
+    p <- ggplot2::ggplot(b_plot, ggplot2::aes(Year, value, colour = series))
     if ("lo" %in% names(b) && any(!is.na(b$lo)))
-      p <- p + ggplot2::geom_ribbon(ggplot2::aes(ymin = lo, ymax = hi), fill = cols[["Biomass"]], colour = NA, alpha = 0.2, na.rm = TRUE)
+      p <- p + ggplot2::geom_ribbon(data = b, ggplot2::aes(ymin = lo, ymax = hi), fill = cols[["Biomass"]], colour = NA, alpha = 0.2, na.rm = TRUE)
     e <- .ecopath_b(); r <- if (!is.null(e)) e[e$FG_num == .fg_now, ][1, ] else NULL
     sub <- if (!is.null(r) && nrow(r) && !is.na(r$FG_num))
       paste0("Ecopath B", if (!is.na(r$years)) paste0(" ", r$years), ": ",
@@ -1582,7 +1604,8 @@ observe({
     if (!is.null(r) && nrow(r) && is.finite(r$y0))   # the Ecopath baseline years
       p <- p + ggplot2::annotate("rect", xmin = r$y0 - 0.5, xmax = r$y1 + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
     if (absolute && !b_abs) sub <- paste0(sub, " - shown relative (no Ecopath B to scale to)")
-    p + ggplot2::geom_hline(yintercept = if (b_abs) r0$B else 1, colour = "grey70", linetype = "dashed") + .ln() + sc("Biomass") + th +
+    if (!is.null(noq_txt)) sub <- paste0(sub, "; ", noq_txt)
+    p + ggplot2::geom_hline(yintercept = if (b_abs) r0$B else 1, colour = "grey70", linetype = "dashed") + .ln() + sc(if (has_noq) c("Biomass", "Biomass without q") else "Biomass") + th +
       ggplot2::labs(title = "Biomass", subtitle = if (is.null(sub)) "Point the mouse at a year: the species shares of the FG biomass" else paste0(sub, "\nPoint the mouse at a year: the species shares of the FG biomass"), x = NULL,
                     y = if (b_abs) "t/km\u00b2" else if (rb$lab == "Ecopath years") "Relative to Ecopath years (= 1)" else paste0("Relative to ", sub("^first year with a value, ", "", rb$lab), " (= 1)"))
   } else {
@@ -1727,35 +1750,75 @@ output$fg_explore_tip_catch <- renderUI({
            empty = "No species detail for this FG and year.")
 })
 
-## Species of the FG: biomass with and without q, share of the FG
-## (fg_species_biomass_q.csv, 01)
+## Species biomass with and without q, share of the FG (Food web card):
+## fg_species_biomass_q.csv (01). Runs made before that file existed: the
+## Ecopath species biomass (biomass_proportion_by_species_fg.csv) with q,
+## and without q = B x q (catchability_q_by_species.csv) when q is known.
+.or <- function(a, b) if (is.null(a)) b else a
 .sp_q <- reactive({
   .ecosim_ts()
+  if (is.na(.out_dir)) return(NULL)
   f <- file.path(.out_dir, "biomass", "fg_species_biomass_q.csv")
-  if (is.na(.out_dir) || !file.exists(f)) return(NULL)
-  tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+  if (file.exists(f)) {
+    x <- tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+    if (!is.null(x)) { attr(x, "approx") <- FALSE; return(x) }
+  }
+  fp <- file.path(.out_dir, "biomass", "biomass_proportion_by_species_fg.csv")
+  if (!file.exists(fp)) return(NULL)
+  x <- tryCatch(data.table::fread(fp), error = function(e) NULL)
+  if (is.null(x) || !all(c("FG_num", "Species", "Biomass_t_km2") %in% names(x))) return(NULL)
+  x <- x[, .(FG_num, FG_name, Species, B_with_q_t_km2 = Biomass_t_km2, prop_with_q = if ("prop_sp_fg" %in% names(x)) prop_sp_fg else NA_real_)]
+  qf <- file.path(.out_dir, "biomass", "catchability_q_by_species.csv")
+  qt <- if (file.exists(qf)) tryCatch(unique(data.table::fread(qf)[, .(FG_num, Species = ScientificName, q = q_resolved)], by = c("FG_num", "Species")), error = function(e) NULL) else NULL
+  has_q <- !is.null(qt)
+  if (has_q) x <- merge(x, qt, by = c("FG_num", "Species"), all.x = TRUE) else x[, q := NA_real_]
+  x[, B_without_q_t_km2 := if (!has_q) NA_real_ else B_with_q_t_km2 * data.table::fifelse(is.finite(q), q, 1)]
+  x[, prop_without_q := { t <- sum(B_without_q_t_km2, na.rm = TRUE); if (t > 0) B_without_q_t_km2 / t else NA_real_ }, by = FG_num]
+  x <- as.data.frame(x[order(FG_num, -B_with_q_t_km2)])
+  attr(x, "approx") <- TRUE; attr(x, "has_q") <- has_q
+  x
 })
-.sp_q_fg <- function() {
-  x <- .sp_q(); fg <- suppressWarnings(as.numeric(input$fg_explore))
-  if (is.null(x) || !is.finite(fg)) return(NULL)
-  x[x$FG_num == fg, , drop = FALSE]
-}
-output$fg_sp_q_table <- renderTable({
-  x <- .sp_q_fg()
-  validate(need(!is.null(.sp_q()), "No fg_species_biomass_q.csv yet: run 01 biomass."),
-           need(!is.null(x) && nrow(x) > 0, "No species recorded for this FG."))
+observe({
+  x <- .sp_q(); req(x)
+  fgs <- unique(x[, c("FG_num", "FG_name")]); fgs <- fgs[order(fgs$FG_num), ]
+  cur <- isolate(input$fw_fg)
+  ch <- c("All FGs" = "", stats::setNames(as.character(fgs$FG_num), paste(fgs$FG_num, "-", fgs$FG_name)))
+  updateSelectInput(session, "fw_fg", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else "")
+})
+output$fw_sp_table <- renderTable({
+  x <- .sp_q()
+  validate(need(!is.null(x), "No species biomass yet: run 01 biomass (the results of the run shown in Results are used)."))
+  if (nzchar(.or(input$fw_fg, ""))) x <- x[x$FG_num == as.numeric(input$fw_fg), , drop = FALSE]
+  validate(need(nrow(x) > 0, "No species recorded for this FG."))
   sig <- function(v) ifelse(is.finite(v), formatC(signif(v, 3), format = "g"), "")
   pct <- function(v) ifelse(is.finite(v), sprintf("%.1f%%", 100 * v), "")
-  out <- data.frame(x$Species, ifelse(is.finite(x$q), formatC(x$q, format = "g", digits = 3), ""),
+  out <- data.frame(x$FG_num, x$FG_name, x$Species, ifelse(is.finite(x$q), formatC(x$q, format = "g", digits = 3), ""),
                     sig(x$B_with_q_t_km2), sig(x$B_without_q_t_km2), pct(x$prop_with_q), pct(x$prop_without_q))
-  names(out) <- c("Species", "q", "B with q (t/km\u00b2)", "B without q (t/km\u00b2)", "Share of FG, with q", "Share of FG, without q")
+  names(out) <- c("FG", "FG name", "Species", "q", "B with q (t/km²)", "B without q (t/km²)", "B proportion with q", "B proportion without q")
+  if (nzchar(.or(input$fw_fg, ""))) out <- out[, -(1:2)]
   out
-}, striped = TRUE, spacing = "xs", width = "100%", align = "lrrrrr")
-output$dl_fg_sp_q_one <- downloadHandler(
-  function() paste0("fg_", input$fg_explore, "_species_biomass_q.csv"),
-  function(file) { x <- .sp_q_fg(); data.table::fwrite(if (is.null(x)) data.frame() else x, file) })
-output$dl_fg_sp_q_all <- downloadHandler("fg_species_biomass_q.csv",
-  function(file) { x <- .sp_q(); data.table::fwrite(if (is.null(x)) data.frame() else x, file) })
+}, striped = TRUE, spacing = "xs", width = "100%")
+output$fw_sp_note <- renderUI({
+  x <- .sp_q(); if (is.null(x) || !isTRUE(attr(x, "approx"))) return(NULL)
+  tags$div(class = "alert alert-warning py-1 px-2 small mt-1",
+    if (isTRUE(attr(x, "has_q"))) "This run was made before 01 wrote fg_species_biomass_q.csv: B without q here is B with q × q for every species (also for FGs whose B is not a MEDITS value). Rerun 01 for the exact values."
+    else "This run has no catchability table (catchability_q_by_species.csv): only B with q is shown. Rerun 01 to get B without q.")
+})
+## The FG table (FG_SPECIES_FILE) with the biomass columns of the last run
+output$dl_fw_sp <- downloadHandler(
+  function() { f <- fg_path(); paste0(if (is.null(f) || is.na(f)) "FG_table" else tools::file_path_sans_ext(basename(f)), "_biomass_q.csv") },
+  function(file) {
+    x <- .sp_q(); f <- fg_path()
+    fg <- if (!is.null(f) && !is.na(f) && file.exists(f)) tryCatch(data.table::fread(f), error = function(e) NULL) else NULL
+    cols <- c("B_with_q_t_km2", "B_without_q_t_km2", "prop_with_q", "prop_without_q")
+    if (is.null(x)) { data.table::fwrite(if (is.null(fg)) data.frame() else fg, file); return(invisible()) }
+    b <- data.table::as.data.table(x)[, c("FG_num", "Species", if (!"q" %in% names(.or(fg, list()))) "q", cols), with = FALSE]
+    if (!is.null(fg) && all(c("FG_number", "species") %in% names(fg))) {
+      fg[, `.k` := paste(FG_number, trimws(species))]; b[, `.k` := paste(FG_num, Species)]
+      out <- merge(fg, b[, c(".k", setdiff(names(b), c(".k", "FG_num", "Species"))), with = FALSE], by = ".k", all.x = TRUE, sort = FALSE)[, `.k` := NULL]
+    } else out <- data.table::as.data.table(x)
+    data.table::fwrite(out, file, sep = if (!is.null(f) && !is.na(f) && file.exists(f) && grepl(";", readLines(f, n = 1))) ";" else ",")
+  })
 
 ## --- Survey hauls map (haul_density.rds, 01) --------------------------
 ## Each MEDITS haul with the density of the chosen FG (or one species), for

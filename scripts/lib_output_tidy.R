@@ -14,7 +14,7 @@
 WMED_TIDY_BLOCKS <- c("biomass", "fisheries", "pbqb-traits", "diet")
 WMED_TIDY_KEEP <- list(
   biomass = c("survey_fg_annual_index_regional_combined.csv", "species_density_regional_combined.csv", "species_biomass_by_gsa.csv",
-              "biomass_proportion_by_species_fg.csv", "fg_species_biomass_q.csv", "haul_density.rds", "FG_lookup.csv", "FG_Density_by_Stratum.csv",
+              "biomass_proportion_by_species_fg.csv", "fg_species_biomass_q.csv", "fg_biomass_q_by_year.csv", "haul_density.rds", "FG_lookup.csv", "FG_Density_by_Stratum.csv",
               "model_area_by_gsa.csv", "model_area_cells.csv", "strata_area_by_area.csv",
               "survey_index_cv_by_fg_year.csv", "fg_species_coverage.csv", "fg_species_biomass_needs_review.csv",
               "survey_outliers_flagged.csv", "survey_outlier_effect_by_fg_year.csv", "survey_area_coverage_by_year.csv",

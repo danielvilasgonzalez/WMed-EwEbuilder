@@ -4411,6 +4411,29 @@ tryCatch({
   setorder(.bq, FG_num, -B_with_q_t_km2)
   fwrite(.bq, file.path(csv_out_dir, "fg_species_biomass_q.csv"))
   message("Saved fg_species_biomass_q.csv (", nrow(.bq), " species): biomass with and without q and the share of each species in its FG.")
+  ## Per year: FG biomass without q / with q (page: biomass plot of the FG
+  ## explorer, with and without q). ratio_y = sum_s survey_without_q /
+  ## sum_s survey_with_q over the FG's survey species that year, for the
+  ## years whose biomass is a MEDITS value; 1 for other sources (acoustic
+  ## series, stock assessment, literature: q does not change the FG total).
+  ## Years without survey data take the FG's mean ratio.
+  if (exists("sp_index_combined_raw") && nrow(sp_index_combined_raw)) {
+    .ry <- merge(copy(sp_index_combined_raw), .qtab, by = c("FG_num", "ScientificName"), all.x = TRUE)
+    .ry[, wo := fifelse(Survey == "MEDITS" & is.finite(q) & q > 0, mean_density * q, mean_density)]
+    .ry <- .ry[, .(w = mean(mean_density, na.rm = TRUE), wo = mean(wo, na.rm = TRUE)), by = .(Year, FG_num, ScientificName)]
+    .ry <- .ry[, .(w = sum(w, na.rm = TRUE), wo = sum(wo, na.rm = TRUE)), by = .(FG_num, Year)]
+    .ry[, ratio := fifelse(w > 0, wo / w, NA_real_)]
+    .ry[, ratio_mean := { v <- sum(wo[w > 0]) / sum(w[w > 0]); if (is.finite(v)) v else NA_real_ }, by = FG_num]
+    .yall <- merge(fg_index_regional_combined[, .(FG_num, Year, B_with_q = mean_density, source = biomass_source)],
+                   .ry[, .(FG_num, Year, ratio, ratio_mean)], by = c("FG_num", "Year"), all.x = TRUE)
+    .yall[, ratio_mean := ratio_mean[is.finite(ratio_mean)][1], by = FG_num]
+    .yall[, q_applies := grepl("^MEDITS", source)]
+    .yall[, ratio_without_over_with := fifelse(!q_applies, 1, fifelse(is.finite(ratio), ratio, fifelse(is.finite(ratio_mean), ratio_mean, 1)))]
+    .yall[, B_without_q := B_with_q * ratio_without_over_with]
+    fwrite(.yall[order(FG_num, Year), .(FG_num, Year, B_with_q, B_without_q, ratio_without_over_with, q_applies, source)],
+           file.path(csv_out_dir, "fg_biomass_q_by_year.csv"))
+    message("Saved fg_biomass_q_by_year.csv: FG biomass with and without q per year.")
+  }
 }, error = function(e) message("[fg_species_biomass_q] not written - ", conditionMessage(e)))
 
 ## --- Species coverage per FG: how many of the FG file's species have

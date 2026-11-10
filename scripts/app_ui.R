@@ -4,7 +4,7 @@
 ## app_ui.R
 ## Created by: Daniel Vilas
 ##
-## The page's controls (cards 0-8): built once when the page renders; the last
+## The page's controls (cards 0-7): built once when the page renders; the last
 ## expression is the UI that the page shows.
 ## Kept in its own R file (not inside WMed-EwEbuilder.qmd) so it can be
 ## edited and tested like any script, and RStudio's Visual editor cannot
@@ -138,7 +138,7 @@ tagList(
       }
       $('.wm-card[id^=\"wm-card-\"]').each(function () {
         var li = add(ul, '#' + this.id, $(this).data('wmtitle'));
-        if (this.id === 'wm-card-8') {
+        if (this.id === 'wm-card-7') {
           var sub = $('<ul></ul>');
           add(sub, '#run_summary', 'Run summary');
           add(sub, '#wm-fg-explorer', 'FG explorer');
@@ -224,7 +224,15 @@ tagList(
     tags$div(class = "mb-2",
       downloadButton("dl_fg_template", "Download the FG table shown (template)", class = "btn-sm btn-outline-secondary"),
       tags$span(class = "wm-help ms-2", "Edit it (add species, merge or split FGs) and upload it back above.")),
-    uiOutput("fg_summary")),
+    uiOutput("fg_summary"),
+    tags$details(class = "mt-2", open = NA,
+      tags$summary(tags$strong("Biomass of each species in its FG, with and without catchability (q) - last run")),
+      div(class = "d-flex flex-wrap align-items-end gap-3 mt-2",
+          selectInput("fw_fg", "Functional group", choices = c("All FGs" = ""), width = "320px"),
+          tags$div(class = "mb-3", downloadButton("dl_fw_sp", "Download the FG table with biomass and q (csv)", class = "btn-sm btn-outline-secondary"))),
+      tags$div(style = "max-height: 380px; overflow: auto;", tableOutput("fw_sp_table")),
+      uiOutput("fw_sp_note"),
+      tags$div(class = "wm-help", "Ecopath years (the run shown in Results). B with q = the value the model uses (FG Ecopath B \u00d7 the species\u2019 share). B without q: for an FG whose B is a MEDITS value, the FG B scaled by the raw / q-corrected survey biomass and split by the raw shares; for other FGs (acoustic series, stock assessment, literature) q only changes the split, not the FG total. MEDIAS acoustic has no q. The download is the FG table with these columns added (B_with_q_t_km2, B_without_q_t_km2, prop_with_q, prop_without_q)."))),
 
   ## 3. Years ----------------------------------------------------------------
   .card("3", "Years", "\U0001F4C5",
@@ -275,13 +283,8 @@ tagList(
     downloadButton("dl_other_survey_template", "Download an empty template", class = "btn-sm btn-outline-secondary"),
     tags$div(class = "wm-help mt-2", "Runs with an uploaded survey go to their own output folder (\u2026__survey-own), so the default results are kept.")),
 
-  ## 5. Fisheries settings (02) -----------------------------------------------
-  .card("5", "Fisheries settings (02 fisheries)", "\U0001F3A3",
-    tags$div(class = "wm-help mb-2", "Catch, landings, discards and effort follow the years of card 3, for the GSAs of card 1."),
-    tags$div(class = "wm-help mb-2", tags$strong("FGs with high F"), " are reported, not changed: F above 1, or above the highest F in the stock assessments of the FG's species. Each one gets a recommendation in high_F_REVIEW.csv (Results), e.g. a trawl survey that hardly samples the group, missing catchability (card 4), or catch to check. Ecopath_B is left as it is.")),
-
-  ## 6. Environment (05) and Ecospace maps (05b) ---------------------------------
-  .card("6", "Environment and Ecospace settings (05 environment, 05b Ecospace maps)", "\U0001F30A",
+  ## 5. Environment (05) and Ecospace maps (05b) ---------------------------------
+  .card("5", "Environment and Ecospace settings (05 environment, 05b Ecospace maps)", "\U0001F30A",
     tags$div(class = "wm-help mb-2",
       "05 environment gets monthly temperature, salinity, NPP and phytoplankton from Copernicus Marine (Ecosim forcing and, with PHYTO_SOURCE = Copernicus in card 4, the Ecopath phytoplankton). ",
       "Its first run downloads several GB; later runs only fetch new years. It needs a Copernicus Marine account: ",
@@ -324,10 +327,10 @@ tagList(
         fluidRow(column(6, selectInput("esp_step", "Time step", c("Monthly" = "monthly", "Annual mean" = "annual"), width = "100%")),
                  column(6, selectInput("esp_scaling", "Values", c("Absolute (deg C, PSU, g C m-2 ...)" = "absolute",
                                                                   "Relative to the base year (= 1)" = "relative"), width = "100%"))),
-    tags$div(class = "wm-help", "Tick \u201c05b Ecospace maps\u201d in Scripts to run (card 7, Run), or use the link \u201conly 05b\u201d there. 05 must have run once.")))),
+    tags$div(class = "wm-help", "Tick \u201c05b Ecospace maps\u201d in Scripts to run (card 6, Run), or use the link \u201conly 05b\u201d there. 05 must have run once.")))),
 
-  ## 7. Run ----------------------------------------------------------------
-  .card("7", "Run", "\u25B6\ufe0f",
+  ## 6. Run ----------------------------------------------------------------
+  .card("6", "Run", "\u25B6\ufe0f",
     tags$div(class = "mb-2 pb-2 border-bottom",
       checkboxGroupInput("steps_chk", "Scripts to run (RUN_STEPS)", inline = TRUE,
                          choices = c("01 biomass" = 1, "02 fisheries" = 2, "03 P/B, Q/B" = 3, "04 diets" = 4, "05 environment" = 5,
@@ -338,7 +341,7 @@ tagList(
         actionLink("steps_after1", "02-04 + 06 (keep biomass)"), " \u00b7 ", actionLink("steps_only_diag", "only 06"), " \u00b7 ", actionLink("steps_only_env", "only 05 + 05b"), " \u00b7 ", actionLink("steps_only_esp", "only 05b (new base map)")),
       tags$small(class = "text-muted d-block mb-1",
         "The scripts run in this order; 06 diagnostics runs last, so it checks the outputs of all the others. ",
-        "The settings of each script are in the cards above (4 biomass, 5 fisheries, 6 environment and Ecospace); 03 and 04 have none of their own."),
+        "The settings of each script are in the cards above (4 biomass, 5 environment and Ecospace); 02 fisheries, 03 and 04 have none of their own (catch and effort follow the years of card 3 and the GSAs of card 1)."),
       uiOutput("steps_check")),
     fluidRow(
       column(5,
@@ -365,7 +368,7 @@ tagList(
 
   ## Results ---------------------------------------------------------------
   tags$div(id = "wm-results-card"),
-  .card("8", "Results", "\U0001F4CA",
+  .card("7", "Results", "\U0001F4CA",
     tags$div(class = "mb-2",
       selectInput("results_run", "Show the results of", choices = NULL, width = "100%"),
       tags$div(class = "wm-help", "Each set of inputs (area, years, FG table) has its own output folder: the default inputs (GSAs 1-12, Ecopath 1994-1996, Ecosim 1995-2023, FG_WMed_2026.csv) in the main output folder, any other in runs/<area>__EP<years>_TS<years>. Runs with different inputs never overwrite each other; the same inputs again replace their own results."),
@@ -379,6 +382,7 @@ tagList(
       downloadButton("dl_logs", "Logs of the last run (.zip)", class = "btn-sm btn-outline-secondary"),
       uiOutput("dl_info", inline = TRUE)),
     uiOutput("run_summary"),
+    tags$div(class = "wm-help mb-2", tags$strong("FGs with high F"), " are only reported, never changed: F above 1, or above the highest F in the stock assessments of the FG's species. Each one gets a recommendation in high_F_REVIEW.csv (e.g. a trawl survey that hardly samples the group, missing catchability (card 4), or catch to check)."),
     tags$details(class = "card mb-3", id = "wm-haul-map-box",
       tags$summary(class = "card-header py-2", tags$strong("Survey hauls map"), " - MEDITS density in each haul, by year: zoom, move and filter"),
       tags$div(class = "card-body py-2",
@@ -414,13 +418,6 @@ tagList(
                        hover = hoverOpts("fg_explore_hover_catch", delay = 80, delayType = "throttle", nullOutside = TRUE)),
             uiOutput("fg_explore_tip_catch")))),
         uiOutput("fg_explore_info"),
-        tags$details(class = "mt-2", open = NA,
-          tags$summary(tags$strong("Species of this FG: biomass with and without catchability (q), and share of the FG")),
-          tags$div(class = "d-flex gap-2 my-2 flex-wrap",
-            downloadButton("dl_fg_sp_q_one", "This FG (csv)", class = "btn-sm btn-outline-secondary"),
-            downloadButton("dl_fg_sp_q_all", "All FGs (csv)", class = "btn-sm btn-outline-secondary")),
-          tags$div(style = "max-height: 360px; overflow: auto;", tableOutput("fg_sp_q_table")),
-          tags$div(class = "wm-help", "Ecopath years. B with q = the value the model uses (FG Ecopath B \u00d7 the species\u2019 share). B without q: for an FG whose B is a MEDITS value, the FG B scaled by the raw / q-corrected survey biomass and split by the raw shares; for other FGs (acoustic series, stock assessment, literature) q only changes the split, not the FG total. MEDIAS acoustic has no q. File: biomass/fg_species_biomass_q.csv.")),
         tags$div(class = "wm-help", "Band: survey sampling uncertainty of the index (index x (1 \u00b1 1.96 CV)), for the FGs measured by MEDITS. Grey: the Ecopath baseline years; their B (t/km\u00b2) is in the subtitle and below, with its source. Point the mouse at a year of the biomass plot to see the share of each species in the FG biomass that year (survey species from MEDITS and MEDIAS; in the Ecopath years, and for groups without a survey split, the Ecopath baseline composition from all sources). On the catches plot, the species in that year\u2019s landings or discards (STECF FDI from 2014 for Spain, France and Italy; else GFCM landings, with NEI groups as reported)."))),
     tags$div(class = "wm-results", uiOutput("results"))),
 
