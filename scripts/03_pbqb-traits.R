@@ -3744,6 +3744,20 @@ traits_reconciled[, `:=`(
                                  a_lw * CommonLength ^ b_lw, NA_real_),
   Mean_lifespan_years  = Longevity
 )]
+## Biomass_contribution = the species' share of its FG's Ecopath B, the
+## same prop_sp_fg as FG_spp (01: survey density, or for groups the surveys
+## don't sample, the literature species biomass / relative abundance / even
+## split of 01b), so unsurveyed FGs get their species shares too. Species
+## without a row there keep the survey ratio above.
+.bp_f <- file.path(BIOMASS_CSV_DIR, "biomass_proportion_by_species_fg.csv")
+if (file.exists(.bp_f)) {
+  .bp <- unique(fread(.bp_f)[, .(FG = as.character(FG_num), Species, prop_b = suppressWarnings(as.numeric(prop_sp_fg)))], by = c("FG", "Species"))
+  traits_reconciled <- merge(traits_reconciled, .bp, by = c("FG", "Species"), all.x = TRUE)
+  traits_reconciled[is.finite(prop_b), Biomass_contribution := prop_b]
+  traits_reconciled[, prop_b := NULL]
+  message("[traits] Biomass_contribution from biomass_proportion_by_species_fg.csv (prop_sp_fg) for ",
+          traits_reconciled[!is.na(Biomass_contribution), .N], " species.")
+}
 traits_reconciled[, c("dispatch_group", "MaxLength", "CommonLength", "Longevity", "Vulnerability",
                       "a_lw", "b_lw", "Biomass", "Yield", "FG_Biomass_total", "FG_Yield_total") := NULL]
 traits_reconciled[, in_fg_master := Species %in% species_df$Species]

@@ -1285,6 +1285,10 @@ load_manual_cited_biomass_group <- function(csv_path, taxon_keywords, label, rev
   ## where this actually gets applied to prop_sp_fg.
   col_sp <- resolve_iccat_col(names(raw), c("Species", "Species_name", "ScientificName", "Scientific_name"))
   if (!is.na(col_sp)) setnames(raw, col_sp, "Species") else raw[, Species := NA_character_]
+  ## a blank Species cell is "no species-level figure", not a species
+  ## called "": otherwise the FG counts as having literature species rows
+  ## and all its real species get prop_sp_fg = 0 in FG_spp_Ecopath
+  raw[, Species := trimws(as.character(Species))][!nzchar(Species) | Species %in% c("NA", "na"), Species := NA_character_]
   
   ## --- temporal-baseline mismatch flag (optional Collection_year
   ## column - see col_aliases$collection_year comment above). Flags,

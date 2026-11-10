@@ -3995,7 +3995,10 @@ if (exists("species_lit_biomass") && nrow(species_lit_biomass) > 0) {
   species_lit_biomass_by_fg[, fg_lit_total := sum(species_biomass_t), by = FG_num]
   FG_spp_Ecopath <- merge(FG_spp_Ecopath, species_lit_biomass_by_fg[, .(FG_num, Species, species_biomass_t, fg_lit_total)],
                           by = c("FG_num", "Species"), all.x = TRUE)
-  lit_fg_nums <- unique(species_lit_biomass_by_fg$FG_num)
+  ## only FGs where the literature species are species of the FG (a
+  ## literature row naming no FG species must not zero the whole FG)
+  lit_fg_nums <- unique(FG_spp_Ecopath[!is.na(species_biomass_t) & species_biomass_t > 0, FG_num])
+  FG_spp_Ecopath[, fg_lit_total := sum(species_biomass_t, na.rm = TRUE), by = FG_num]   # over the FG's own species
   in_lit_fg <- FG_spp_Ecopath$FG_num %in% lit_fg_nums
   ## Within an FG that has literature species rows, a species named in
   ## that CSV gets its real share; a species in the SAME FG with no row
@@ -4516,7 +4519,7 @@ if (nrow(needs_review) > 0) {
 ## before those.
 write_native_sheets_csv(
   sheets  = list(
-    FG_spp_Ecopath = FG_spp_Ecopath,
+    FG_spp_Ecopath = FG_spp_Ecopath[, setdiff(names(FG_spp_Ecopath), "checked_on"), with = FALSE],
     FG_lookup      = FG_lookup
   ),
   out_dir = csv_out_dir
@@ -4531,8 +4534,11 @@ write_native_sheets_csv(
 ## which stay CSV-only. Density/prop_sp_fg are kept alongside the
 ## taxonomy columns since they're already computed and useful context,
 ## not because the final spec requires them.
+## Without checked_on (date of the last WoRMS/FishBase look-up of the
+## species, internal) and Ecopath_B_Biomass (the FG's Ecopath B repeated
+## on every species row: Biomass_t_km2 = prop_sp_fg x that value).
 upsert_workbook_sheets(
-  list(FG_spp = FG_spp_Ecopath),
+  list(FG_spp = FG_spp_Ecopath[, setdiff(names(FG_spp_Ecopath), c("checked_on", "Ecopath_B_Biomass")), with = FALSE]),
   file.path(out_dir, "ecopath_ecosim_inputs.xlsx")
 )
 
