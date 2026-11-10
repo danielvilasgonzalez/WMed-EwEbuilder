@@ -168,6 +168,8 @@ tagList(
   .card("0", "Folders on this computer", "\U0001F4C1", uiOutput("folders"),
     tags$div(class = "mt-2",
       actionButton("setup_check", "Check setup", icon = icon("stethoscope"), class = "btn-sm btn-outline-secondary"),
+      actionButton("cm_install", "Install the Copernicus tool", icon = icon("download"), class = "btn-sm btn-outline-secondary ms-1",
+                   title = "Only for 05 environment: installs copernicusmarine in its own Python environment (~/.copernicusmarine-venv)"),
       tags$small(class = "text-muted ms-2", "folders, pCloud, R packages, internet and the Copernicus login - run it on a new computer first"),
       uiOutput("setup_report"))),
 

@@ -306,7 +306,13 @@ output$esp_view_plot_ui <- renderUI({
   plot(tt, iv$mean, type = "l", col = "grey30", xlab = "", ylab = "map mean", las = 1, cex.axis = 0.8)
   abline(v = tt[k], col = "firebrick", lwd = 2)
 }
-output$esp_view_plot <- renderPlot(.esp_draw())
+output$esp_view_plot <- renderPlot({
+  tryCatch(.esp_draw(), error = function(e) {
+    if (!grepl("margins too large|invalid graphics state|plot region too large", conditionMessage(e))) stop(e)
+    graphics::par(mar = c(0, 0, 0, 0)); graphics::plot.new()
+    graphics::text(0.5, 0.5, "Too little space for these maps: make the window wider,\nor show one driver or one month.", cex = 1.1)
+  })
+})
 .esp_fig_size <- function() {
   v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year")
   if (identical(v, "all")) (if (yr) c(1300, 12 * 125 + 120) else c(1300, 700)) else if (yr && !identical(v, "depth")) c(1300, 860) else c(1100, 640)
@@ -1262,11 +1268,25 @@ output$dl_info <- renderUI({
     suppressMessages(ensure_copernicusmarine_cli(auto_install = FALSE))
   }, error = function(e) FALSE)
   out[[7]] <- row("Copernicus tool (05 only)", isTRUE(cli), if (isTRUE(cli)) Sys.which("copernicusmarine") else "copernicusmarine not found",
-                  "Only for 05 environment: install Python, then 'pip install copernicusmarine'.")
+                  "Only needed for 05 environment (everything else runs without it). Press 'Install the Copernicus tool' below: it puts copernicusmarine in its own Python environment (~/.copernicusmarine-venv). Needs Python 3 (on a Mac: run 'xcode-select --install' in the Terminal if it is missing).")
   out[[8]] <- row("Copernicus login (05 only)", .cm_has_login(), if (.cm_has_login()) "saved on this computer" else "not saved",
                   "Use 'enter or change the login' in card 5 (environment and Ecospace).")
   do.call(rbind, out)
 }
+## Install copernicusmarine into ~/.copernicusmarine-venv (python3 -m venv +
+## pip), from the setup check
+observeEvent(input$cm_install, {
+  ok <- withProgress(message = "Installing the Copernicus tool (1-3 min)...", value = 0.3, {
+    tryCatch({
+      source(file.path(.git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"), local = TRUE)
+      old <- options(wmed.cmems_auto_install = TRUE); on.exit(options(old))
+      isTRUE(ensure_copernicusmarine_cli(auto_install = TRUE))
+    }, error = function(e) FALSE)
+  })
+  showNotification(if (ok) paste("copernicusmarine is installed:", Sys.which("copernicusmarine"))
+                   else "Could not install copernicusmarine (is Python 3 installed? On a Mac: 'xcode-select --install' in the Terminal). The rest of the pipeline works without it.",
+                   type = if (ok) "message" else "error", duration = 12)
+})
 observeEvent(input$setup_check, {
   output$setup_report <- renderUI({
     x <- .setup_items()

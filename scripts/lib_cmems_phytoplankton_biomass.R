@@ -130,9 +130,32 @@ CMEMS_VENV_DIR <- Sys.getenv("COPERNICUSMARINE_VENV", unset = path.expand("~/.co
   TRUE
 }
 
+## R started from RStudio or the Finder does not see the PATH of the
+## terminal, so a copernicusmarine installed with conda, pyenv, Homebrew or
+## "pip install --user" is often not found. Look in the usual places and
+## add the first folder that has it to PATH for this R session.
+.cmems_find_known <- function() {
+  h <- path.expand("~")
+  cand <- c(file.path(CMEMS_VENV_DIR, "bin"),
+            file.path(h, c("anaconda3", "miniconda3", "miniforge3", "mambaforge", "opt/anaconda3", "opt/miniconda3", ".pyenv/shims", ".local/bin"), "bin"),
+            file.path(h, ".pyenv", "shims"), file.path(h, ".local", "bin"),
+            Sys.glob(file.path(h, c("anaconda3", "miniconda3", "miniforge3", "opt/anaconda3"), "envs", "*", "bin")),
+            Sys.glob(file.path(h, "Library", "Python", "*", "bin")),
+            Sys.glob(file.path(h, ".pyenv", "versions", "*", "bin")),
+            "/opt/homebrew/bin", "/usr/local/bin", "/opt/anaconda3/bin", "/opt/miniconda3/bin")
+  exe <- if (.Platform$OS.type == "windows") c("copernicusmarine.exe", "copernicusmarine") else "copernicusmarine"
+  for (d in unique(cand)) for (e in exe) if (file.exists(file.path(d, e))) {
+    Sys.setenv(PATH = paste(d, Sys.getenv("PATH"), sep = .Platform$path.sep))
+    message("[CMEMS diag] CLI check: found copernicusmarine in '", d, "' (added to PATH for this R session).")
+    return(TRUE)
+  }
+  FALSE
+}
+
 ensure_copernicusmarine_cli <- function(auto_install = TRUE) {
   if (Sys.which("copernicusmarine") == "") .cmems_windows_scripts()
   if (Sys.which("copernicusmarine") == "") .cmems_use_venv_if_present()
+  if (Sys.which("copernicusmarine") == "") .cmems_find_known()
   ## A run started from the page (Rscript, not interactive) never installs
   ## Python packages itself: CMEMS is only a fallback / cross-check here.
   if (!interactive() && !isTRUE(getOption("wmed.cmems_auto_install", FALSE))) auto_install <- FALSE
