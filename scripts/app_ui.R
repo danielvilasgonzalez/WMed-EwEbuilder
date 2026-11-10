@@ -227,14 +227,13 @@ tagList(
       downloadButton("dl_fg_template", "Download the FG table shown (template)", class = "btn-sm btn-outline-secondary"),
       tags$span(class = "wm-help ms-2", "Edit it (add species, merge or split FGs) and upload it back above.")),
     uiOutput("fg_summary"),
-    tags$details(class = "mt-2", open = NA,
-      tags$summary(tags$strong("Biomass of each species in its FG, with and without catchability (q) - last run")),
-      div(class = "d-flex flex-wrap align-items-end gap-3 mt-2",
-          selectInput("fw_fg", "Functional group", choices = c("All FGs" = ""), width = "320px"),
-          tags$div(class = "mb-3", downloadButton("dl_fw_sp", "Download the FG table with biomass and q (csv)", class = "btn-sm btn-outline-secondary"))),
-      tags$div(style = "max-height: 380px; overflow: auto;", tableOutput("fw_sp_table")),
-      uiOutput("fw_sp_note"),
-      tags$div(class = "wm-help", "Ecopath years (the run shown in Results). B with q = the value the model uses (FG Ecopath B \u00d7 the species\u2019 share). B without q: for an FG whose B is a MEDITS value, the FG B scaled by the raw / q-corrected survey biomass and split by the raw shares; for other FGs (acoustic series, stock assessment, literature) q only changes the split, not the FG total. MEDIAS acoustic has no q. The download is the FG table with these columns added (B_with_q_t_km2, B_without_q_t_km2, prop_with_q, prop_without_q)."))),
+    div(class = "d-flex flex-wrap align-items-end gap-3 mt-3",
+        radioButtons("fw_view", "Show", inline = TRUE, choices = c("By FG" = "fg", "By species" = "sp"), selected = "fg"),
+        selectInput("fw_fg", "Functional group", choices = c("All FGs" = ""), width = "300px"),
+        textInput("fw_search", "Search (species or FG name)", width = "240px", placeholder = "e.g. Merluccius, hake"),
+        tags$div(class = "mb-3", downloadButton("dl_fw_sp", "Download the FG table with biomass and q (csv)", class = "btn-sm btn-outline-secondary"))),
+    uiOutput("fg_table_view"),
+    tags$div(class = "wm-help", "Biomass of the last run (Ecopath years). By FG: B with q = the FG's Ecopath B; B without q = the sum of its species without catchability. By species: q, B with and without q and the species' share of its FG (B proportion). B without q: for an FG whose B is a MEDITS value, the FG B scaled by the raw / q-corrected survey biomass and split by the raw shares; for other FGs (acoustic series, stock assessment, literature) q only changes the split, not the FG total. MEDIAS acoustic has no q. The download is the FG table with these columns added (B_with_q_t_km2, B_without_q_t_km2, prop_with_q, prop_without_q).")),
 
   ## 3. Years ----------------------------------------------------------------
   .card("3", "Years", "\U0001F4C5",
@@ -347,7 +346,7 @@ tagList(
       uiOutput("steps_check")),
     fluidRow(
       column(5,
-        actionButton("run", "Run pipeline", class = "btn-primary", icon = icon("play")),
+        actionButton("run", "Run pipeline", class = "btn-primary btn-lg", icon = icon("play")),
         actionButton("stop", "Stop", class = "btn-outline-danger ms-1", icon = icon("stop")),
         tags$div(class = "alert alert-secondary py-1 px-2 mt-2 mb-2 small",
           tags$strong("Run time: "), "01-04 + 06 about 10-30 min; the first run on a new computer up to about 70 min ",
@@ -522,6 +521,33 @@ tagList(
   if (window.Shiny && Shiny.addCustomMessageHandler) reg(); else $(document).on('shiny:connected', reg);
 })();
 )---")),
+  ## Run status that stays in view (bottom right): where the Run button is,
+  ## and while a run goes, which script and how long; click = go to the
+  ## Run card (or to the Results when finished).
+  uiOutput("run_pill"),
+  tags$style(HTML("
+    #run_pill { position: fixed; right: 18px; bottom: 18px; z-index: 1060; }
+    .wm-pill { display: inline-flex; align-items: center; gap: .55rem; padding: .6rem 1.05rem; border-radius: 999px; font-weight: 600;
+               box-shadow: 0 4px 14px rgba(16,42,67,.28); cursor: pointer; text-decoration: none !important; font-size: .98rem; }
+    .wm-pill-idle { background: #0d6efd; color: #fff !important; }
+    .wm-pill-running { background: #0b4f6c; color: #fff !important; }
+    .wm-pill-done { background: #198754; color: #fff !important; }
+    .wm-pill-error { background: #dc3545; color: #fff !important; }
+    .wm-pill .spinner-border { width: 1.05rem; height: 1.05rem; border-width: .17em; }
+    @keyframes wmPulse { 0% { box-shadow: 0 0 0 0 rgba(13,110,253,.7); } 70% { box-shadow: 0 0 0 18px rgba(13,110,253,0); } 100% { box-shadow: 0 0 0 0 rgba(13,110,253,0); } }
+    .wm-pulse { animation: wmPulse 1.2s ease-out 3; }
+  ")),
+  tags$script(HTML("
+    $(document).on('click', '.wm-pill', function (e) {
+      e.preventDefault();
+      var t = document.getElementById($(this).data('target') || 'wm-card-6');
+      if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (($(this).data('target') || 'wm-card-6') === 'wm-card-6') {
+        var b = document.getElementById('run');
+        if (b) { b.classList.remove('wm-pulse'); void b.offsetWidth; b.classList.add('wm-pulse'); }
+      }
+    });
+  ")),
   tags$script(type = "application/json", id = "wm-gsa-geojson", HTML(.gsa_geojson)),
   tags$script(type = "application/json", id = "wm-land-geojson", HTML(.land_geojson)),
   tags$script(HTML(r"---(

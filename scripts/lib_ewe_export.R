@@ -72,8 +72,60 @@ ewe_stanza_groups <- function(fg) {
            "producer", "consumer"))
 }
 
+## Fleet costs for EwE's "Definition of fleets" (% of the value of the
+## catch): Fixed cost = capital costs (depreciation, interest);
+## Effort-related cost = intermediate consumption (energy, repair and
+## maintenance, other variable and non-variable costs); Sailing-related
+## cost = crew / labour costs; Profit = net profit margin. One row per
+## fleet type (regex on the fleet name, e.g. "Bottom trawls"), optionally
+## per Country ("*" = any); the first matching row is used; a fleet with
+## no row keeps EwE's defaults (0 / 40 / 40 / 20). The file
+## data/fisheries/fleet_costs_ewe.csv (Country, Fleet_pattern,
+## Fixed_cost_pct, Effort_cost_pct, Sailing_cost_pct, Profit_pct,
+## Reference) replaces the built-in rows below.
+## Built-in rows: STECF (2023) Annual Economic Report on the EU fishing
+## fleet (STECF 23-07), section 3.5 Mediterranean Sea, 2021:
+##   small-scale coastal fleet: GVA/revenue 65%, gross profit margin 23%,
+##   net profit margin 10.7% -> labour 42, capital 12.3, intermediate 35;
+##   whole Mediterranean fleet: revenue EUR 1.49 bn, GVA 0.89 bn, gross
+##   profit 389 M, net profit 191 M -> intermediate 40.3, labour 33.6,
+##   capital 13.3, net profit 12.8 (used for the large-scale gears: the
+##   report gives no cost split by gear for the Mediterranean).
+EWE_FLEET_COSTS_DEFAULT <- data.frame(
+  Country = "*",
+  Fleet_pattern = c("Recreational", "Artisanal|small.scale", "."),
+  Fixed_cost_pct = c(0, 12.3, 13.3), Effort_cost_pct = c(40, 35.0, 40.3),
+  Sailing_cost_pct = c(40, 42.0, 33.6), Profit_pct = c(20, 10.7, 12.8),
+  Reference = c("EwE default (no cost data for recreational fishing)",
+                "STECF 2023 AER (STECF 23-07), Mediterranean small-scale coastal fleet 2021: GVA/revenue 65%, gross profit margin 23%, net profit margin 10.7%",
+                "STECF 2023 AER (STECF 23-07), whole Mediterranean fleet 2021: revenue EUR 1.49 bn, GVA 0.89 bn, gross profit 389 M, net profit 191 M"),
+  stringsAsFactors = FALSE)
+
+ewe_fleet_costs <- function(fleets, cost_file = NULL) {
+  tab <- EWE_FLEET_COSTS_DEFAULT
+  if (!is.null(cost_file) && !is.na(cost_file) && file.exists(cost_file)) {
+    x <- tryCatch(utils::read.csv(cost_file, stringsAsFactors = FALSE, check.names = FALSE, sep = if (grepl(";", readLines(cost_file, n = 1))) ";" else ","),
+                  error = function(e) NULL)
+    if (!is.null(x) && all(c("Fleet_pattern", "Fixed_cost_pct", "Effort_cost_pct", "Sailing_cost_pct", "Profit_pct") %in% names(x))) {
+      if (!"Country" %in% names(x)) x$Country <- "*"
+      if (!"Reference" %in% names(x)) x$Reference <- basename(cost_file)
+      tab <- x[, names(EWE_FLEET_COSTS_DEFAULT)]
+    }
+  }
+  ctry <- trimws(sub(" - .*$", "", fleets)); ftyp <- trimws(sub("^[^-]* - ", "", fleets))
+  out <- t(vapply(seq_along(fleets), function(i) {
+    k <- which((tab$Country %in% c("*", "", NA) | tolower(tab$Country) == tolower(ctry[i])) &
+               vapply(tab$Fleet_pattern, function(p) grepl(p, ftyp[i], ignore.case = TRUE), logical(1)))
+    if (!length(k)) return(c(0, 40, 40, 20, NA))
+    k <- k[order(!(tolower(tab$Country[k]) == tolower(ctry[i])))][1]   # a country row before a "*" row
+    c(as.numeric(tab[k, 3:6]), k)
+  }, numeric(5)))
+  data.frame(Fleet = fleets, Fixed = out[, 1], Effort = out[, 2], Sailing = out[, 3], Profit = out[, 4],
+             Reference = ifelse(is.na(out[, 5]), "EwE default", tab$Reference[out[, 5]]), stringsAsFactors = FALSE)
+}
+
 ## Build the EwE tables (a named list of data.frames, all columns text)
-ewe_tables <- function(wb_path, dec = ",") {
+ewe_tables <- function(wb_path, dec = ",", fleet_cost_file = NULL) {
   rd <- function(s) tryCatch(openxlsx::read.xlsx(wb_path, sheet = s, check.names = FALSE, sep.names = " "), error = function(e) NULL)
   fg <- rd("FGs"); if (is.null(fg)) stop("no FGs sheet in ", wb_path)
   fg <- fg[order(fg$FG_num), c("FG_num", "FG_name")]
@@ -149,11 +201,13 @@ ewe_tables <- function(wb_path, dec = ",") {
   out$Landings <- catch_tab(ll)
   out$Discards <- catch_tab(di)
 
-  ## Definition of fleets (EwE's default costs)
-  k <- length(fleets)
-  out$Definition_of_fleets <- setNames(data.frame(as.character(seq_len(k)), fleets, .ewe_fix(rep(0, k), 3, dec), .ewe_fix(rep(40, k), 2, dec),
-                                                  .ewe_fix(rep(40, k), 2, dec), .ewe_fix(rep(20, k), 3, dec), .ewe_fix(rep(100, k), 3, dec), stringsAsFactors = FALSE),
+  ## Definition of fleets: costs per fleet from the literature (ewe_fleet_costs)
+  k <- length(fleets); fc <- ewe_fleet_costs(fleets, fleet_cost_file)
+  out$Definition_of_fleets <- setNames(data.frame(as.character(seq_len(k)), fleets, .ewe_fix(fc$Fixed, 3, dec), .ewe_fix(fc$Effort, 2, dec),
+                                                  .ewe_fix(fc$Sailing, 2, dec), .ewe_fix(fc$Profit, 3, dec),
+                                                  .ewe_fix(fc$Fixed + fc$Effort + fc$Sailing + fc$Profit, 3, dec), stringsAsFactors = FALSE),
                                        c("", "Name", "Fixed cost (%)", "EffortCost (%)", "Cost of sailing (%)", "Profit (%)", "Total value (%)"))
+  attr(out, "fleet_cost_refs") <- fc
 
   ## Pedigree (index 0-1 of each input; -1 = not set)
   pg <- function(col) { v <- g(pe, col); ifelse(is.finite(v), .ewe_num(v, dec), "-1") }
@@ -202,20 +256,21 @@ ewe_tables <- function(wb_path, dec = ",") {
 
 ## Write the tables: format "csv" (one file per table), "xlsx" (one workbook,
 ## a sheet per table) or "both". Returns the paths written.
-write_ewe_tables <- function(wb_path, out_dir, model_name = "Western_Mediterranean_Sea", format = c("csv", "xlsx", "both"), dec = ",") {
+write_ewe_tables <- function(wb_path, out_dir, model_name = "Western_Mediterranean_Sea", format = c("csv", "xlsx", "both"), dec = ",",
+                             fleet_cost_file = NULL) {
   format <- match.arg(format)
-  tabs <- ewe_tables(wb_path, dec = if (format == "xlsx") "." else dec)
+  tabs <- ewe_tables(wb_path, dec = if (format == "xlsx") "." else dec, fleet_cost_file = fleet_cost_file)
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   model_name <- gsub("[^A-Za-z0-9_.-]+", "_", model_name)
   paths <- character(0)
   if (format %in% c("csv", "both")) {
-    tc <- if (format == "both" && dec != ".") ewe_tables(wb_path, dec = dec) else tabs
+    tc <- if (format == "both" && dec != ".") ewe_tables(wb_path, dec = dec, fleet_cost_file = fleet_cost_file) else tabs
     for (nm in names(tc)) {
       f <- file.path(out_dir, paste0(model_name, "-", nm, ".csv")); .ewe_write_csv(tc[[nm]], f); paths <- c(paths, f)
     }
   }
   if (format %in% c("xlsx", "both")) {
-    tx <- if (format == "both") ewe_tables(wb_path, dec = ".") else tabs
+    tx <- if (format == "both") ewe_tables(wb_path, dec = ".", fleet_cost_file = fleet_cost_file) else tabs
     wb <- openxlsx::createWorkbook()
     for (nm in names(tx)) {
       sh <- gsub("_", " ", nm); openxlsx::addWorksheet(wb, sh)
@@ -226,6 +281,8 @@ write_ewe_tables <- function(wb_path, out_dir, model_name = "Western_Mediterrane
       openxlsx::writeData(wb, sh, x, keepNA = FALSE)
       openxlsx::setColWidths(wb, sh, cols = 2, widths = 34)
     }
+    fr <- attr(tx, "fleet_cost_refs")
+    if (!is.null(fr)) { openxlsx::addWorksheet(wb, "Fleet cost sources"); openxlsx::writeData(wb, "Fleet cost sources", fr) }
     f <- file.path(out_dir, paste0(model_name, "-EwE_input.xlsx"))
     openxlsx::saveWorkbook(wb, f, overwrite = TRUE); paths <- c(paths, f)
   }

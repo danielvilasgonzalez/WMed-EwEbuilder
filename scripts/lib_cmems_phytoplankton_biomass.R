@@ -96,9 +96,11 @@
 ## environment variable if it lives elsewhere.
 CMEMS_VENV_DIR <- Sys.getenv("COPERNICUSMARINE_VENV", unset = path.expand("~/.copernicusmarine-venv"))
 
+## the venv's program folder: bin/ (Mac, Linux) or Scripts\ (Windows)
+.cmems_venv_bin <- function() file.path(CMEMS_VENV_DIR, if (.Platform$OS.type == "windows") "Scripts" else "bin")
 .cmems_use_venv_if_present <- function() {
-  venv_bin <- file.path(CMEMS_VENV_DIR, "bin")
-  if (file.exists(file.path(venv_bin, "copernicusmarine"))) {
+  venv_bin <- .cmems_venv_bin()
+  if (file.exists(file.path(venv_bin, "copernicusmarine")) || file.exists(file.path(venv_bin, "copernicusmarine.exe"))) {
     Sys.setenv(PATH = paste(venv_bin, Sys.getenv("PATH"), sep = .Platform$path.sep))
     message("[CMEMS diag] CLI check: using the copernicusmarine virtualenv at '", CMEMS_VENV_DIR,
             "' (added its bin/ to PATH for this R session).")
@@ -136,7 +138,13 @@ CMEMS_VENV_DIR <- Sys.getenv("COPERNICUSMARINE_VENV", unset = path.expand("~/.co
 ## add the first folder that has it to PATH for this R session.
 .cmems_find_known <- function() {
   h <- path.expand("~")
-  cand <- c(file.path(CMEMS_VENV_DIR, "bin"),
+  win <- .Platform$OS.type == "windows"
+  la <- Sys.getenv("LOCALAPPDATA"); up <- Sys.getenv("USERPROFILE")
+  cand <- c(.cmems_venv_bin(),
+            if (win) c(Sys.glob(file.path(la, "Programs", "Python", "*", "Scripts")), Sys.glob(file.path(Sys.getenv("APPDATA"), "Python", "*", "Scripts")),
+                       file.path(up, c("anaconda3", "miniconda3", "miniforge3"), "Scripts"),
+                       Sys.glob(file.path(up, c("anaconda3", "miniconda3", "miniforge3"), "envs", "*", "Scripts")),
+                       file.path(la, c("anaconda3", "miniconda3"), "Scripts")),
             file.path(h, c("anaconda3", "miniconda3", "miniforge3", "mambaforge", "opt/anaconda3", "opt/miniconda3", ".pyenv/shims", ".local/bin"), "bin"),
             file.path(h, ".pyenv", "shims"), file.path(h, ".local", "bin"),
             Sys.glob(file.path(h, c("anaconda3", "miniconda3", "miniforge3", "opt/anaconda3"), "envs", "*", "bin")),
@@ -165,12 +173,13 @@ ensure_copernicusmarine_cli <- function(auto_install = TRUE) {
   }
   if (auto_install) {
     ## Preferred install route: a dedicated venv (works under Homebrew/PEP 668).
-    py_venv <- if (.cmems_which("python3") != "") "python3" else NA
+    py_venv <- if (.cmems_which("python3") != "") "python3" else if (.cmems_which("python") != "") "python" else
+      if (.Platform$OS.type == "windows" && .cmems_which("py") != "") "py" else NA
     if (!is.na(py_venv)) {
       message("[CMEMS diag] CLI check: not found - creating a virtualenv at '", CMEMS_VENV_DIR,
               "' and installing copernicusmarine into it...")
       venv_out <- system2(py_venv, c("-m", "venv", shQuote(CMEMS_VENV_DIR)), stdout = TRUE, stderr = TRUE)
-      venv_pip <- file.path(CMEMS_VENV_DIR, "bin", "pip")
+      venv_pip <- file.path(.cmems_venv_bin(), if (.Platform$OS.type == "windows") "pip.exe" else "pip")
       if (file.exists(venv_pip)) {
         pip_out <- system2(venv_pip, c("install", "copernicusmarine"), stdout = TRUE, stderr = TRUE)
         if (.cmems_use_venv_if_present()) {

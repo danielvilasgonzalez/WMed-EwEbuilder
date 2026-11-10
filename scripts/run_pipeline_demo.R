@@ -308,7 +308,8 @@ tryCatch({
   source(file.path(git_dir, "scripts", "lib_ewe_export.R"))
   .wbp <- file.path(out_dir, "ecopath_ecosim_inputs.xlsx")
   if (file.exists(.wbp)) {
-    .ew <- write_ewe_tables(.wbp, file.path(out_dir, "ewe_import"), EWE_MODEL_NAME, EWE_EXPORT_FORMAT, EWE_DECIMAL)
+    .fc <- if (exists("pcloud_dir") && !is.na(pcloud_dir)) file.path(pcloud_dir, "data", "fisheries", "fleet_costs_ewe.csv") else NULL
+    .ew <- write_ewe_tables(.wbp, file.path(out_dir, "ewe_import"), EWE_MODEL_NAME, EWE_EXPORT_FORMAT, EWE_DECIMAL, fleet_cost_file = .fc)
     message("[EwE import] ", length(.ew), " file(s) in ", file.path(out_dir, "ewe_import"), ": ", paste(basename(.ew), collapse = ", "))
   }
 }, error = function(e) message("[EwE import] tables not written: ", conditionMessage(e)))

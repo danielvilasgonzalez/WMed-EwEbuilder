@@ -377,9 +377,11 @@ fg_table <- reactive({
                                                          ". Columns found: ", paste(names(x), collapse = ", "))))
   list(data = x, path = f)
 })
-output$fg_summary <- renderUI({
+## Card 2: the FG file summary (stats, checks) and one table, by FG or by
+## species (.fg_sum()$table / the species table), filtered by FG and search.
+.fg_sum <- reactive({
   ft <- fg_table()
-  if (!is.null(ft$error)) return(tags$div(class = "alert alert-danger py-2 small mb-0", ft$error))
+  if (!is.null(ft$error)) return(list(top = tags$div(class = "alert alert-danger py-2 small mb-0", ft$error), table = NULL))
   x <- data.table::copy(ft$data)
   has_group <- "FG_group" %in% names(x)
   ## q: the FG file's own q column; where empty, the q the last run used
@@ -467,7 +469,19 @@ output$fg_summary <- renderUI({
     fg[is.na(B_source), B_source := "No biomass"]
   }
   .fmt_b2 <- function(v) ifelse(!is.finite(v), "-", ifelse(v >= 0.01, formatC(v, format = "fg", digits = 3), formatC(v, format = "e", digits = 2)))
-  rows <- lapply(seq_len(nrow(fg)), function(i)
+  ## B without q of the FG = sum of its species without q (last run)
+  .spq <- .sp_q()
+  has_bq <- !is.null(.spq) && "B_without_q_t_km2" %in% names(.spq) && any(is.finite(.spq$B_without_q_t_km2))
+  if (has_bq) {
+    .bq <- data.table::as.data.table(.spq)[, .(B_noq = if (any(is.finite(B_without_q_t_km2))) sum(B_without_q_t_km2, na.rm = TRUE) else NA_real_), by = FG_num]
+    fg <- merge(fg, .bq[, .(FG_number = as.numeric(FG_num), B_noq)], by = "FG_number", all.x = TRUE)
+  }
+  fsel <- .or(input$fw_fg, "")
+  rows_i <- if (nzchar(fsel)) which(fg$FG_number == as.numeric(fsel)) else seq_len(nrow(fg))
+  srch <- tolower(trimws(.or(input$fw_search, "")))
+  if (nzchar(srch)) rows_i <- rows_i[grepl(srch, tolower(fg$FG_name[rows_i]), fixed = TRUE) |
+                                       fg$FG_number[rows_i] %in% x[grepl(srch, tolower(species), fixed = TRUE), FG_number]]
+  rows <- lapply(rows_i, function(i)
     tags$tr(class = if (!is.na(fg$stanza[i])) "wm-stanza" else NULL,
             title = if (!is.na(fg$stanza[i])) "Multistanza group: biomass, Z and the stanza split from the stock assessment" else NULL,
             tags$td(fg$FG_number[i]),
@@ -476,10 +490,11 @@ output$fg_summary <- renderUI({
                                  fg$coverage[i]),
             if (has_cov) tags$td(fg$coverage_survey[i]),
             if (has_b) tags$td(.fmt_b2(fg$B[i])),
+            if (has_bq) tags$td(.fmt_b2(fg$B_noq[i])),
             if (has_b) tags$td(title = if (!is.na(fg$B_ref[i])) substr(fg$B_ref[i], 1, 400) else NULL,
                                class = if (fg$B_source[i] %in% c("No biomass")) "text-danger" else NULL, fg$B_source[i]),
             if (has_q) tags$td(if (is.na(fg$q[i])) "-" else fg$q[i])))
-  tagList(
+  list(top = tagList(
     fluidRow(
       stat("File", basename(ft$path), format(file.mtime(ft$path), "edited %d %b %Y, %H:%M")),
       stat("Functional groups", nrow(fg), paste0("FG ", min(fg$FG_number), "-", max(fg$FG_number))),
@@ -514,16 +529,22 @@ output$fg_summary <- renderUI({
                 if (ms$has_saf[k]) tags$span(class = "text-success", "GFCM stock assessment available")
                 else tags$span(class = "text-danger", "no GFCM stock assessment found (gfcm_saf_stock_assessments_ALL.csv) - the stanza split rests on the survey only"))
       }))),
-    tags$style(HTML(".wm-stanza td { background: #fff4e0 !important; } .wm-stanza-badge { background: #e8a33d; color: #fff; font-weight: 500; }")),
-    tags$div(class = "wm-fg-table mt-2",
+    tags$style(HTML(".wm-stanza td { background: #fff4e0 !important; } .wm-stanza-badge { background: #e8a33d; color: #fff; font-weight: 500; }"))),
+  table = tags$div(class = "wm-fg-table mt-2",
       tags$table(class = "table table-sm table-striped",
         tags$thead(tags$tr(tags$th("FG_number"), tags$th("FG_name"), if (has_group) tags$th("FG_group"), tags$th("N species"),
                            if (has_cov) tags$th(title = "Species with biomass in the last run / species in the FG file (hover a value for the species without biomass)", "With biomass"),
                            if (has_cov) tags$th(title = "Species observed by MEDITS/MEDIAS in the Ecopath years / species in the FG file", "Observed in survey"),
-                           if (has_b) tags$th(title = "Ecopath B of the FG in the last run (Ecopath_B sheet, mean of the Ecopath years)", "B (t/km\u00b2)"),
+                           if (has_b) tags$th(title = "Ecopath B of the FG in the last run (Ecopath_B sheet, mean of the Ecopath years) - with catchability q", "B with q (t/km\u00b2)"),
+                           if (has_bq) tags$th(title = "The same without catchability (sum of its species without q; FGs whose B is not a MEDITS value: unchanged)", "B without q (t/km\u00b2)"),
                            if (has_b) tags$th(title = "Where the FG's Ecopath B comes from (hover a value for the full reference)", "B source"),
                            if (has_q) tags$th(title = "Catchability q of the FG's species (column q of the FG file; range when they differ)", "q"))),
         tags$tbody(rows))))
+})
+output$fg_summary <- renderUI(.fg_sum()$top)
+output$fg_table_view <- renderUI({
+  if (identical(input$fw_view, "sp")) tagList(uiOutput("fw_sp_note"), tags$div(style = "max-height: 520px; overflow: auto;", tableOutput("fw_sp_table")))
+  else .fg_sum()$table
 })
 
 ## Coastal state of each GSA - the same table as GSA_COASTAL_STATE in 02_fisheries.R
@@ -1042,6 +1063,31 @@ observe({
 ## Progress: read the "--- Step i/7: ..." / "--- Step i/7 done in x min ---"
 ## lines that run_pipeline_demo.R writes, and estimate the share done from
 ## the expected minutes per script.
+## Floating run status (bottom right of the page)
+output$run_pill <- renderUI({
+  st <- run_state()
+  if (identical(st, "running")) invalidateLater(3000)
+  if (identical(st, "idle"))
+    return(tags$a(class = "wm-pill wm-pill-idle", href = "#", `data-target` = "wm-card-6", title = "Go to the Run card (card 6)",
+                  icon("play"), "Run pipeline"))
+  if (identical(st, "running")) {
+    lines <- if (file.exists(.progress_file)) readLines(.progress_file, warn = FALSE) else character(0)
+    started <- as.integer(sub("^--- Step (\\d)/\\d:.*", "\\1", grep("^--- Step \\d/\\d: ", lines, value = TRUE)))
+    finished <- as.integer(sub("^--- Step (\\d)/\\d done.*", "\\1", grep("^--- Step \\d/\\d done", lines, value = TRUE)))
+    cur <- setdiff(started, finished); cur <- if (length(cur)) max(cur) else NA
+    el <- if (is.null(run_started())) NA else as.numeric(difftime(Sys.time(), run_started(), units = "mins"))
+    return(tags$a(class = "wm-pill wm-pill-running", href = "#", `data-target` = "wm-card-6", title = "Go to the Run card",
+                  tags$span(class = "spinner-border", role = "status"),
+                  paste0("Running", if (!is.na(cur)) paste0(" step ", cur, "/7: ", .step_names[cur]) else "",
+                         if (is.finite(el)) sprintf(" \u00b7 %.0f min", el) else "")))
+  }
+  if (identical(st, "done"))
+    return(tags$a(class = "wm-pill wm-pill-done", href = "#", `data-target` = "wm-card-7", title = "Go to the Results",
+                  icon("check"), "Run finished \u00b7 see Results"))
+  tags$a(class = "wm-pill wm-pill-error", href = "#", `data-target` = "wm-card-6", title = "Go to the Run card",
+         icon("triangle-exclamation"), "Run stopped \u00b7 see Run")
+})
+
 output$run_progress <- renderUI({
   invalidateLater(3000)
   st <- run_state()
@@ -1225,7 +1271,9 @@ output$dl_ewe <- downloadHandler(
     if (!exists("write_ewe_tables", mode = "function")) source("lib_ewe_export.R", local = FALSE)
     td <- tempfile("ewe"); dir.create(td)
     m <- if (nzchar(.or(input$ewe_model, ""))) input$ewe_model else "EwE_model"
-    p <- write_ewe_tables(.wb_path, td, m, if (identical(input$ewe_fmt, "xlsx")) "xlsx" else "csv", if (is.null(input$ewe_dec)) "," else input$ewe_dec)
+    fc <- if (!is.na(.pcloud_dir)) file.path(.pcloud_dir, "data", "fisheries", "fleet_costs_ewe.csv") else NULL
+    p <- write_ewe_tables(.wb_path, td, m, if (identical(input$ewe_fmt, "xlsx")) "xlsx" else "csv", if (is.null(input$ewe_dec)) "," else input$ewe_dec,
+                          fleet_cost_file = fc)
     if (identical(input$ewe_fmt, "xlsx")) file.copy(p[1], file, overwrite = TRUE) else {
       old <- setwd(td); on.exit(setwd(old), add = TRUE)
       if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, basename(p)) else utils::zip(file, basename(p), flags = "-q")
@@ -1268,7 +1316,7 @@ output$dl_info <- renderUI({
     suppressMessages(ensure_copernicusmarine_cli(auto_install = FALSE))
   }, error = function(e) FALSE)
   out[[7]] <- row("Copernicus tool (05 only)", isTRUE(cli), if (isTRUE(cli)) Sys.which("copernicusmarine") else "copernicusmarine not found",
-                  "Only needed for 05 environment (everything else runs without it). Press 'Install the Copernicus tool' below: it puts copernicusmarine in its own Python environment (~/.copernicusmarine-venv). Needs Python 3 (on a Mac: run 'xcode-select --install' in the Terminal if it is missing).")
+                  "Only needed for 05 environment (everything else runs without it). Press 'Install the Copernicus tool' below: it puts copernicusmarine in its own Python environment (~/.copernicusmarine-venv). Needs Python 3: on a Mac, run 'xcode-select --install' in the Terminal if it is missing; on Windows, install Python 3 from python.org (tick 'Add python.exe to PATH' in the installer), then restart R and press the button. Already installed with pip or conda? The page looks for it in the usual folders.")
   out[[8]] <- row("Copernicus login (05 only)", .cm_has_login(), if (.cm_has_login()) "saved on this computer" else "not saved",
                   "Use 'enter or change the login' in card 5 (environment and Ecospace).")
   do.call(rbind, out)
@@ -1284,7 +1332,7 @@ observeEvent(input$cm_install, {
     }, error = function(e) FALSE)
   })
   showNotification(if (ok) paste("copernicusmarine is installed:", Sys.which("copernicusmarine"))
-                   else "Could not install copernicusmarine (is Python 3 installed? On a Mac: 'xcode-select --install' in the Terminal). The rest of the pipeline works without it.",
+                   else "Could not install copernicusmarine. Is Python 3 installed? Mac: 'xcode-select --install' in the Terminal. Windows: Python 3 from python.org with 'Add python.exe to PATH' ticked, then restart R. The rest of the pipeline works without it.",
                    type = if (ok) "message" else "error", duration = 12)
 })
 observeEvent(input$setup_check, {
@@ -1817,8 +1865,11 @@ output$fg_explore_tip_catch <- renderUI({
   x
 })
 observe({
-  x <- .sp_q(); req(x)
-  fgs <- unique(x[, c("FG_num", "FG_name")]); fgs <- fgs[order(fgs$FG_num), ]
+  ft <- fg_table()
+  x <- if (is.null(ft$error) && !is.null(ft$data)) { d <- data.table::as.data.table(ft$data); d <- d[!is.na(suppressWarnings(as.numeric(FG_number)))]
+         data.frame(FG_num = as.numeric(d$FG_number), FG_name = d$FG_name) } else .sp_q()
+  req(x)
+  fgs <- unique(x[, c("FG_num", "FG_name")]); fgs <- fgs[!duplicated(fgs$FG_num), ]; fgs <- fgs[order(fgs$FG_num), ]
   cur <- isolate(input$fw_fg)
   ch <- c("All FGs" = "", stats::setNames(as.character(fgs$FG_num), paste(fgs$FG_num, "-", fgs$FG_name)))
   updateSelectInput(session, "fw_fg", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else "")
@@ -1827,7 +1878,9 @@ output$fw_sp_table <- renderTable({
   x <- .sp_q()
   validate(need(!is.null(x), "No species biomass yet: run 01 biomass (the results of the run shown in Results are used)."))
   if (nzchar(.or(input$fw_fg, ""))) x <- x[x$FG_num == as.numeric(input$fw_fg), , drop = FALSE]
-  validate(need(nrow(x) > 0, "No species recorded for this FG."))
+  srch <- tolower(trimws(.or(input$fw_search, "")))
+  if (nzchar(srch)) x <- x[grepl(srch, tolower(x$Species), fixed = TRUE) | grepl(srch, tolower(x$FG_name), fixed = TRUE), , drop = FALSE]
+  validate(need(nrow(x) > 0, "No species match."))
   sig <- function(v) ifelse(is.finite(v), formatC(signif(v, 3), format = "g"), "")
   pct <- function(v) ifelse(is.finite(v), sprintf("%.1f%%", 100 * v), "")
   out <- data.frame(x$FG_num, x$FG_name, x$Species, ifelse(is.finite(x$q), formatC(x$q, format = "g", digits = 3), ""),
