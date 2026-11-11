@@ -933,6 +933,23 @@ dataframe1 <- survey_observations[, .(
   Lon = shooting_longitude
 )]
 
+## Extra MEDITS hauls (lib_extra_data.R, EXTRA_DATA_DIR): GSA-years with
+## no haul in the JRC TA file are filled from MEDITS data-call TA/TB files
+## and then from IEO (Spain) haul tables. USE_EXTRA_DATA = FALSE skips it.
+## What was added: extra_medits_hauls_added.csv.
+source(file.path(git_dir, "scripts", "lib_extra_data.R"))
+.xm <- tryCatch(extra_medits_hauls(unique(dataframe1[, .(AreaID, Year)]), tm_lookup),
+                error = function(e) { message("[Extra MEDITS] skipped: ", conditionMessage(e)); list(data = NULL, log = data.table()) })
+if (!is.null(.xm$data) && nrow(.xm$data)) {
+  dataframe1 <- rbindlist(list(dataframe1, .xm$data[, names(dataframe1), with = FALSE]), use.names = TRUE)
+  fwrite(.xm$log, file.path(csv_out_dir, "extra_medits_hauls_added.csv"))
+  if (!TS_YEARS_WAS_PRESET && max(.xm$data$Year, na.rm = TRUE) > max(TS_YEARS)) {
+    TS_YEARS <- min(TS_YEARS):max(.xm$data$Year, na.rm = TRUE)
+    message("[TS_YEARS] extended to ", max(TS_YEARS), " (extra MEDITS hauls).")
+  }
+}
+rm(.xm)
+
 if (AREA_MODE == "custom" && CUSTOM_AREA_TYPE %in% c("bbox", "shapefile")) {
   ## No GSA code applies to an arbitrary bbox/shapefile boundary (unlike
   ## CUSTOM_AREA_TYPE == "gsa", which is still a subset of real, named
@@ -2069,12 +2086,29 @@ if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa
     totals
   }
   
-  check_raw_replication <- function(file) {
-    df <- read_csv(file.path(medias_dir, file), show_col_types = FALSE) %>%
-      mutate(gsa = as.numeric(str_extract(area, "\\d+")))
-    if (any(df$sex == "C")) df <- filter(df, sex == "C")
-    df %>% dplyr::count(country, gsa, year, species)
+  ## One total per survey/GSA/year/species: the combined-sex row (C) where
+  ## the survey reports one, otherwise the sum of F + M + U (Spain reports
+  ## by sex only since 2011; a file-wide "keep C" dropped those rows).
+  ## Then extra MEDIAS rows (lib_extra_data.R, EXTRA_DATA_DIR) for the
+  ## GSA-year-species the JRC files do not have.
+  if (!exists("extra_medias_raw", mode = "function")) source(file.path(git_dir, "scripts", "lib_extra_data.R"))
+  .medias_extra <- tryCatch(extra_medias_raw(), error = function(e) { message("[Extra MEDIAS] skipped: ", conditionMessage(e)); list() })
+  .medias_rows <- function(file) {
+    df <- read_csv(file.path(medias_dir, file), show_col_types = FALSE)
+    df$total_value <- sum_lengthclasses(df)
+    df <- df %>% dplyr::mutate(gsa = as.numeric(str_extract(area, "\\d+")))
+    d <- medias_collapse_sex(df)
+    x <- .medias_extra[[if (grepl("^abund", file)) "abundance" else "biomass"]]
+    if (!is.null(x) && nrow(x)) {
+      x <- medias_collapse_sex(x)[!unique(d[, .(gsa, year, species)]), on = c("gsa", "year", "species")]
+      if (nrow(x)) {
+        message("[Extra MEDIAS] ", file, ": added ", paste0(unique(paste0(x$species, " GSA ", x$gsa, " ", x$year)), collapse = ", "))
+        d <- rbindlist(list(d, x), use.names = TRUE)
+      }
+    }
+    d
   }
+  check_raw_replication <- function(file) .medias_rows(file)[, .N, by = .(country, gsa, year, species)][, .(country, gsa, year, species, n = N)]
   abund_reps <- check_raw_replication("abundance.csv")
   biom_reps  <- check_raw_replication("biomass.csv")
   AGG_FUN_MEDIAS <- if (max(abund_reps$n, biom_reps$n) > 1) "mean" else "sum"
@@ -2082,15 +2116,9 @@ if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa
           " (based on replication check).")
   
   load_acoustic <- function(file, value_name, agg_fun = AGG_FUN_MEDIAS) {
-    df <- read_csv(file.path(medias_dir, file), show_col_types = FALSE)
-    df$total_value <- sum_lengthclasses(df)
-    result <- df %>%
-      dplyr::mutate(gsa = as.numeric(str_extract(area, "\\d+"))) %>%
-      { if (any(.$sex == "C")) dplyr::filter(., sex == "C") else . } %>%
-      dplyr::group_by(country, gsa, year, species) %>%
-      dplyr::summarise(value = if (agg_fun == "mean") mean(total_value, na.rm = TRUE)
-                       else sum(total_value, na.rm = TRUE), .groups = "drop")
-    setnames(as.data.table(result), "value", value_name)
+    result <- .medias_rows(file)[, .(value = if (agg_fun == "mean") mean(total_value, na.rm = TRUE)
+                                     else sum(total_value, na.rm = TRUE)), by = .(country, gsa, year, species)]
+    setnames(result, "value", value_name)
   }
   acoustic_abund <- load_acoustic("abundance.csv", "total_abundance")
   acoustic_biom  <- load_acoustic("biomass.csv",   "total_biomass")

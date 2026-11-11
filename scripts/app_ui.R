@@ -250,6 +250,8 @@ tagList(
         tags$h6("Survey density (MEDITS, MEDIAS)"),
         .switch("strata", "Strata-weighted density (STRATA)", "Off = simple mean density instead of the depth-stratum (area-weighted) estimator.", TRUE),
         .switch("drop_outliers", "Remove flagged outlier hauls (DROP_OUTLIERS)", "Off = outliers are only reported in survey_outliers_flagged.csv.", TRUE),
+        .switch("extra_data", "Add the extra survey and assessment files (USE_EXTRA_DATA)",
+                "Files in data/extra_data on pCloud fill what the standard data lack: MEDITS hauls for GSA-years missing from the JRC files (Spain GSA 1, 2 and 6 in 2022, GSA 6 in 2023), MEDIAS acoustic biomass (GSA 6 2022, GSA 7 2002) and newer GFCM STAR assessments (anchovy and sardine GSA 7). What was added: extra_medits_hauls_added.csv and star_extra_REVIEW.csv.", TRUE),
         .switch("catch_q", "Catchability correction (APPLY_CATCHABILITY)",
                 "Divides MEDITS density by the species catchability q. Default table: catchability_factors_ecotrans_medits_2021_spp.csv (pCloud), from Lloret-Lloret (2023, PhD thesis, Universitat de Barcelona): Fraser et al. (2007) for fish, Fiorentino et al. (2013) for sardine and anchovy, stock assessments (STECF 2021) for hake, red mullet, deep-water rose shrimp and Norway lobster, 0.2 for cephalopods. Upload your own below (columns ScientificName, q).", TRUE),
         conditionalPanel("input.catch_q",

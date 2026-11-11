@@ -110,6 +110,7 @@ Set these on the page, or at the top of `scripts/run_pipeline_demo.R` (every opt
 | `PHYTO_SOURCE` | `"isimip"` | Phytoplankton B and P/B: `"isimip"` (COBALT 1995, EcoBase P/B) or `"copernicus"` (from step 05; run 05 first). |
 | `STOCK_ASSESSMENT_SOURCE` | `"GFCM"` | `"GFCM"` = the newest GFCM Stock Assessment Forms, downloaded and read automatically (check `biomass/gfcm_saf_parse_REVIEW.csv`); `"RAM"` = RAM Legacy. |
 | `STRATA`, `DROP_OUTLIERS`, `NORMALIZE_TS` | `TRUE` | Strata-weighted density; remove flagged outlier hauls; Ecosim series as a relative index. |
+| `USE_EXTRA_DATA`, `EXTRA_DATA_DIR` | `TRUE`, `data/extra_data` | Add the extra MEDITS hauls, MEDIAS rows and GFCM STAR workbooks in that folder, only where the standard data have nothing (see its README; `biomass/extra_medits_hauls_added.csv`, `star_extra_REVIEW.csv`). |
 | `APPLY_CATCHABILITY` | `TRUE` | Divide MEDITS density by the species catchability (default table in pCloud, or your own `CATCHABILITY_FILE`). |
 | `FG_SPECIES_FILE` | `data/FG_WMed_2026.csv` | Species → FG table. |
 | `PLOT_DPI` | `300` | Resolution of every PNG. |
@@ -143,6 +144,7 @@ The main inputs, under `EwE Western Med 2026/data/`:
 
 - `FG_WMed_2026.csv`: species → functional groups (80 FGs).
 - `Medits_Medias_JRC2026/`: MEDITS and MEDIAS survey data.
+- `extra_data/`: survey and assessment files shared outside the JRC data call (IEO MEDITS for Spain, MEDITS/MEDIAS data call for GSAs 6–7, GFCM STAR workbooks); used to fill gaps (`USE_EXTRA_DATA`).
 - `fisheries/`: GFCM, FDI, Sea Around Us, FishMIP, ICCAT, RousseauEtAl2023, STAR_RAMLegacy, GFCM_SAF.
 - `Complementary data/`: reference tables with a citation on every row (habitat biomass, megafauna, unit conversions, diet tables, literature fallbacks).
 - `diet/`: metaweb and MAISHA files.

@@ -261,6 +261,12 @@ star_ram_path <- if (identical(STOCK_ASSESSMENT_SOURCE, "GFCM")) .gfcm_all else 
 message("[Stock assessments] source = ", STOCK_ASSESSMENT_SOURCE, " (", star_ram_path, ")")
 star_ram_combined <- if (file.exists(star_ram_path)) {
   .sa <- fread(star_ram_path, encoding = "UTF-8")
+  ## GFCM STAR workbooks in EXTRA_DATA_DIR (lib_extra_data.R): a newer STAR
+  ## replaces the stock in use for the same species and GSAs; see
+  ## star_extra_REVIEW.csv. USE_EXTRA_DATA = FALSE skips it.
+  if (!exists("add_extra_star_assessments", mode = "function")) source(file.path(git_dir, "scripts", "lib_extra_data.R"))
+  .sa <- tryCatch(add_extra_star_assessments(.sa, if (exists("FILTER_AREAS") && !is.null(FILTER_AREAS)) as.numeric(FILTER_AREAS) else 1:12, csv_out_dir),
+                  error = function(e) { message("[Extra STAR] skipped: ", conditionMessage(e)); .sa })
   if ("use_for_biomass" %in% names(.sa)) .sa <- .sa[use_for_biomass %in% TRUE]   # GFCM: non-overlapping stocks only
   .sa
 } else {

@@ -767,6 +767,7 @@ config_code <- reactive({
     sprintf("TS_YEARS         <- %s   # Ecosim biomass series", yr(input$ts_years)),
     sprintf("STRATA           <- %s", tf(input$strata)),
     sprintf("DROP_OUTLIERS    <- %s", tf(input$drop_outliers)),
+    sprintf("USE_EXTRA_DATA   <- %s   # extra survey/assessment files in data/extra_data", tf(input$extra_data)),
     sprintf("NORMALIZE_TS     <- %s", tf(input$normalize_ts)),
     sprintf("ECOPATH_B_FILL_MODE  <- \"%s\"   # FGs with no Ecopath-years biomass", if (isTRUE(input$fill_b)) "window_mean" else "nearest"),
     if (isTRUE(input$fill_b) && length(input$fill_years) == 2) sprintf("ECOPATH_B_FILL_YEARS <- %s", yr(input$fill_years)),

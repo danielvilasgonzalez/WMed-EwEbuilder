@@ -1244,6 +1244,7 @@ Paths below are relative to `pcloud_dir/data/` unless the Location column says o
 | all | `ASFIS_sp_2026.1.csv` | `data/Complementary data/` | FAO 3-alpha code → scientific name (MEDIAS, GFCM, SAFs) | yes |
 | 01 | `TA.csv`, `TB.csv`, `TC.csv`, `TM_list_(April_2019).xlsx` | `data/Medits_Medias_JRC2026/2024_MEDBSsurvey/Demersal/` | MEDITS hauls, catches, length frequencies, species codes | yes |
 | 01 | MEDIAS `abundance.csv`, `biomass.csv` | `data/Medits_Medias_JRC2026/2024_MEDBSsurvey/Acoustic/` | small pelagics acoustic biomass | yes |
+| 01, 01b | `extra_data/` (`USE_EXTRA_DATA`, `EXTRA_DATA_DIR`) | `data/` | extra MEDITS hauls for GSA-years missing from the JRC files, extra MEDIAS rows, newer GFCM STAR assessments (@sec-extra-data) | optional |
 | 01 | `medits_reference_tables/` | `data/Complementary data/` | strata, manual species overrides, MEDIAS areas, unit factors | yes |
 | 01 | `catchability_factors_ecotrans_medits_2021_spp.csv` | `data/Complementary data/` | catchability q (`APPLY_CATCHABILITY`; or your own `CATCHABILITY_FILE`) | optional |
 | 01 | `small_pelagics_acoustic_pre_medias.csv`, `multistanza_reference_tables/` | `data/Complementary data/` | pre-MEDIAS acoustics; hake stanza parameters | yes |
@@ -1648,6 +1649,14 @@ For the custom-region example (@sec-area-definition, Approach B), this step is m
 
 ---
 
+## Extra survey and assessment files {#sec-extra-data}
+
+Files shared outside the JRC 2024 MEDBS data call are kept in `pcloud_dir/data/extra_data/` (README there) and read by `lib_extra_data.R` when `USE_EXTRA_DATA = TRUE` (default; page card 4). They never replace the standard data; each source only adds what the standard data do not have:
+
+- **MEDITS hauls (01).** For each GSA-year with no haul in the JRC `TA.csv`, hauls are taken first from MEDITS data-call TA/TB pairs (`TA_67.csv`/`TB_67.csv`, GSAs 6–7, converted exactly as the JRC files) and then from the IEO haul-by-species tables of the Spanish MEDITS (`Abundancia_biomasa_GSA1_2_6.xlsx`, 1994–2022, and `MEDITS_2023.CSV`; IEO sectors 110 → GSA 2, 111 → GSA 1, 112 and 113 → GSA 6; biomass = KILOS, swept area = AREA BARRIDA in km²). Hauls with an impossible position or a swept area outside 0.005–0.5 km² are dropped. With the current files this adds GSA 1, 2 and 6 in 2022 and GSA 6 in 2023 (`biomass/extra_medits_hauls_added.csv`).
+- **MEDIAS (01).** `BIOMASS_67.csv` (length classes) and `ABUND_BIOM_67.csv` (age groups) add the GSA-year-species rows the JRC MEDIAS files lack: GSA 6 2022 (MEDIAS) and GSA 7 2002 (PELMED02).
+- **Stock assessments (01b).** GFCM STAR workbooks (`STAR_<species>_<GSA>_RefY<year>.xlsx`): biomass = TSB when given, else SSB. A STAR stock replaces the stock in use for the same species and GSAs when its reference year is newer or the one in use is a RAM Legacy or hand-transcribed fill, and never a stock covering more GSAs (`biomass/star_extra_REVIEW.csv`). With the current files: anchovy and sardine in GSA 7 (reference year 2023, previously RAM Legacy to 2012).
+
 ## MEDIAS acoustic survey {#sec-medias}
 
 Everything from @sec-fg-matching through @sec-regional describes **MEDITS**, the demersal trawl survey - but `01_biomass.R` (`AREA_MODE = "westmed"`) also incorporates **MEDIAS**, the acoustic survey, and combines the two into a single density index rather than keeping them as separate Ecopath/Ecosim sheets. MEDIAS is specifically relevant for small pelagics (sardine, anchovy) that a bottom trawl doesn't sample well but an acoustic survey does.
@@ -1665,7 +1674,7 @@ MEDIAS differs from MEDITS in several ways that matter for interpreting the comb
 
 ### Loading and FG matching
 
-Raw abundance/biomass CSVs are collapsed to country/GSA/year/species (summing across length classes, replicate-checked to decide `sum()` vs `mean()` for collapsing raw records), then species codes are resolved to scientific names via the ASFIS species list (FAO's own code table) rather than MEDITS' own species-code system:
+Raw abundance/biomass CSVs are collapsed to country/GSA/year/species (summing across length classes; per survey, GSA, year and species the combined-sex row `C` when the survey reports one, otherwise the sum of F + M + U, since Spain reports MEDIAS by sex only from 2011; replicate-checked to decide `sum()` vs `mean()` for collapsing raw records), then species codes are resolved to scientific names via the ASFIS species list (FAO's own code table) rather than MEDITS' own species-code system:
 
 ```{r}
 #| label: medias-load-match

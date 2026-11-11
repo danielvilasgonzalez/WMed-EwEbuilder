@@ -20,7 +20,7 @@ WMED_TIDY_KEEP <- list(
               "survey_outliers_flagged.csv", "survey_outlier_effect_by_fg_year.csv", "survey_area_coverage_by_year.csv",
               "survey_unmatched_for_manual_review.csv", "medias_area_10_200m_fallback.csv",
               "catchability_q_by_species.csv", "catchability_effect_by_fg.csv",
-              "manual_density_override_applied.csv", "fg_species_coverage_totals.csv", "multistanza_split_comparison.csv"),
+              "manual_density_override_applied.csv", "extra_medits_hauls_added.csv", "star_extra_REVIEW.csv", "fg_species_coverage_totals.csv", "multistanza_split_comparison.csv"),
   fisheries = c("F_by_fg.csv", "Catches_Discards_FG_ts.csv", "catch_species_by_fg_year.csv", "Catches_Ecosim.csv", "Fishing_Effort_by_Fleet.csv",
                 "catches_by_country_fleet_sector_year.csv", "species_fg_matched.csv", "mollusc_nei_split_by_country_year.csv",
                 "ecopath_L_fg_coverage_check.csv", "fg_zero_catch_diagnostic.csv", "ecosim_eu_catch_share.csv",

@@ -145,6 +145,8 @@ if (RUN_MODE == "westmed_default") {
   # ECOPATH_B_FILL_YEARS          <- 1995:2000
   # ECOPATH_B_EXPANDING_MIN       <- 0.00001  # Ecopath_B of the "Expanding" FGs (t/km2); NA = leave missing
   # DROP_OUTLIERS                 <- TRUE   # remove flagged outlier hauls (haul-level rule)
+  # USE_EXTRA_DATA                <- TRUE   # add the extra survey/STAR files in EXTRA_DATA_DIR (lib_extra_data.R)
+  # EXTRA_DATA_DIR                <- file.path(pcloud_dir, "data/extra_data")
   # SURVEY_IMPUTE_UNSAMPLED_CELLS <- TRUE   # unsampled GSA left out of that year; unsampled strata of a sampled GSA filled from the same GSA
   # AQUAMAPS_B_MAX_DEPTH          <- Inf    # AquaMaps pseudo-strata biomass counted down to this depth (whole_gsa: all depths; medits_10_800: 1000)
   # ECOSIM_HAUL_CAP_Q             <- 0.95   # Ecosim trend only: cap haul FG density at this quantile (GSA x stratum); NA = off
@@ -281,7 +283,7 @@ if (isTRUE(RUN_VALIDATION) && 7 %in% RUN_STEPS) {
 
 ## Run record: settings, minutes per step, git commit, R and package
 ## versions, input files (out_dir/run_record_<time>.json + the info sheet)
-.rec_names <- c("RUN_STEPS", "NEI_SPLIT_BY_REGION", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
+.rec_names <- c("RUN_STEPS", "NEI_SPLIT_BY_REGION", "USE_EXTRA_DATA", "EXTRA_DATA_DIR", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
                 "AREA_MODE", "AREA_NAME", "CUSTOM_AREA_TYPE", "CUSTOM_BBOX", "STRATA", "DROP_OUTLIERS", "NORMALIZE_TS",
                 "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE",
                 "ECOSIM_CATCH_COUNTRIES", "ECOSIM_CATCH_START_YEAR", "ECOSIM_CATCH_SCALING", "MULTISTANZA_B_SOURCE",
