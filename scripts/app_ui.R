@@ -412,7 +412,7 @@ tagList(
             radioButtons("hm_q", "Density", inline = TRUE, choices = c("With q" = "q", "Without q (raw)" = "raw"), selected = "q"),
             checkboxInput("hm_zero", "Show hauls without it", TRUE)),
         div(class = "d-flex flex-wrap align-items-end gap-3",
-            div(style = "min-width:320px; flex:1;", sliderInput("hm_year", "Year", min = 1994, max = 2023, value = 1995, step = 1, sep = "", width = "100%",
+            div(style = "min-width:320px; flex:1;", sliderInput("hm_year", "Years (drag both ends for a range; same year twice = one year)", min = 1994, max = 2023, value = c(1995, 1995), step = 1, sep = "", width = "100%",
                                                                  animate = animationOptions(interval = 1500, loop = FALSE))),
             checkboxInput("hm_all_years", "All years together", FALSE),
             div(style = "min-width:260px;", sliderInput("hm_depth", "Depth (m)", min = 0, max = 800, value = c(0, 800), step = 10, width = "100%")),

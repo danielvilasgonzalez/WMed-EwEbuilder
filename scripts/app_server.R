@@ -2275,7 +2275,7 @@ observe({
   cur <- isolate(input$hm_fg)
   updateSelectInput(session, "hm_fg", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else ch[1])
   yr <- range(h$hauls$Year, na.rm = TRUE); y0 <- isolate(input$hm_year)
-  updateSliderInput(session, "hm_year", min = yr[1], max = yr[2], value = if (!is.null(y0) && y0 >= yr[1] && y0 <= yr[2]) y0 else yr[1])
+  updateSliderInput(session, "hm_year", min = yr[1], max = yr[2], value = if (length(y0) == 2 && all(y0 >= yr[1] & y0 <= yr[2])) y0 else c(yr[1], yr[1]))
   dm <- ceiling(max(h$hauls$Depth, na.rm = TRUE) / 50) * 50
   updateSliderInput(session, "hm_depth", min = 0, max = dm, value = c(0, dm))
   updateSelectizeInput(session, "hm_gsa", choices = sort(unique(h$hauls$GSA)), selected = isolate(input$hm_gsa))
@@ -2286,6 +2286,12 @@ observeEvent(list(.hd(), input$hm_fg), {
   updateSelectInput(session, "hm_sp", choices = c("All species of the FG" = "", stats::setNames(x$ScientificName, x$ScientificName)), selected = "")
 })
 .hm_sp_sel <- function() { v <- input$hm_sp; if (is.null(v)) "" else v }
+## years shown: the slider's range (one year when both ends are the same), or every year
+.hm_years <- function() {
+  y <- suppressWarnings(as.numeric(input$hm_year)); if (isTRUE(input$hm_all_years) || !length(y) || anyNA(y)) return(c(-Inf, Inf))
+  range(y)
+}
+.hm_years_lab <- function() { y <- .hm_years(); if (!is.finite(y[1])) "all years" else if (y[1] == y[2]) as.character(y[1]) else paste0(y[1], "-", y[2]) }
 ## hauls in the filter (depth, GSA) with the density of the selection, all years
 .hm_data <- reactive({
   h <- .hd(); req(h, input$hm_fg)
@@ -2302,13 +2308,12 @@ observeEvent(list(.hd(), input$hm_fg), {
 })
 observe({
   x <- .hm_data(); req(nrow(x))
-  yr <- input$hm_year; all_y <- isTRUE(input$hm_all_years)
+  yr <- .hm_years(); all_y <- yr[1] != yr[2]          # several years: hauls of every year in the range
   pos <- x$dens[x$dens > 0]
   vmax <- if (length(pos)) as.numeric(stats::quantile(pos, 0.99)) else 1
   vmin <- if (length(pos)) max(as.numeric(stats::quantile(pos, 0.02)), vmax / 1e4) else vmax / 100
-  y <- if (all_y) x else x[Year == yr]
-  if (!all_y && !isTRUE(input$hm_zero)) y <- y[dens > 0]
-  if (all_y) y <- y[dens > 0 | isTRUE(input$hm_zero)]
+  y <- x[Year >= yr[1] & Year <= yr[2]]
+  if (!isTRUE(input$hm_zero)) y <- y[dens > 0]
   what <- if (nzchar(.hm_sp_sel())) paste0("<i>", input$hm_sp, "</i>") else
     { f <- unique(.hd()$sp[FG_num == as.numeric(input$hm_fg), FG_name])[1]; f }
   qlab <- if (identical(input$hm_q, "raw")) "without q" else "with q"
@@ -2317,15 +2322,15 @@ observe({
                  formatC(signif(y$dens, 3), format = "g"),
                  ifelse(!nzchar(.hm_sp_sel()) & !is.na(y$top) & y$dens > 0, paste0("<br><span style='font-size:.85em'>", y$top, "</span>"), ""))
   session$sendCustomMessage("wm_haul_map", list(lat = y$Lat, lon = y$Lon, d = y$dens, tip = tip, vmin = vmin, vmax = vmax,
-    label = paste0(what, ", ", if (all_y) "all years" else yr, " (t/km&sup2;, ", qlab, ")"), zero = isTRUE(input$hm_zero)))
+    label = paste0(what, ", ", .hm_years_lab(), " (t/km&sup2;, ", qlab, ")"), zero = isTRUE(input$hm_zero)))
 })
 output$hm_info <- renderUI({
   h <- .hd()
   if (is.null(h)) return(tags$div(class = "text-muted small mt-1", "No haul_density.rds yet: run 01 biomass."))
   x <- .hm_data(); req(nrow(x))
-  y <- if (isTRUE(input$hm_all_years)) x else x[Year == input$hm_year]
+  yr <- .hm_years(); y <- x[Year >= yr[1] & Year <= yr[2]]
   tags$div(class = "small text-muted mt-1", sprintf("%s: %d hauls, %d with it (%.0f%%), mean %s t/km² per haul.",
-           if (isTRUE(input$hm_all_years)) "All years" else input$hm_year, nrow(y), sum(y$dens > 0),
+           .hm_years_lab(), nrow(y), sum(y$dens > 0),
            if (nrow(y)) 100 * mean(y$dens > 0) else 0, formatC(signif(mean(y$dens), 3), format = "g")))
 })
 output$hm_trend <- renderPlot({
@@ -2333,7 +2338,8 @@ output$hm_trend <- renderPlot({
   tr <- x[, .(m = mean(dens), n = .N), by = Year][order(Year)]
   ggplot2::ggplot(tr, ggplot2::aes(Year, m)) +
     ggplot2::geom_line(colour = "#1b7f9e") + ggplot2::geom_point(colour = "#1b7f9e", size = 1.6) +
-    { if (!isTRUE(input$hm_all_years)) ggplot2::geom_vline(xintercept = input$hm_year, colour = "#d1495b", linetype = "dashed") } +
+    { yr <- .hm_years(); if (is.finite(yr[1])) { if (yr[1] == yr[2]) ggplot2::geom_vline(xintercept = yr[1], colour = "#d1495b", linetype = "dashed") else
+        ggplot2::annotate("rect", xmin = yr[1] - 0.5, xmax = yr[2] + 0.5, ymin = -Inf, ymax = Inf, fill = "#d1495b", alpha = 0.12) } } +
     ggplot2::labs(x = NULL, y = "t/km² per haul") + ggplot2::theme_minimal(base_size = 11)
 }, res = 96)
 
