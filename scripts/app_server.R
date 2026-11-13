@@ -1022,10 +1022,53 @@ observeEvent(input$run, {
   .chk <- steps_problems()
   if (length(.chk$missing)) {
     showNotification(paste(c("Can't start:", .chk$missing), collapse = " "), type = "error", duration = 15); return() }
+  ## Setup not checked or local data not updated in this session: ask first
+  if (!isTRUE(.pre_done$setup) || !isTRUE(.pre_done$sync)) { .pre_run_modal(); return() }
+  .run_after_checks()
+})
+## the last checks before starting (also after the pre-run window)
+.run_after_checks <- function() {
   ## 05 needs a Copernicus Marine login: ask for it first if this laptop has none
   if (5 %in% steps_sel() && !.cm_has_login()) { .cm_login_modal(then_run = TRUE); return() }
   .start_run()
+}
+
+## --- Before a run: Check setup and Update local data -----------------------
+## A window when Run is pressed and, in this session, the setup was not
+## checked (card 0, Check setup) or the local copy of the data was not
+## updated from the shared folder (card 0, Update local data). Both can be
+## done from the window; "Run anyway" starts without them.
+.pre_done <- reactiveValues(setup = FALSE, sync = FALSE, setup_ok = NA, sync_msg = "")
+.pre_run_modal <- function() {
+  showModal(modalDialog(
+    title = "Before running",
+    tags$p("Two checks are recommended before each run. Tick them off here, or run anyway."),
+    uiOutput("pre_status"),
+    footer = tagList(
+      actionButton("pre_check", "Check setup", icon = icon("stethoscope"), class = "btn-outline-secondary"),
+      actionButton("pre_sync", if (isTRUE(.paths$using_local_copy)) "Update local data" else "Make local copy of the data",
+                   icon = icon("rotate"), class = "btn-outline-secondary"),
+      actionButton("pre_run", "Run", icon = icon("play"), class = "btn-primary"),
+      modalButton("Cancel")),
+    size = "l", easyClose = FALSE))
+}
+output$pre_status <- renderUI({
+  item <- function(done, label, detail) tags$div(class = "mb-2",
+    tags$span(style = "font-size:1.1em", if (done) "\u2705 " else "\u2B1C "), tags$strong(label), tags$div(class = "wm-help ms-4", detail))
+  rep <- NULL
+  if (isTRUE(.pre_done$setup)) {
+    x <- .setup_items(); bad <- x[!x$ok, , drop = FALSE]
+    rep <- if (nrow(bad)) tags$div(class = "ms-4 text-danger small", lapply(seq_len(nrow(bad)), function(i) tags$div("\u274C ", tags$strong(bad$item[i]), ": ", bad$fix[i])))
+           else tags$div(class = "ms-4 text-success small", "Everything needed was found.")
+  }
+  tagList(
+    item(isTRUE(.pre_done$setup), "Setup checked", "Folders, FG table, packages, internet and the Copernicus login (card 0, Check setup)."), rep,
+    item(isTRUE(.pre_done$sync), "Local data up to date", if (nzchar(.pre_done$sync_msg)) .pre_done$sync_msg else
+      "Copies the new or changed files of the shared pCloud folder to the local copy the run reads (card 0, Update local data)."))
 })
+observeEvent(input$pre_check, { .pre_done$setup <- TRUE })
+observeEvent(input$pre_sync, { r <- .do_sync_local(); if (!is.null(r)) .pre_done$sync_msg <- r })
+observeEvent(input$pre_run, { removeModal(); .run_after_checks() })
 
 ## Starts the run (Run button, or after the Copernicus login window)
 .start_run <- function() {
@@ -1287,20 +1330,26 @@ output$folders <- renderUI({
         column(2, tags$label(HTML("&nbsp;")), actionButton("save_folders", "Save", class = "btn-outline-primary w-100"))),
       tags$div(class = "wm-help", "Saved in config.local.R in the repo, for this computer only (not committed). Reopen the page after saving.")))
 })
-observeEvent(input$sync_local, {
+observeEvent(input$sync_local, { .do_sync_local() })
+## copies new or changed files of the shared folder to the local copy;
+## returns the summary line (NULL when it failed)
+.do_sync_local <- function() {
   if (is.na(.paths$shared_dir) || !dir.exists(.paths$shared_dir)) {
-    showNotification("Shared (pCloud) folder not found - start pCloud Drive, then try again.", type = "error"); return() }
+    showNotification("Shared (pCloud) folder not found - start pCloud Drive, then try again.", type = "error"); return(NULL) }
   id <- showNotification("Copying new or changed files from the shared folder ...", duration = NULL, type = "message")
   res <- tryCatch(withProgress(message = "Local data copy", value = 0,
                     wmed_sync_local_data(.paths$shared_dir, .paths$local_data_dir,
                                          progress = function(k, n, f) setProgress(k / n, detail = sprintf("%d / %d files", k, n)))),
                   error = function(e) e)
   removeNotification(id)
-  if (inherits(res, "error")) { showNotification(paste("Copy failed:", conditionMessage(res)), type = "error", duration = NULL); return() }
-  showNotification(sprintf("Local copy up to date: %d new, %d updated, %d unchanged files (%s MB copied).%s",
-                           res$new, res$updated, res$unchanged, res$MB_copied,
-                           if (!isTRUE(.paths$using_local_copy)) " Refresh the page (reload in the browser) so it uses the copy." else ""), duration = NULL)
-})
+  if (inherits(res, "error")) { showNotification(paste("Copy failed:", conditionMessage(res)), type = "error", duration = NULL); return(NULL) }
+  msg <- sprintf("Local copy up to date: %d new, %d updated, %d unchanged files (%s MB copied).%s",
+                 res$new, res$updated, res$unchanged, res$MB_copied,
+                 if (!isTRUE(.paths$using_local_copy)) " Refresh the page (reload in the browser) so it uses the copy." else "")
+  showNotification(msg, duration = NULL)
+  .pre_done$sync <- TRUE
+  msg
+}
 observeEvent(input$save_folders, {
   pc <- path.expand(trimws(input$set_pcloud)); od <- path.expand(trimws(input$set_out))
   if (!dir.exists(pc)) { showNotification(paste("Folder not found:", pc), type = "error"); return() }
@@ -1409,6 +1458,7 @@ observeEvent(input$cm_install, {
                    type = if (ok) "message" else "error", duration = 12)
 })
 observeEvent(input$setup_check, {
+  .pre_done$setup <- TRUE
   output$setup_report <- renderUI({
     x <- .setup_items()
     tags$table(class = "table table-sm small mt-2 mb-0",
