@@ -339,6 +339,18 @@ if (!exists("MAISHA_PATH", envir = .GlobalEnv, inherits = FALSE)) {
   MAISHA_PATH <- if (length(.cand)) .cand[1] else file.path(pcloud_dir, "data/diet/MAISHA/MAISHA_DwC-A")
 }
 if (!exists("DIET_STILL_MISSING_CSV_PATH",   envir = .GlobalEnv, inherits = FALSE)) DIET_STILL_MISSING_CSV_PATH   <- file.path(csv_out_dir, "diet_still_missing_REVIEW.csv")
+## Diet engine: "pipeline" (metaweb -> MAISHA -> FishBase/SeaLifeBase ->
+## EcoBase -> literature, below) or "dietcalc" (dietcalcR, lib_dietcalc.R:
+## diet database records scored for region, years, data and method; its
+## diets replace the pipeline's for every predator FG it covers, the
+## pipeline tiers fill the rest). dietcalcR settings in lib_dietcalc.R.
+if (!exists("DIET_ENGINE", envir = .GlobalEnv, inherits = FALSE)) DIET_ENGINE <- "pipeline"
+if (!exists("DIETCALC_DIR", envir = .GlobalEnv, inherits = FALSE)) DIETCALC_DIR <- file.path(pcloud_dir, "data/diet/dietcalcR")
+if (!exists("DIETCALC_DB", envir = .GlobalEnv, inherits = FALSE)) {
+  .cand <- list.files(file.path(pcloud_dir, "data/diet/dietcalc_db"), pattern = "\\.(accdb|mdb|sqlite|sqlite3|db)$", full.names = TRUE, ignore.case = TRUE)
+  DIETCALC_DB <- if (length(.cand)) .cand[1] else file.path(pcloud_dir, "data/diet/dietcalc_db")
+}
+if (!exists("DIETCALC_CONFIG_DIR", envir = .GlobalEnv, inherits = FALSE)) DIETCALC_CONFIG_DIR <- file.path(pcloud_dir, "data/diet/dietcalc_config")
 
 message("[04_diets.R] Config: METAWEB_XLSX_PATH = ", METAWEB_XLSX_PATH,
         " | FG_REFERENCE_CSV_PATH = ", FG_REFERENCE_CSV_PATH,
@@ -1482,6 +1494,34 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
     predator_fg_still_missing <- setdiff(predator_fg_still_missing, unique(literature_diet_rows$predator_fg))
   }
   
+  ## --- dietcalcR (DIET_ENGINE = "dietcalc", lib_dietcalc.R) ---------------
+  ## Its FG diets replace the pipeline's for every predator FG it covers.
+  ## Outputs in diet/dietcalc/: the matrix, its pedigree, the scored records
+  ## and the selected studies.
+  dietcalc_fgs <- character(0)
+  if (identical(DIET_ENGINE, "dietcalc")) {
+    dc_res <- tryCatch({
+      source(file.path(git_dir, "scripts", "lib_dietcalc.R"))
+      .bpf <- c(file.path(BIOMASS_CSV_DIR, "biomass_proportion_by_species_fg.csv"),
+                file.path(BIOMASS_CSV_DIR, "intermediate", "biomass_proportion_by_species_fg.csv"))
+      .bpf <- .bpf[file.exists(.bpf)][1]
+      if (is.na(.bpf)) stop("biomass_proportion_by_species_fg.csv (01) not found")
+      dietcalc_fg_diet(group_table, fread(.bpf))
+    }, error = function(e) { message("[04_diets.R] dietcalcR not used: ", conditionMessage(e)); NULL })
+    if (!is.null(dc_res) && nrow(dc_res$fg_diet)) {
+      dietcalc_fgs <- unique(dc_res$fg_diet$predator_fg)
+      fg_diet <- rbind(fg_diet[!predator_fg %in% dietcalc_fgs], dc_res$fg_diet, fill = TRUE)
+      predator_fg_still_missing <- setdiff(predator_fg_still_missing, dietcalc_fgs)
+      .dcd <- file.path(csv_out_dir, "dietcalc"); dir.create(.dcd, showWarnings = FALSE)
+      fwrite(dc_res$fg_diet, file.path(.dcd, "dietcalc_fg_diet.csv"))
+      if (nrow(dc_res$pedigree)) fwrite(dc_res$pedigree, file.path(.dcd, "dietcalc_diet_pedigree.csv"))
+      if (!is.null(dc_res$records) && nrow(dc_res$records)) fwrite(dc_res$records, file.path(.dcd, "dietcalc_record_scores.csv"))
+      if (!is.null(dc_res$studies) && nrow(dc_res$studies)) fwrite(dc_res$studies, file.path(.dcd, "dietcalc_selected_studies.csv"))
+      message("[04_diets.R] dietcalcR diets used for ", length(dietcalc_fgs), " predator FG(s); the pipeline tiers kept for the other ",
+              length(setdiff(predator_fg_names_all, dietcalc_fgs)), " (diet/dietcalc/).")
+    }
+  }
+
   ## --- Provenance ("diet_ref") per predator FG, and the still-missing -
   ## REVIEW list (per the task: proceed with a clearly flagged partial
   ## matrix rather than hard-stopping, UNLESS truly nothing covers a
@@ -1507,6 +1547,7 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
   }
   diet_provenance_by_fg <- data.table(FG_name = predator_fg_names_all)
   diet_provenance_by_fg <- merge(diet_provenance_by_fg, fg_source_tags, by.x = "FG_name", by.y = "fg_name", all.x = TRUE)
+  if (length(dietcalc_fgs)) diet_provenance_by_fg[FG_name %in% dietcalc_fgs, `:=`(diet_source = "dietcalc", diet_ref = "dietcalcR: diet database studies selected by region, years, data and method scores (diet/dietcalc/)")]
   diet_provenance_by_fg[is.na(diet_source), diet_source := "still_missing"]
   fwrite(diet_provenance_by_fg, file.path(csv_out_dir, "diet_provenance_by_predator_fg.csv"))
   message("[04_diets.R] Saved diet_provenance_by_predator_fg.csv - source breakdown: ",

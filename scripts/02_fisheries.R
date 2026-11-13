@@ -8104,12 +8104,84 @@ if (nrow(unreported_by_country) > 0) fwrite(unreported_by_country, file.path(csv
 ## Ecopath catch by fleet, F by FG, STECF FDI catch/effort/capacity, EU-3
 ## effort) are not written a second time here, and the empty GFCM Task 2 /
 ## SAF effort placeholders are not written at all.
+## --- Ecosim effort by EwE fleet ------------------------------------------
+## The Ecosim effort series are built for the same fleets as Ecopath
+## (EWE_FLEETS), so each fleet's effort multiplies its own catch:
+##  - Spain, France, Italy: STECF FDI fishing days (2014+) and their
+##    hindcast before 2014 (effort_by_fleettype_eu3), by FDI fleet type,
+##    x technology creep; fleet type -> EwE fleet with EWE_FLEET_RULES.
+##  - Morocco, Algeria, Tunisia: FishMIP nominal effort (kW-days, x
+##    technology creep) by gear and sector: Artisanal sector -> the
+##    country's artisanal fleet, Industrial -> EWE_FLEET_RULES on the gear.
+##  - Effort with no gear ("Other gear", unknown) is shared among the
+##    country's commercial fleets in proportion to their Ecopath catch.
+##  - Recreational fisheries: no effort source - constant (1 every year).
+## Units differ between sources (days, kW-days) but never within a fleet,
+## and Ecosim_ts uses each series as an index (1 = mean of the Ecopath
+## years). Source rows -> fleet: fisheries/effort_to_ewe_fleet_REVIEW.csv;
+## the source table stays as Fishing_Effort_by_Fleet_source.csv.
+effort_ewe <- data.table()
+tryCatch({
+  src <- list()
+  if (nrow(effort_by_fleettype_eu3) > 0 && "Effort_days" %in% names(effort_by_fleettype_eu3)) {
+    e3 <- copy(effort_by_fleettype_eu3)
+    e3[, E := Effort_days * tech_creep_multiplier(Country, Year, if ("Sector" %in% names(e3)) Sector else NULL)]
+    src$eu3 <- e3[, .(Country, src_fleet = FleetType, Sector = if ("Sector" %in% names(e3)) Sector else NA_character_, Year,
+                      E, unit = "fishing days x creep", source = paste0("STECF FDI / hindcast (", effort_source, ")"))]
+  }
+  if (nrow(effort_by_fleet) > 0) {
+    vcol <- intersect(c("nom_active_kWdays_effective", "nom_active_kWdays"), names(effort_by_fleet))[1]
+    fm <- effort_by_fleet[!Country %in% unique(src$eu3$Country)]
+    src$fishmip <- fm[, .(Country, src_fleet = gear, Sector, Year, E = get(vcol), unit = "kW-days x creep", source = "FishMIP nom_active")]
+  }
+  ef <- rbindlist(src, fill = TRUE)
+  ef <- ef[is.finite(E) & Country %in% names(EWE_FLEET_COUNTRY_CODE)]
+  ef[, EwE_fleet := fifelse(!is.na(Sector) & grepl("artisanal|small", Sector, ignore.case = TRUE),
+                            paste(EWE_FLEET_COUNTRY_CODE[Country], "artisanal"), .ewe_fleet_of(Country, src_fleet))]
+  ef[, recreational := EwE_fleet %in% "Recreational fisheries" | (!is.na(Sector) & grepl("recreational", Sector, ignore.case = TRUE))]
+  rev <- ef[, .(E_mean = mean(E, na.rm = TRUE), years = paste0(min(Year), "-", max(Year))), by = .(Country, src_fleet, Sector, source, unit, EwE_fleet)]
+  rev[EwE_fleet %in% "Recreational fisheries", EwE_fleet := "Recreational fisheries (not used: constant effort)"]
+  ef <- ef[recreational == FALSE]                                  # recreational: constant effort below
+  ## no gear: shared by the country's commercial catch per EwE fleet
+  cw <- ecopath_fleet_long[EwE_fleet != "Recreational fisheries", .(w = sum(Catch_t_avg, na.rm = TRUE)), by = EwE_fleet]
+  cw[, cc := sub(" .*$", "", EwE_fleet)]
+  un <- ef[is.na(EwE_fleet)]
+  if (nrow(un)) {
+    al <- rbindlist(lapply(split(un, by = "Country"), function(u) {
+      w <- cw[cc == EWE_FLEET_COUNTRY_CODE[u$Country[1]] & w > 0]
+      if (!nrow(w)) return(NULL)
+      w[, sh := w / sum(w)]
+      u[, .(E = sum(E)), by = .(Country, Year, unit, source)][, .(EwE_fleet = w$EwE_fleet, E = E * w$sh), by = .(Country, Year, unit, source)]
+    }), fill = TRUE)
+    ef <- rbindlist(list(ef[!is.na(EwE_fleet)], al), fill = TRUE)
+    rev[is.na(EwE_fleet), EwE_fleet := "shared among the country's commercial fleets by catch"]
+  }
+  effort_ewe <- ef[, .(E = sum(E, na.rm = TRUE), unit = unit[1], source = paste(unique(source), collapse = " + ")), by = .(Fleet = EwE_fleet, Year)]
+  yrs <- sort(unique(effort_ewe$Year))
+  if ("Recreational fisheries" %in% EWE_FLEETS && length(yrs))
+    effort_ewe <- rbindlist(list(effort_ewe, data.table(Fleet = "Recreational fisheries", Year = yrs, E = 1, unit = "none",
+                                                        source = "no effort data: constant")), fill = TRUE)
+  effort_ewe[, Fleet := factor(Fleet, levels = EWE_FLEETS)]
+  setorder(effort_ewe, Fleet, Year)
+  effort_ewe[, Fleet := as.character(Fleet)]
+  setnames(effort_ewe, "E", "nom_active_kWdays_effective")      # column name read by Ecosim_ts (any unit; used as an index)
+  miss <- setdiff(EWE_FLEETS, effort_ewe$Fleet)
+  fwrite(rev[order(Country, EwE_fleet)], file.path(csv_out_dir, "effort_to_ewe_fleet_REVIEW.csv"))
+  message("[Effort] Ecosim effort by EwE fleet: ", uniqueN(effort_ewe$Fleet), " of ", length(EWE_FLEETS), " fleets",
+          if (length(miss)) paste0(" (no effort: ", paste(miss, collapse = ", "), ")") else "",
+          "; EU-3 from STECF FDI days, Morocco/Algeria/Tunisia from FishMIP kW-days, recreational constant",
+          " (effort_to_ewe_fleet_REVIEW.csv).")
+}, error = function(e) message("[Effort] Ecosim effort by EwE fleet not built (", conditionMessage(e), ") - the FishMIP fleets are used."))
+
 sheets_to_write <- list(
   Bycatch_Placeholder           = bycatch_placeholder,
   Fleet_Structure               = fleet_structure_out
 )
 if (nrow(unreported_by_country) > 0) sheets_to_write$Unreported_Pct_by_Country <- unreported_by_country  # add this sheet only if it has data
-if (nrow(effort_by_fleet) > 0) sheets_to_write$Fishing_Effort_by_Fleet <- effort_by_fleet  # add this sheet only if it has data
+if (nrow(effort_ewe) > 0) {
+  sheets_to_write$Fishing_Effort_by_Fleet <- effort_ewe                         # Ecosim effort by EwE fleet
+  if (nrow(effort_by_fleet) > 0) sheets_to_write$Fishing_Effort_by_Fleet_source <- effort_by_fleet
+} else if (nrow(effort_by_fleet) > 0) sheets_to_write$Fishing_Effort_by_Fleet <- effort_by_fleet  # add this sheet only if it has data
 if (nrow(discard_calibration) > 0) sheets_to_write$SAU_STECF_Discard_Calibration <- discard_calibration  # add this sheet only if it has data
 if (nrow(star_catch_by_fg) > 0) sheets_to_write$STAR_RAM_Catch_CrossCheck <- catches_discards_fg[!is.na(star_catches_t), .(Year, FG_num, FG_name, Catch_t, star_catches_t, star_landings_t, star_catch_pct_diff, star_n_stocks, star_sources)]  # add this sheet only if the STAR/RAM cross-check found data
 

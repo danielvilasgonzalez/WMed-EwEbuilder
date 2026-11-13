@@ -355,8 +355,35 @@ observe({
   p <- p[Driver == d & Source %in% input$resp_view_src]
   p[, lab := paste0(FG_num, " ", FG_name)]
   if (length(input$resp_view_fg)) p <- p[lab %in% input$resp_view_fg]
+  if (isTRUE(input$resp_view_both)) p <- p[FG_num %in% p[, uniqueN(Source), by = FG_num][V1 > 1, FG_num]]
   p
 })
+## AquaMaps vs GLOSSA per FG: ranges at >= 0.5, peaks, Schoener's D and r on the common range
+output$resp_compare <- renderTable({
+  p <- .resp_pts(); d <- input$resp_view_drv
+  if (is.null(p) || is.null(d)) return(NULL)
+  p <- p[Driver == d]; p[, lab := paste0(FG_num, " ", FG_name)]
+  if (length(input$resp_view_fg)) p <- p[lab %in% input$resp_view_fg]
+  both <- p[, uniqueN(Source), by = FG_num][V1 > 1, FG_num]
+  if (!length(both)) return(data.frame(Note = "No FG has both an AquaMaps and a GLOSSA function for this driver yet."))
+  rng <- function(z) { k <- z$y >= 0.5; if (!any(k)) "-" else paste0(signif(min(z$x[k]), 3), " - ", signif(max(z$x[k]), 3)) }
+  out <- rbindlist(lapply(both, function(f) {
+    a <- p[FG_num == f & Source == "AquaMaps"][order(x)]; g <- p[FG_num == f & Source == "GLOSSA"][order(x)]
+    lo <- max(min(a$x), min(g$x)); hi <- min(max(a$x), max(g$x))
+    D <- r <- NA_real_
+    if (hi > lo) {
+      xs <- seq(lo, hi, length.out = 200)
+      ya <- approx(a$x, a$y, xs, rule = 2)$y; yg <- approx(g$x, g$y, xs, rule = 2)$y
+      if (sum(ya) > 0 && sum(yg) > 0) D <- 1 - 0.5 * sum(abs(ya / sum(ya) - yg / sum(yg)))
+      if (sd(ya) > 0 && sd(yg) > 0) r <- stats::cor(ya, yg)
+    }
+    data.table(FG = a$lab[1], `AquaMaps >= 0.5` = rng(a), `GLOSSA >= 0.5` = rng(g),
+               `AquaMaps peak` = signif(a$x[which.max(a$y)], 3), `GLOSSA peak` = signif(g$x[which.max(g$y)], 3),
+               `Common range` = if (hi > lo) paste0(signif(lo, 3), " - ", signif(hi, 3)) else "none",
+               Overlap = round(D, 2), r = round(r, 2))
+  }))
+  out[order(Overlap)]
+}, striped = TRUE, spacing = "xs", na = "-")
 .resp_ncol <- 4L
 output$resp_view_ui <- renderUI({
   p <- .resp_sel()
@@ -850,6 +877,13 @@ config_code <- reactive({
       sprintf("ECOSPACE_CELL_SIZE <- %s/60   # Ecospace base map at %s arc-min, depth from EMODnet (05b)", input$esp_cell_arcmin, input$esp_cell_arcmin),
     if (6 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
     if (6 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
+    if (4 %in% steps_sel() && identical(input$diet_engine, "dietcalc")) c(
+      "DIET_ENGINE <- \"dietcalc\"   # diet matrix from dietcalcR (04)",
+      if (!is.null(input$dietcalc_dir) && nzchar(trimws(input$dietcalc_dir))) sprintf("DIETCALC_DIR <- \"%s\"", .fwd(path.expand(trimws(input$dietcalc_dir)))),
+      if (!is.null(input$dietcalc_db) && nzchar(trimws(input$dietcalc_db))) sprintf("DIETCALC_DB <- \"%s\"", .fwd(path.expand(trimws(input$dietcalc_db)))),
+      if (!is.null(input$dietcalc_config) && nzchar(trimws(input$dietcalc_config))) sprintf("DIETCALC_CONFIG_DIR <- \"%s\"", .fwd(path.expand(trimws(input$dietcalc_config)))),
+      if (!is.null(input$dietcalc_region)) sprintf("DIETCALC_REGION <- \"%s\"", input$dietcalc_region),
+      if (!is.null(input$dietcalc_nobio)) sprintf("DIETCALC_NO_BIOMASS_PREY <- \"%s\"", input$dietcalc_nobio)),
     if (6 %in% steps_sel()) sprintf("RESPONSE_SOURCES <- c(%s)   # 05c response functions", paste0("\"", if (length(input$resp_src)) input$resp_src else "none", "\"", collapse = ", ")),
     if (6 %in% steps_sel() && !is.null(input$glossa_mode)) sprintf("GLOSSA_MODE <- \"%s\"", input$glossa_mode),
     if (!is.null(survey_files()$TA)) sprintf("MEDITS_TA_FILE   <- \"%s\"   # own MEDITS hauls", .fwd(survey_files()$TA$path)),
