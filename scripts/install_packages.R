@@ -90,6 +90,12 @@ wmed_check_packages <- function(quiet = FALSE) {
   }
 
   ## --- optional ----------------------------------------------------------
+  ## glossa (BART species distribution models, 05c response functions):
+  ## from CRAN; without it 05c writes the GLOSSA inputs only.
+  if (!"glossa" %in% have) {
+    say("installing glossa (05c GLOSSA response functions)...")
+    tryCatch(utils::install.packages("glossa"), error = function(e) say("glossa could not be installed: ", conditionMessage(e)))
+  }
   ## FishLife (growth and M from the phylogeny, used in 03 for P/B): tried
   ## once from GitHub; it may need build tools (Rtools on Windows). If it
   ## cannot be installed, 03 uses the FishLife results computed on another

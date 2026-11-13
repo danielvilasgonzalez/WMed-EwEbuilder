@@ -33,6 +33,9 @@
 ##     year by year. FG curve = the GLOSSA posterior mean, rescaled to a
 ##     maximum of 1, X range = the range of the driver in the hauls.
 ##     GLOSSA_MODE:
+##       "auto"    (default) "run" when the glossa package is installed,
+##                 else "prepare"; FGs that already have results in
+##                 GLOSSA_RESULTS_DIR are not fitted again.
 ##       "prepare" (default) writes the GLOSSA inputs: one occurrence
 ##                 file per FG (decimalLongitude, decimalLatitude,
 ##                 timestamp = year, pa; tab-separated) and
@@ -95,7 +98,8 @@ if (!exists("git_dir", envir = .GlobalEnv, inherits = FALSE)) git_dir <- dirname
 .hr_default("RESPONSE_SOURCES", c("aquamaps", "glossa"))                   # one or both
 .hr_default("RESPONSE_DRIVERS", c("depth", "temp_bot", "temp_surf", "sal_surf", "npp"))
 .hr_default("RESPONSE_N_POINTS", 1200L)                                    # EwE response functions have 1200 values
-.hr_default("GLOSSA_MODE", "prepare")                                      # "prepare", "run" or "read"
+.hr_default("GLOSSA_MODE", "auto")                                         # "auto", "prepare", "run" or "read"
+.hr_default("GLOSSA_FGS", NULL)                                            # NULL = every FG with enough hauls; or FG numbers
 .hr_default("GLOSSA_MONTHS", 5:7)                                          # months averaged for the layers (MEDITS: May-July)
 .hr_default("GLOSSA_YEARS", NULL)                                          # NULL = every survey year with environmental maps
 .hr_default("GLOSSA_MIN_PRESENCES", 30L)                                   # fewer hauls with the FG: no GLOSSA model
@@ -332,27 +336,44 @@ gl_dir <- file.path(resp_dir, "glossa_inputs")
 
 fr <- list()
 if ("glossa" %in% RESPONSE_SOURCES) tryCatch({
-  if (GLOSSA_MODE %in% c("prepare", "run")) {
+  mode <- GLOSSA_MODE
+  if (identical(mode, "auto")) {
+    mode <- if (requireNamespace("glossa", quietly = TRUE)) "run" else "prepare"
+    if (mode == "prepare") .hr_msg("GLOSSA: the glossa package is not installed (install.packages(\"glossa\")) - only its inputs are written.")
+  }
+  if (mode %in% c("prepare", "run")) {
     gi <- .glossa_prepare()
-    if (GLOSSA_MODE == "run") {
+    if (mode == "run") {
       if (!requireNamespace("glossa", quietly = TRUE)) {
         .hr_msg("GLOSSA_MODE = \"run\" needs the glossa package (install.packages(\"glossa\")) - only the inputs were written.")
       } else if (length(gi$pa)) {
-        .hr_msg("Running GLOSSA (BART) for ", length(gi$pa), " FGs - this takes a while.")
-        res <- glossa::glossa_analysis(pa_data = gi$pa, fit_layers = gi$zip, predictor_variables = NULL, scale_layers = TRUE,
-                                       other_analysis = "functional_responses", model_args = GLOSSA_MODEL_ARGS, seed = GLOSSA_SEED)
-        fr <- res$other_results$response_curve
+        ## one FG at a time, results saved as soon as each is done: a stopped
+        ## run goes on from where it was, and one failing FG does not stop the rest
         dir.create(GLOSSA_RESULTS_DIR, recursive = TRUE, showWarnings = FALSE)
-        for (lab in names(fr)) for (drv in names(fr[[lab]]))            # same files as GLOSSA's export
-          utils::write.table(fr[[lab]][[drv]], file.path(GLOSSA_RESULTS_DIR, paste0(lab, "_func_res_", drv, ".tsv")),
-                             sep = "\t", dec = ".", quote = FALSE, row.names = FALSE)
+        done <- names(.glossa_read(GLOSSA_RESULTS_DIR))
+        todo <- setdiff(names(gi$pa), done)
+        if (!is.null(GLOSSA_FGS)) todo <- todo[as.integer(sub("^FG", "", todo)) %in% GLOSSA_FGS]
+        .hr_msg("GLOSSA (BART): ", length(todo), " FG(s) to fit, ", length(intersect(done, names(gi$pa))), " already done",
+                if (length(todo)) " - several minutes per FG." else ".")
+        for (k in seq_along(todo)) {
+          lab <- todo[k]; t0 <- Sys.time()
+          res <- tryCatch(glossa::glossa_analysis(pa_data = gi$pa[lab], fit_layers = gi$zip, predictor_variables = NULL, scale_layers = TRUE,
+                                                  other_analysis = "functional_responses", model_args = GLOSSA_MODEL_ARGS, seed = GLOSSA_SEED),
+                          error = function(e) { .hr_msg("GLOSSA ", lab, " failed: ", conditionMessage(e)); NULL })
+          rc <- if (!is.null(res)) res$other_results$response_curve[[lab]] else NULL
+          for (drv in names(rc))                                           # same files as GLOSSA's export
+            utils::write.table(rc[[drv]], file.path(GLOSSA_RESULTS_DIR, paste0(lab, "_func_res_", drv, ".tsv")),
+                               sep = "\t", dec = ".", quote = FALSE, row.names = FALSE)
+          .hr_msg("GLOSSA ", k, "/", length(todo), " ", lab, " ", fgs[FG_num == as.integer(sub("^FG", "", lab)), FG_name], ": ",
+                  if (length(rc)) "done" else "no response curves", " (", round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 1), " min)")
+        }
       }
     }
   }
   if (!length(fr)) fr <- .glossa_read(GLOSSA_RESULTS_DIR)
   if (!length(fr)) {
     .hr_msg("GLOSSA: no functional responses yet in ", GLOSSA_RESULTS_DIR,
-            if (GLOSSA_MODE == "prepare") " - run GLOSSA on glossa_inputs/ and export the functional responses there." else ".")
+            " - install the glossa package and run 05c again (or run GLOSSA on glossa_inputs/ and export the functional responses there).")
   } else {
     n0 <- length(funs)
     for (lab in names(fr)) {

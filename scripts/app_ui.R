@@ -337,8 +337,8 @@ tagList(
     fluidRow(column(6, checkboxGroupInput("resp_src", "Sources", inline = TRUE, choices = c("AquaMaps" = "aquamaps", "GLOSSA" = "glossa"),
                                           selected = c("aquamaps", "glossa"))),
              column(6, selectInput("glossa_mode", "GLOSSA", width = "100%",
-                                   c("Prepare the inputs for the GLOSSA app" = "prepare", "Run GLOSSA here (slow)" = "run",
-                                     "Read the results exported from GLOSSA" = "read")))),
+                                   c("Run GLOSSA here if installed, else prepare its inputs" = "auto", "Prepare the inputs for the GLOSSA app" = "prepare",
+                                     "Run GLOSSA here (slow)" = "run", "Read the results exported from GLOSSA" = "read")))),
     tags$div(class = "wm-help", "One function per FG and driver (depth, bottom and surface temperature, salinity, NPP), 1200 values between X min and X max, maximum 1, as EwE keeps them (environment/ecospace_responses/). AquaMaps: the species\u2019 envelopes (trapezoids) weighted by their share of the FG biomass. GLOSSA (BART species distribution models, iMARES): the functional response of the FG\u2019s presence in the MEDITS hauls; \u201cPrepare\u201d writes the occurrences and fit_layers.zip for the GLOSSA app, then save GLOSSA\u2019s exported functional responses in glossa_results/ and run 05c again with \u201cRead\u201d.")))),
 
   ## 6. Run ----------------------------------------------------------------

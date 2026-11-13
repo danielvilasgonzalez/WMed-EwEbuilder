@@ -349,9 +349,20 @@ if (!exists("DIET_ENGINE", envir = .GlobalEnv, inherits = FALSE)) DIET_ENGINE <-
 ## dietcalcR works on, so it is not a source of its own (FALSE); TRUE reads
 ## its rows directly, without dietcalcR's scoring
 if (!exists("DIET_USE_METAWEB", envir = .GlobalEnv, inherits = FALSE)) DIET_USE_METAWEB <- FALSE
-if (!exists("DIETCALC_DIR", envir = .GlobalEnv, inherits = FALSE)) DIETCALC_DIR <- file.path(pcloud_dir, "data/diet/dietcalcR")
-if (!exists("DIETCALC_DB", envir = .GlobalEnv, inherits = FALSE)) {
-  .cand <- list.files(file.path(pcloud_dir, "data/diet/dietcalc_db"), pattern = "\\.(accdb|mdb|sqlite|sqlite3|db)$", full.names = TRUE, ignore.case = TRUE)
+## dietcalcR folder: the shared data folder, else a dietcalcR* folder in
+## Downloads, Documents or Documents/GitHub of this computer
+if (!exists("DIETCALC_DIR", envir = .GlobalEnv, inherits = FALSE) || !dir.exists(file.path(DIETCALC_DIR, "R"))) {
+  .cand <- c(file.path(pcloud_dir, "data/diet/dietcalcR"),
+             unlist(lapply(path.expand(c("~/Downloads", "~/Documents", "~/Documents/GitHub", "~/GitHub")), function(d)
+               if (dir.exists(d)) list.files(d, pattern = "^dietcalc", full.names = TRUE, ignore.case = TRUE) else character(0))))
+  .cand <- .cand[dir.exists(file.path(.cand, "R")) & file.exists(file.path(.cand, "DESCRIPTION"))]
+  DIETCALC_DIR <- if (length(.cand)) .cand[1] else file.path(pcloud_dir, "data/diet/dietcalcR")
+}
+## diet database: data/diet/dietcalc_db (Access, SQLite or csv folder), else
+## the data-entry workbook of the same database (data_entry_metaweb*.xlsx)
+if (!exists("DIETCALC_DB", envir = .GlobalEnv, inherits = FALSE) || !(file.exists(DIETCALC_DB) || dir.exists(DIETCALC_DB))) {
+  .cand <- c(list.files(file.path(pcloud_dir, "data/diet/dietcalc_db"), pattern = "\\.(accdb|mdb|sqlite|sqlite3|db|xlsx)$", full.names = TRUE, ignore.case = TRUE),
+             list.files(file.path(pcloud_dir, "data"), pattern = "^data_entry_metaweb.*\\.xlsx$", recursive = TRUE, full.names = TRUE, ignore.case = TRUE))
   DIETCALC_DB <- if (length(.cand)) .cand[1] else file.path(pcloud_dir, "data/diet/dietcalc_db")
 }
 if (!exists("DIETCALC_CONFIG_DIR", envir = .GlobalEnv, inherits = FALSE)) DIETCALC_CONFIG_DIR <- file.path(pcloud_dir, "data/diet/dietcalc_config")
@@ -1511,13 +1522,26 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
                 file.path(BIOMASS_CSV_DIR, "intermediate", "biomass_proportion_by_species_fg.csv"))
       .bpf <- .bpf[file.exists(.bpf)][1]
       if (is.na(.bpf)) stop("biomass_proportion_by_species_fg.csv (01) not found")
-      dietcalc_fg_diet(group_table, fread(.bpf))
-    }, error = function(e) { message("[04_diets.R] dietcalcR not used: ", conditionMessage(e)); NULL })
-    if (!is.null(dc_res) && nrow(dc_res$fg_diet)) {
+      dietcalc_fg_diet(group_table, fread(.bpf), fg_species = species_to_fg_reference_only)
+    }, error = function(e) { message("[04_diets.R] dietcalcR not used: ", conditionMessage(e)); structure(list(), why = conditionMessage(e)) })
+    ## what happened, for the Diet explorer of the page
+    .dcd <- file.path(csv_out_dir, "dietcalc"); dir.create(.dcd, showWarnings = FALSE)
+    writeLines(c(format(Sys.time(), "%Y-%m-%d %H:%M"),
+                 if (!length(dc_res)) paste0("dietcalcR not used: ", attr(dc_res, "why"))
+                 else if (!nrow(dc_res$fg_diet)) "dietcalcR ran but gave no FG diet (no records for the model's predators)"
+                 else paste0("dietcalcR diets for ", uniqueN(dc_res$fg_diet$predator_fg), " predator FGs"),
+                 paste0("dietcalcR folder: ", DIETCALC_DIR), paste0("diet database: ", DIETCALC_DB)), file.path(.dcd, "dietcalc_status.txt"))
+    if (length(dc_res) && !is.null(dc_res$coverage)) {
+      fwrite(dc_res$coverage, file.path(.dcd, "dietcalc_coverage_REVIEW.csv"))
+      if (!is.null(dc_res$fg_mismatch) && nrow(dc_res$fg_mismatch)) fwrite(dc_res$fg_mismatch, file.path(.dcd, "dietcalc_fg_vs_01_biomass_REVIEW.csv"))
+      .nc <- dc_res$coverage[dietcalc_diet == FALSE]
+      if (nrow(.nc)) message("[04_diets.R] dietcalcR has no diet for ", nrow(.nc), " predator FG(s) (dietcalc_coverage_REVIEW.csv): ",
+                             paste(.nc[, .N, by = why][, paste0(N, " ", why)], collapse = "; "), " - the other sources fill them.")
+    }
+    if (length(dc_res) && nrow(dc_res$fg_diet)) {
       dietcalc_fgs <- unique(dc_res$fg_diet$predator_fg)
       fg_diet <- rbind(fg_diet[!predator_fg %in% dietcalc_fgs], dc_res$fg_diet, fill = TRUE)
       predator_fg_still_missing <- setdiff(predator_fg_still_missing, dietcalc_fgs)
-      .dcd <- file.path(csv_out_dir, "dietcalc"); dir.create(.dcd, showWarnings = FALSE)
       fwrite(dc_res$fg_diet, file.path(.dcd, "dietcalc_fg_diet.csv"))
       tryCatch(fwrite(build_ecopath_diet_sheet(dc_res$fg_diet, group_table), file.path(.dcd, "diet_matrix_dietcalc.csv")), error = function(e) NULL)
       if (nrow(dc_res$pedigree)) fwrite(dc_res$pedigree, file.path(.dcd, "dietcalc_diet_pedigree.csv"))

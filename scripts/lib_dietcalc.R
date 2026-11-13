@@ -112,7 +112,7 @@
        methods = data.frame(method_code = 0:5, method_name = c("Unknown", "Stable isotopes", "Visual observations", "Stomach content", "Others", "Metabarcoding")))
 }
 
-dietcalc_fg_diet <- function(group_table, species_biomass,
+dietcalc_fg_diet <- function(group_table, species_biomass, fg_species = NULL,
                              dietcalc_dir = get0("DIETCALC_DIR", ifnotfound = NULL),
                              db = get0("DIETCALC_DB", ifnotfound = NULL),
                              config_dir = get0("DIETCALC_CONFIG_DIR", ifnotfound = NULL),
@@ -155,42 +155,128 @@ dietcalc_fg_diet <- function(group_table, species_biomass,
   ## model species -> database species codes (by scientific name)
   key <- function(x) tolower(gsub("[^A-Za-z]+", " ", trimws(x)))
   si <- as.data.table(species_info)[, k := key(species_name)]
-  sb <- as.data.table(species_biomass)[, .(FG_num = as.integer(FG_num), Species, B = as.numeric(Biomass_t_km2))][!is.na(FG_num)]
+  ## Coverage: dietcalcR scores records (region, years, data, method) but
+  ## does not drop them, so any record of a predator counts; a predator
+  ## species is only used when it is in an FG with biomass > 0. To use every
+  ## record the database has:
+  ##  - every FG-table species gets a biomass: its own (01), else its share of
+  ##    the FG's Ecopath B, else a tiny one (1e-9 t/km2: used only when no
+  ##    species of the FG with biomass has a diet);
+  ##  - database species not in the FG table (predators and prey) join the FG
+  ##    of their genus (the FG with most biomass of that genus), else of their
+  ##    family, with the tiny biomass;
+  ##  - records with no sampling years (dropped by dietcalcR) get the
+  ##    years of the other records of their study, else are reported.
+  sp <- as.data.table(species_biomass)
+  num <- function(v) suppressWarnings(as.numeric(v))
+  b01 <- sp[, .(FG_num = as.integer(FG_num),
+                FG_name = if ("FG_name" %in% names(sp)) as.character(FG_name) else NA_character_,
+                Species, B = num(Biomass_t_km2),
+                Bfg = if ("Ecopath_B_Biomass" %in% names(sp)) num(Ecopath_B_Biomass) else NA_real_,
+                w = if ("prop_sp_fg" %in% names(sp)) num(prop_sp_fg) else NA_real_)][!is.na(FG_num)]
+  TINY <- 1e-9
+  fg_mismatch <- NULL
+  if (!is.null(fg_species) && nrow(fg_species)) {
+    ## FG membership = the current FG table of the app (it can be edited
+    ## there); the biomass file of 01 only gives the weights. A species keeps
+    ## its own 01 biomass (times its share in the FG); the FG-share fallback
+    ## is used only where its FG is unchanged.
+    gt <- as.data.table(group_table)
+    fs <- unique(as.data.table(fg_species)[!is.na(species) & species != "",
+                 .(Species = as.character(species), FG_name = as.character(fg_name),
+                   prop = { p <- num(proportion); fifelse(is.finite(p) & p > 0, p, 1) })])
+    fs[, FG_num := as.integer(gt$group_number[match(FG_name, gt$group_name)])]
+    fs <- fs[!is.na(FG_num)]
+    nk <- function(x) tolower(gsub("[^A-Za-z]+", " ", trimws(x)))
+    fs[, k := nk(Species)]; b01[, k := nk(Species)]
+    bsp <- b01[is.finite(B) & B > 0, .(Bsp = sum(B)), by = k]
+    bfg <- b01[, .(Bfg = Bfg[1], w = sum(w, na.rm = TRUE)), by = .(k, FG_name)]
+    fs <- merge(fs, bsp, by = "k", all.x = TRUE)
+    fs <- merge(fs, bfg, by = c("k", "FG_name"), all.x = TRUE)
+    sb <- fs[, .(FG_num, Species, B = Bsp * prop, Bfg, w)]
+    ## review: species whose FG differs between the 01 biomass file and the FG table
+    o1 <- unique(b01[, .(k, Species_01 = Species, FG_01 = FG_name)])
+    o2 <- unique(fs[, .(k, Species, FG_app = FG_name)])
+    m <- merge(o2[, .(FG_app = paste(sort(unique(FG_app)), collapse = " | ")), by = .(k, Species)],
+               o1[, .(FG_01 = paste(sort(unique(FG_01)), collapse = " | ")), by = k], by = "k", all = TRUE)
+    m <- m[is.na(FG_app) | is.na(FG_01) | FG_app != FG_01]
+    if (nrow(m)) {
+      m[, Species := fifelse(is.na(Species), o1$Species_01[match(k, o1$k)], Species)]
+      m[, issue := fifelse(is.na(FG_01), "in the FG table, not in the 01 biomass (tiny biomass used)",
+                   fifelse(is.na(FG_app), "in the 01 biomass, not in the FG table (not used)",
+                           "FG changed since 01 (own biomass kept)"))]
+      fg_mismatch <- m[, .(Species, FG_app, FG_01, issue)][order(issue, Species)]
+      message("[dietcalc] ", nrow(fg_mismatch), " species differ between the FG table and the 01 biomass file ",
+              "(dietcalcR uses the FG table; rerun 01 to update the biomass weights).")
+    }
+  } else {
+    sb <- b01[, .(FG_num, Species, B, Bfg, w)]
+  }
+  sb[!(is.finite(B) & B > 0) & is.finite(Bfg) & Bfg > 0 & is.finite(w) & w > 0, B := Bfg * w]
+  sb[!(is.finite(B) & B > 0), B := TINY]
   sb[, k := key(Species)]
   sb[, species_code := si$species_code[match(k, si$k)]]
   n_match <- sb[!is.na(species_code), uniqueN(Species)]
   sb[is.na(species_code), species_code := paste0("wmed_", gsub("[^A-Za-z0-9]+", "_", Species))]
   gs <- unique(sb[, .(group_code = as.character(FG_num), species_code)])
-  ## database prey not in the FG table: by genus, to that genus' FG with most biomass
-  prey <- setdiff(unique(diets$prey_code), gs$species_code)
-  pi <- si[species_code %in% prey & !is.na(species_name)]
-  pi[, genus := sub(" .*$", "", key(species_name))]
   sb[, genus := sub(" .*$", "", k)]
-  gfg <- sb[is.finite(B), .(B = sum(B)), by = .(genus, FG_num)][order(genus, -B)][, .SD[1], by = genus]
-  pi <- merge(pi, gfg[, .(genus, FG_num)], by = "genus")
+  if (!"family" %in% names(si)) si[, family := NA_character_]
+  sb[, family := tolower(si$family[match(species_code, si$species_code)])]
+  gfg <- sb[B > TINY, .(B = sum(B)), by = .(genus, FG_num)][order(genus, -B)][, .SD[1], by = genus]
+  ffg <- sb[B > TINY & !is.na(family), .(B = sum(B)), by = .(family, FG_num)][order(family, -B)][, .SD[1], by = family]
+  extra <- setdiff(unique(c(diets$predator_code, diets$prey_code)), gs$species_code)
+  pi <- si[species_code %in% extra & !is.na(species_name)]
+  pi[, `:=`(genus = sub(" .*$", "", key(species_name)), family = tolower(family))]
+  pi[, FG_num := gfg$FG_num[match(genus, gfg$genus)]]
+  pi[is.na(FG_num), FG_num := ffg$FG_num[match(family[is.na(FG_num)], ffg$family)]]
+  pi[, by_rank := fifelse(genus %in% gfg$genus, "genus", "family")]
+  pi <- pi[!is.na(FG_num)]
   if (nrow(pi)) gs <- unique(rbind(gs, pi[, .(group_code = as.character(FG_num), species_code)]))
+  ## records with no years: the years of their study
+  if (!"study_id" %in% names(diets)) diets$study_key <- diets$reference
+  dd <- as.data.table(diets)
+  dd[, `:=`(ys = suppressWarnings(min(year_start, na.rm = TRUE)), ye = suppressWarnings(max(year_end, na.rm = TRUE))), by = reference]
+  n_fill <- dd[(is.na(year_start) | is.na(year_end)) & is.finite(ys) & is.finite(ye), .N]
+  dd[is.na(year_start) & is.finite(ys), year_start := as.integer(ys)]; dd[is.na(year_end) & is.finite(ye), year_end := as.integer(ye)]
+  n_noyear <- dd[is.na(year_start) | is.na(year_end), .N]
+  diets <- as.data.frame(dd[, !c("ys", "ye")]); diets$study_key <- NULL
+  if (n_fill || n_noyear) message("[dietcalc] ", n_fill, " records without years took the years of their study; ",
+                                  n_noyear, " records with no years at all (dietcalcR leaves them out).")
   gt <- as.data.table(group_table)
   groups <- data.frame(group_code = as.character(gt$group_number), group_name = gt$group_name,
                        category = ifelse(gt$is_predator %in% TRUE, "consumer",
                                          ifelse(grepl("detritus|discard", gt$group_name, ignore.case = TRUE), "detritus", "producer")),
                        ewe_order = as.integer(gt$group_number), stringsAsFactors = FALSE)
-  bio <- unique(sb[is.finite(B) & B > 0, .(species_code, biomass = B)], by = "species_code")
+  bio <- unique(rbind(sb[, .(species_code, biomass = B)], pi[, .(species_code, biomass = TINY)]), by = "species_code")
   message("[dietcalc] ", nrow(diets), " diet records of ", uniqueN(diets$reference), " studies; ", n_match, " of ",
-          uniqueN(sb$Species), " FG-table species found in the diet database; ", nrow(pi), " more prey by genus; region ",
+          uniqueN(sb$Species), " FG-table species found in the diet database; ", pi[by_rank == "genus", .N], " more species by genus and ",
+          pi[by_rank == "family", .N], " by family; region ",
           region, " (code ", region_code, "), years ", min(years), "-", max(years), ".")
   p <- dc$dietcalc_run_scenario(diets = diets, biomass = as.data.frame(bio), group_species = as.data.frame(gs), groups = groups,
                                 species_info = species_info, compatibility = comp, region = region_code,
                                 year_start = as.integer(min(years)), year_end = as.integer(max(years)),
                                 collecting_data_codes = data_codes, diet_method = methods, no_biomass_prey = no_biomass_prey)
   m <- p$outputs$ewe_diet_matrix
-  if (is.null(m) || !ncol(m)) return(list(fg_diet = data.table(), pedigree = data.table(), project = p))
+  if (is.null(m) || !ncol(m)) m <- matrix(numeric(0), 0, 0)
   nm <- setNames(gt$group_name, as.character(gt$group_number))
-  long <- as.data.table(as.table(m))[N > 0]
+  long <- if (length(m)) as.data.table(as.table(m))[N > 0] else data.table(V1 = character(0), V2 = character(0), N = numeric(0))
   setnames(long, c("prey_code", "pred_code", "weight"))
   long[, `:=`(predator_fg = unname(nm[pred_code]), prey_fg = fifelse(prey_code %in% names(nm), unname(nm[prey_code]), prey_code))]
   long <- long[!is.na(predator_fg)]
   long[, weight := weight / sum(weight), by = predator_fg]
   ped <- as.data.table(p$outputs$ewe_diet_pedigree)
-  list(fg_diet = long[, .(predator_fg, prey_fg, weight)], pedigree = ped, project = p,
-       records = as.data.table(p$scores$record), studies = as.data.table(p$selection$studies))
+  ## coverage per predator FG: why an FG has (no) dietcalcR diet
+  prd <- unique(as.data.table(diets)[, .(species_code = predator_code, dated = !is.na(year_start) & !is.na(year_end))])
+  gsd <- merge(as.data.table(gs), prd[, .(any_rec = TRUE, dated = any(dated)), by = species_code], by = "species_code", all.x = TRUE)
+  cov <- gsd[, .(species_in_db = sum(!grepl("^wmed_", species_code)), predators_with_records = sum(any_rec %in% TRUE),
+                 predators_with_dated_records = sum(dated %in% TRUE)), by = .(FG_num = as.integer(group_code))]
+  cov <- merge(gt[is_predator %in% TRUE, .(FG_num = as.integer(group_number), FG_name = group_name)], cov, by = "FG_num", all.x = TRUE)
+  for (cc in c("species_in_db", "predators_with_records", "predators_with_dated_records")) cov[is.na(get(cc)), (cc) := 0L]
+  cov[, dietcalc_diet := FG_name %in% long$predator_fg]
+  cov[, why := fifelse(dietcalc_diet, "", fifelse(species_in_db == 0, "none of its species (or their genus/family) is in the database",
+                fifelse(predators_with_records == 0, "its species are in the database only as prey (no diet records)",
+                fifelse(predators_with_dated_records == 0, "its diet records have no sampling years", "its records give no prey of the model"))))]
+  list(fg_diet = long[, .(predator_fg, prey_fg, weight)], pedigree = ped, project = p, coverage = cov[order(FG_num)],
+       records = as.data.table(p$scores$record), studies = as.data.table(p$selection$studies),
+       fg_mismatch = fg_mismatch)
 }

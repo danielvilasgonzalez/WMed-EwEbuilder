@@ -394,8 +394,10 @@ output$resp_view_ui <- renderUI({
   p <- .resp_sel()
   if (is.null(p) || !nrow(p)) {
     plot.new()
+    gl <- if ("GLOSSA" %in% input$resp_view_src && !is.null(.resp_pts()) && !any(.resp_pts()$Source == "GLOSSA"))
+      "\nGLOSSA has no results yet: install the glossa package and run 05c again (GLOSSA: \u201cRun GLOSSA here if installed\u201d)." else ""
     text(0.5, 0.5, if (is.null(.resp_pts())) "No response functions yet: run 05c (tick \u201c05b Ecospace maps + 05c responses\u201d in Run)." else
-      "No response function for this driver, source or FG.", cex = 1.2)
+      paste0("No response function for this driver, source or FG.", gl), cex = 1.2)
     return(invisible())
   }
   labs <- unique(p[order(FG_num), lab]); n <- length(labs)
@@ -414,7 +416,9 @@ output$resp_view_ui <- renderUI({
       lines(z$x, z$y, col = cols[s], lwd = 2.2)
     }
   }
-  mtext(paste0("Ecospace response functions: ", drv_lab, "   (blue AquaMaps, red GLOSSA)"), outer = TRUE, cex = 1.15, font = 2)
+  nog <- "GLOSSA" %in% input$resp_view_src && !any(.resp_pts()$Source == "GLOSSA")
+  mtext(paste0("Ecospace response functions: ", drv_lab, if (nog) "   (AquaMaps only - GLOSSA has no results yet: install the glossa package and run 05c again)" else "   (blue AquaMaps, red GLOSSA)"),
+        outer = TRUE, cex = 1.1, font = 2)
 }
 output$resp_view_plot <- renderPlot(.resp_draw())
 output$dl_resp_fig <- downloadHandler(
@@ -1509,10 +1513,13 @@ output$fleet_plot_effort <- renderPlot({
     x <- data.frame(predator_fg = x$predator_fg, prey_fg = x$prey_fg, weight = suppressWarnings(as.numeric(x[[col]])), stringsAsFactors = FALSE)
     x[is.finite(x$weight) & x$weight > 0, , drop = FALSE]
   }
+  ## always the three sources (and the model's matrix); an empty one says why
   out <- list(Model = rd("diet_main_vs_reference_REVIEW.csv", "main"), dietcalcR = rd(file.path("dietcalc", "dietcalc_fg_diet.csv")),
-              MAISHA = rd(file.path("MAISHA", "maisha_diet_matrix_fg_long.csv")), FishBase = rd(file.path("FishBase", "fishbase_diet_matrix_fg_long.csv")),
-              Metaweb = rd(file.path("Metaweb", "metaweb_diet_matrix_fg_long.csv")))
-  out <- out[!vapply(out, function(x) is.null(x) || !nrow(x), logical(1))]
+              MAISHA = rd(file.path("MAISHA", "maisha_diet_matrix_fg_long.csv")), `FishBase / SeaLifeBase` = rd(file.path("FishBase", "fishbase_diet_matrix_fg_long.csv")))
+  st <- file.path(d, "dietcalc", "dietcalc_status.txt")
+  why <- c(Model = "run 04 diets", dietcalcR = if (file.exists(st)) paste(readLines(st, warn = FALSE)[2], collapse = " ") else "dietcalcR not ticked in card 2, or 04 not run since",
+           MAISHA = "MAISHA not ticked in card 2, or no MAISHA records", `FishBase / SeaLifeBase` = "FishBase not ticked in card 2, or no FishBase records")
+  attr(out, "why") <- why
   pv <- c(file.path(d, "diet_provenance_by_predator_fg.csv"), file.path(d, "intermediate", "diet_provenance_by_predator_fg.csv")); pv <- pv[file.exists(pv)][1]
   attr(out, "prov") <- if (!is.na(pv)) tryCatch(as.data.frame(fread(pv)), error = function(e) NULL)
   out
@@ -1524,16 +1531,16 @@ output$fleet_plot_effort <- renderPlot({
 }
 observe({
   t <- .diet_tabs(); if (is.null(t) || !length(t)) return()
-  preds <- .diet_fg_order(unique(unlist(lapply(t, function(x) x$predator_fg))))
+  preds <- .diet_fg_order(unique(unlist(lapply(t, function(x) if (!is.null(x)) x$predator_fg))))
   updateSelectInput(session, "diet_view_pred", choices = preds, selected = if (isTRUE(isolate(input$diet_view_pred) %in% preds)) isolate(input$diet_view_pred) else preds[1])
   updateSelectInput(session, "diet_view_src1", choices = names(t), selected = if (isTRUE(isolate(input$diet_view_src1) %in% names(t))) isolate(input$diet_view_src1) else names(t)[1])
   updateCheckboxGroupInput(session, "diet_view_src", choices = names(t), selected = names(t), inline = TRUE)
 })
-.diet_cols <- c(Model = "#333333", dietcalcR = "#d62728", MAISHA = "#1f77b4", FishBase = "#2ca02c", Metaweb = "#9467bd")
+.diet_cols <- c(Model = "#333333", dietcalcR = "#d62728", MAISHA = "#1f77b4", `FishBase / SeaLifeBase` = "#2ca02c")
 .diet_pred_data <- reactive({
   t <- .diet_tabs(); p <- input$diet_view_pred
   if (is.null(t) || is.null(p) || !nzchar(p)) return(NULL)
-  src <- intersect(names(t), input$diet_view_src); if (!length(src)) return(NULL)
+  src <- intersect(names(t), input$diet_view_src); src <- src[!vapply(t[src], is.null, logical(1))]; if (!length(src)) return(NULL)
   l <- lapply(src, function(s) { x <- t[[s]][t[[s]]$predator_fg == p, , drop = FALSE]; if (nrow(x)) tapply(x$weight, x$prey_fg, sum) else numeric(0) })
   names(l) <- src
   prey <- unique(unlist(lapply(l, names))); if (!length(prey)) return(NULL)
@@ -1550,7 +1557,8 @@ output$diet_view_plot <- renderPlot({
   t <- .diet_tabs()
   if (is.null(t) || !length(t)) { plot.new(); text(0.5, 0.5, "No diet outputs yet: run 04 diets.", cex = 1.2); return(invisible()) }
   if (identical(input$diet_view_mode, "matrix")) {
-    s <- input$diet_view_src1; x <- t[[s]]; if (is.null(x)) { plot.new(); return(invisible()) }
+    s <- input$diet_view_src1; x <- t[[s]]
+    if (is.null(x)) { plot.new(); text(0.5, 0.5, paste0("No ", s, " diet in the last run:\n", attr(t, "why")[[s]]), cex = 1.15); return(invisible()) }
     pr <- .diet_fg_order(unique(x$predator_fg)); py <- .diet_fg_order(unique(x$prey_fg))
     m <- matrix(0, length(py), length(pr), dimnames = list(py, pr))
     m[cbind(match(x$prey_fg, py), match(x$predator_fg, pr))] <- x$weight
@@ -1563,13 +1571,17 @@ output$diet_view_plot <- renderPlot({
   }
   m <- .diet_pred_data()
   if (is.null(m) || !nrow(m)) { plot.new(); text(0.5, 0.5, "No diet for this predator in the ticked sources.", cex = 1.2); return(invisible()) }
+  miss <- setdiff(intersect(names(t), input$diet_view_src), colnames(m))
   prov <- attr(t, "prov"); pl <- if (!is.null(prov) && input$diet_view_pred %in% prov$FG_name) prov$diet_source[match(input$diet_view_pred, prov$FG_name)] else NA
-  op <- par(mar = c(4.5, 17, 3, 1), cex.axis = 1.05, cex.lab = 1.1); on.exit(par(op))
+  op <- par(mar = c(6, 17, 3, 1), cex.axis = 1.05, cex.lab = 1.1); on.exit(par(op))
   cols <- unname(.diet_cols[colnames(m)])
   barplot(t(m), beside = TRUE, horiz = TRUE, las = 1, col = cols, border = NA, xlim = c(0, max(0.05, max(m)) * 1.08), xlab = "Share of the diet",
           names.arg = ifelse(nchar(rownames(m)) > 34, paste0(substr(rownames(m), 1, 33), "\u2026"), rownames(m)),
           main = paste0(input$diet_view_pred, if (!is.na(pl)) paste0("   (model diet from: ", pl, ")") else ""))
   legend("bottomright", legend = rev(colnames(m)), fill = rev(cols), border = NA, bty = "n", cex = 1.1)
+  if (length(miss)) mtext(paste0("No diet for this predator from ", paste(miss, collapse = ", "),
+                                 if ("dietcalcR" %in% miss && is.null(t$dietcalcR)) paste0(" (dietcalcR: ", attr(t, "why")[["dietcalcR"]], ")") else ""),
+                          side = 1, line = 4.6, cex = 0.85, col = "grey30", adj = 0)
 })
 
 ## the diet matrix of each source (Metaweb, MAISHA, FishBase, dietcalc), the reference matrix and where each FG's diet came from
