@@ -1438,44 +1438,63 @@ output$dl_workbook <- downloadHandler(function() paste0("ecopath_ecosim_inputs_"
 observe({
   d <- .fleet_dat(); if (is.null(d)) return()
   ch <- if (identical(input$fleet_view_mode, "fg")) rownames(d$L)[rowSums(d$L + d$D) > 0] else colnames(d$L)[colSums(d$L + d$D) > 0]
-  updateSelectInput(session, "fleet_explore", choices = ch, selected = if (isTRUE(isolate(input$fleet_explore) %in% ch)) isolate(input$fleet_explore) else ch[1])
+  cur <- intersect(isolate(input$fleet_explore), ch)
+  updateSelectizeInput(session, "fleet_explore", choices = ch, selected = if (length(cur)) cur else ch[1])
 })
 .fleet_short <- function(v, n = 36) ifelse(nchar(v) > n, paste0(substr(v, 1, n - 1), "\u2026"), v)
-output$fleet_plot_catch <- renderPlot({
+.fleet_pal <- function(n) if (n <= 8) c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#17becf")[seq_len(n)] else grDevices::hcl.colors(n, "Dark 3")
+## selected fleets (or FGs) x the other dimension: matrix of the chosen catch
+.fleet_sel <- reactive({
   d <- .fleet_dat(); k <- input$fleet_explore
-  if (is.null(d) || is.null(k) || !nzchar(k)) { plot.new(); text(0.5, 0.5, "No workbook yet: run 02 fisheries.", cex = 1.2); return(invisible()) }
+  if (is.null(d) || !length(k)) return(NULL)
   byfg <- identical(input$fleet_view_mode, "fg")
-  if ((byfg && !k %in% rownames(d$L)) || (!byfg && !k %in% colnames(d$L))) { plot.new(); return(invisible()) }
-  l <- if (byfg) d$L[k, ] else d$L[, k]; di <- if (byfg) d$D[k, ] else d$D[, k]
-  if (identical(input$fleet_view_what, "L")) di <- di * 0
-  if (identical(input$fleet_view_what, "D")) l <- l * 0
-  tot <- l + di; o <- order(tot, decreasing = TRUE); o <- o[tot[o] > 0]; n_all <- length(o); o <- rev(head(o, 25))
+  k <- intersect(k, if (byfg) rownames(d$L) else colnames(d$L)); if (!length(k)) return(NULL)
+  L <- if (byfg) t(d$L[k, , drop = FALSE]) else d$L[, k, drop = FALSE]      # rows = axis categories, columns = selected
+  D <- if (byfg) t(d$D[k, , drop = FALSE]) else d$D[, k, drop = FALSE]
+  if (identical(input$fleet_view_what, "L")) D <- D * 0
+  if (identical(input$fleet_view_what, "D")) L <- L * 0
+  list(L = L, D = D, k = k, byfg = byfg)
+})
+output$fleet_plot_catch <- renderPlot({
+  x <- .fleet_sel()
+  if (is.null(x)) { plot.new(); text(0.5, 0.5, if (is.null(.fleet_dat())) "No workbook yet: run 02 fisheries." else "Pick a fleet or an FG.", cex = 1.2); return(invisible()) }
+  tot <- rowSums(x$L + x$D); o <- order(tot, decreasing = TRUE); o <- o[tot[o] > 0]; n_all <- length(o); o <- rev(head(o, 25))
   if (!length(o)) { plot.new(); text(0.5, 0.5, "No catch.", cex = 1.2); return(invisible()) }
+  one <- length(x$k) == 1
+  m <- if (one) rbind(x$L[o, 1], x$D[o, 1]) else t((x$L + x$D)[o, , drop = FALSE])
+  cols <- if (one) c("#1f77b4", "#ff7f0e") else .fleet_pal(length(x$k))
   op <- par(mar = c(4.5, 17, 3.5, 1), cex.axis = 1.05, cex.lab = 1.1, cex.main = 1); on.exit(par(op))
-  barplot(rbind(l[o], di[o]), horiz = TRUE, las = 1, col = c("#1f77b4", "#ff7f0e"), border = NA, names.arg = .fleet_short(names(tot)[o]),
-          xlab = "t/km\u00b2/year (Ecopath years)",
-          main = paste0(.fleet_short(k, 46), ": ", if (byfg) "catch by fleet" else "catch by FG", if (n_all > 25) paste0(" (top 25 of ", n_all, ")") else "",
+  barplot(m, horiz = TRUE, las = 1, col = cols, border = NA, names.arg = .fleet_short(names(tot)[o]), xlab = "t/km\u00b2/year (Ecopath years)",
+          main = paste0(if (one) .fleet_short(x$k, 46) else paste0(length(x$k), if (x$byfg) " FGs" else " fleets"), ": ",
+                        if (x$byfg) "catch by fleet" else "catch by FG", if (n_all > 25) paste0(" (top 25 of ", n_all, ")") else "",
                         "\ntotal ", signif(sum(tot), 3), " t/km\u00b2/year"))
-  legend("bottomright", c("Landings", "Discards"), fill = c("#1f77b4", "#ff7f0e"), border = NA, bty = "n", cex = 1.1)
+  legend("bottomright", if (one) c("Landings", "Discards") else .fleet_short(x$k, 30), fill = cols, border = NA, bty = "n", cex = if (length(x$k) > 8) 0.85 else 1.05)
 })
 output$fleet_plot_effort <- renderPlot({
-  d <- .fleet_dat(); k <- input$fleet_explore
-  if (is.null(d) || is.null(k) || !nzchar(k)) { plot.new(); return(invisible()) }
-  fl <- if (identical(input$fleet_view_mode, "fg")) { if (!k %in% rownames(d$L)) return(invisible()); t <- d$L[k, ] + d$D[k, ]; names(t)[which.max(t)] } else k
+  x <- .fleet_sel(); d <- .fleet_dat()
+  if (is.null(x)) { plot.new(); return(invisible()) }
+  ## fleets to draw: the selected ones, or the (up to 6) fleets that catch most of the selected FGs
+  fl <- if (x$byfg) { t <- rowSums(x$L + x$D); names(head(sort(t[t > 0], decreasing = TRUE), 6)) } else x$k
   E <- d$E; vc <- if (!is.null(E)) intersect(c("nom_active_kWdays_effective", "nom_active_kWdays"), names(E))[1] else NA
-  e <- if (!is.null(E) && !is.na(vc) && "Fleet" %in% names(E)) E[E$Fleet == fl, , drop = FALSE] else NULL
-  if (is.null(e) || !nrow(e)) {
-    plot.new(); text(0.5, 0.5, paste0("No effort series for\n", fl, "\n(rerun 02 for the effort by EwE fleet)"), cex = 1.1); return(invisible()) }
-  e <- stats::aggregate(e[[vc]], list(Year = e$Year), sum, na.rm = TRUE); e <- e[order(e$Year), ]
+  ok <- !is.null(E) && !is.na(vc) && "Fleet" %in% names(E)
   ye <- tryCatch(as.integer(input$ecopath_years), error = function(e) NULL)
-  ref <- if (length(ye) == 2) mean(e$x[e$Year >= ye[1] & e$Year <= ye[2]], na.rm = TRUE) else NA
-  if (!is.finite(ref) || ref <= 0) ref <- e$x[which(e$x > 0)[1]]
-  y <- e$x / ref
-  op <- par(mar = c(4.5, 4.5, 3, 1), cex.axis = 1.05, cex.lab = 1.1); on.exit(par(op))
-  plot(e$Year, y, type = "l", lwd = 2.2, col = "#2c3e50", xlab = "", ylab = "Effort index (Ecopath years = 1)", ylim = c(0, max(1.1, max(y, na.rm = TRUE)) * 1.05),
-       main = paste0("Ecosim effort: ", .fleet_short(fl, 40)))
+  ser <- if (ok) lapply(setNames(fl, fl), function(f) {
+    e <- E[E$Fleet == f, , drop = FALSE]; if (!nrow(e)) return(NULL)
+    e <- stats::aggregate(e[[vc]], list(Year = e$Year), sum, na.rm = TRUE); e <- e[order(e$Year), ]
+    ref <- if (length(ye) == 2) mean(e$x[e$Year >= ye[1] & e$Year <= ye[2]], na.rm = TRUE) else NA
+    if (!is.finite(ref) || ref <= 0) ref <- e$x[which(e$x > 0)[1]]
+    data.frame(Year = e$Year, y = e$x / ref)
+  }) else list()
+  ser <- ser[!vapply(ser, is.null, logical(1))]
+  if (!length(ser)) { plot.new(); text(0.5, 0.5, "No effort series for the selected fleets\n(rerun 02 for the effort by EwE fleet)", cex = 1.1); return(invisible()) }
+  cols <- if (!x$byfg && length(x$k) > 1) setNames(.fleet_pal(length(x$k)), x$k)[names(ser)] else setNames(.fleet_pal(length(ser)), names(ser))
+  if (length(ser) == 1) cols[] <- "#2c3e50"
+  op <- par(mar = c(4.5, 4.5, 3.5, 1), cex.axis = 1.05, cex.lab = 1.1, cex.main = 1); on.exit(par(op))
+  plot(range(unlist(lapply(ser, `[[`, "Year"))), c(0, max(1.1, max(unlist(lapply(ser, `[[`, "y")), na.rm = TRUE)) * 1.05), type = "n", xlab = "",
+       ylab = "Effort index (Ecopath years = 1)", main = if (x$byfg) "Ecosim effort of the fleets that catch most" else "Ecosim effort")
   abline(h = 1, lty = 2, col = "grey50")
-  if ("source" %in% names(E)) mtext(.fleet_short(paste(unique(E$source[E$Fleet == fl]), collapse = " + "), 70), side = 3, line = 0.2, cex = 0.85, col = "grey30")
+  for (f in names(ser)) lines(ser[[f]]$Year, ser[[f]]$y, lwd = 2.2, col = cols[[f]])
+  legend("topleft", .fleet_short(names(ser), 30), col = unname(cols), lwd = 2.2, bty = "n", cex = if (length(ser) > 8) 0.8 else 1)
 })
 
 ## --- Diet viewer (card 2): the diet of each source, side by side ------------

@@ -345,9 +345,10 @@ if (!exists("DIET_STILL_MISSING_CSV_PATH",   envir = .GlobalEnv, inherits = FALS
 ## diets replace the pipeline's for every predator FG it covers, the
 ## pipeline tiers fill the rest). dietcalcR settings in lib_dietcalc.R.
 if (!exists("DIET_ENGINE", envir = .GlobalEnv, inherits = FALSE)) DIET_ENGINE <- "pipeline"
-## The metaweb template (data_entry_metaweb) is only read without dietcalcR,
-## which works on the full diet database it belongs to
-if (!exists("DIET_USE_METAWEB", envir = .GlobalEnv, inherits = FALSE)) DIET_USE_METAWEB <- !identical(DIET_ENGINE, "dietcalc")
+## The data_entry_metaweb template is the entry form of the diet database
+## dietcalcR works on, so it is not a source of its own (FALSE); TRUE reads
+## its rows directly, without dietcalcR's scoring
+if (!exists("DIET_USE_METAWEB", envir = .GlobalEnv, inherits = FALSE)) DIET_USE_METAWEB <- FALSE
 if (!exists("DIETCALC_DIR", envir = .GlobalEnv, inherits = FALSE)) DIETCALC_DIR <- file.path(pcloud_dir, "data/diet/dietcalcR")
 if (!exists("DIETCALC_DB", envir = .GlobalEnv, inherits = FALSE)) {
   .cand <- list.files(file.path(pcloud_dir, "data/diet/dietcalc_db"), pattern = "\\.(accdb|mdb|sqlite|sqlite3|db)$", full.names = TRUE, ignore.case = TRUE)

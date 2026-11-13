@@ -2132,9 +2132,10 @@ one writes its own predator FG × prey FG matrix (`diet/dietcalc`,
 of card 2; the model's matrix takes each predator FG from the first
 source in this order that has it.
 
-0.  **dietcalcR** (the iMARES diet calculator; `DIET_ENGINE = "dietcalc"`,
+1.  **dietcalcR** (the iMARES diet calculator; `DIET_ENGINE = "dietcalc"`,
     `lib_dietcalc.R`), on the Mediterranean diet database
-    [@collmetaweb] (`DIETCALC_DB`). Every diet record gets a score
+    [@collmetaweb] (`DIETCALC_DB`; the database the
+    `data_entry_metaweb` template belongs to). Every diet record gets a score
     $s = (w_R s_R + w_T s_T + w_D s_D + w_M s_M) / \sum w$ from its
     region (compatibility with the model region), years (distance to
     the Ecopath years), type of data and method (dietcalcR's
@@ -2145,23 +2146,7 @@ source in this order that has it.
     name (then by genus); prey with no FG are dropped and the column
     renormalised (`DIETCALC_NO_BIOMASS_PREY`). Its FG diets replace
     those of the tiers below for every predator FG it covers, and its
-    diet pedigree is kept (`diet/dietcalc/`). With dietcalcR ticked the
-    metaweb template of tier 1 is not read.
-1.  **Mediterranean trophic metaweb** [@collmetaweb]
-    (`data_entry_metaweb_empty.xlsx`, `DATA_ENTRY`; codes resolved
-    through its `Taxonomic_codes` and `Non_taxonomic_groups` tabs). One
-    metric per study (study = reference × area × years × life stage ×
-    season), chosen by `diet_metric_priority.csv` (IRI [@pinkas1971] \>
-    %W \> %Vol \> stable-isotope mixing model \> %N \> %F \> presence;
-    [@hyslop1980]), normalised to 1. Since 2026-10-14 the rows go
-    through the same prey → FG resolution, stage selection and biomass
-    weighting as MAISHA and FishBase (`metaweb_diet_records()`); generic
-    metaweb groups ("Pelagic fish", "Zooplankton", "Pelagic tunicates",
-    ...) are placed by rules at the top of
-    `fishbase_food_category_to_fg.csv`. The choice is made **per
-    predator FG**: an FG with any metaweb record takes its diet only
-    from the metaweb; FGs without one take it from tiers 2–4. The
-    template is still empty, so for now every FG comes from tiers 2–4.
+    diet pedigree is kept (`diet/dietcalc/`).
 2.  **MAISHA** ([@vascotto2026], v1.2, OGS NODC, doi:10.13120/hwpn1e,
     CC-BY 4.0): Darwin Core Archive (`data/diet/MAISHA/MAISHA_DwC-A`);
     predator records (`occurrenceRemarks == "Predator"`) linked to prey
@@ -2184,7 +2169,7 @@ are averaged with equal weight.
 **Two matrices.** The *main* matrix (`Ecopath_diet`) follows the tiers
 above. A *reference* matrix (MAISHA, then FishBase/SeaLifeBase for
 species without MAISHA records) is built for **every** predator FG,
-whether or not the metaweb covers it.
+whether or not dietcalcR covers it.
 `diet/diet_matrix_main_vs_reference.xlsx` puts them side by side (sheets
 Main, Reference, Main_minus_Reference, Source; long form in
 `diet_main_vs_reference_REVIEW.csv`), so single values of the main
