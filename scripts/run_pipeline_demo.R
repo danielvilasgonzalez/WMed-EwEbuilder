@@ -217,7 +217,7 @@ source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_interme
 .set_custom_catch_gsas <- function() {
   ov <- file.path(out_dir, "biomass", "custom_gsa_overlap.csv")
   if (!file.exists(ov)) stop("[run_pipeline_demo.R] ", ov, " not found - run step 1 (01_biomass.R) for this region first.", call. = FALSE)
-  ov <- data.table::fread(ov)
+  ov <- fread(ov)
   assign("MODEL_GSAS", sort(ov[used_for_catch == TRUE, GSA]), envir = .GlobalEnv)
   assign("FILTER_AREAS", get("MODEL_GSAS", envir = .GlobalEnv), envir = .GlobalEnv)
   message("[Custom region] Catch from GSA(s) ", paste(get("MODEL_GSAS", envir = .GlobalEnv), collapse = ", "), " (custom_gsa_overlap.csv).")

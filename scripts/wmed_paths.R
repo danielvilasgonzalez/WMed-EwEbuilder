@@ -255,3 +255,57 @@ wmed_run_dir <- function(base_out_dir, run_name) {
   base_out_dir <- sub("/+$", "", base_out_dir)
   if (is.null(run_name) || !nzchar(run_name)) base_out_dir else file.path(base_out_dir, "runs", run_name)
 }
+
+## =================================================================
+## CSV format of every table the pipeline writes (2026-11-13)
+## ";" between columns, "," as decimal separator, text in double quotes,
+## UTF-8 with a byte-order mark: opens in Excel (Spanish/European settings)
+## without Text to Columns. fwrite() below does this for any .csv unless
+## the call gives sep or dec itself; options(wmed.csv_euro = FALSE) goes
+## back to "," and ".". fread() below reads both formats: a ";" file whose
+## unquoted numbers use a decimal comma is read with dec = ",".
+## Both are put in the global environment (they mask data.table's).
+## =================================================================
+local({
+  .wm_csv_format <- function(path) {
+    l <- tryCatch(readLines(path, n = 300, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
+    if (!length(l)) return(list(sep = NULL, dec = "."))
+    l <- iconv(l, "UTF-8", "UTF-8", sub = " ")
+    unq <- gsub("\"[^\"]*\"", "", l)                      # text in quotes left out
+    n_semi <- nchar(gsub("[^;]", "", unq[1])); n_com <- nchar(gsub("[^,]", "", unq[1]))
+    if (n_semi == 0 || n_semi < n_com) return(list(sep = NULL, dec = "."))
+    body <- unq[-1]
+    euro <- any(grepl("(^|;)[[:space:]]*-?[0-9]+,[0-9]+([eE][-+]?[0-9]+)?[[:space:]]*(;|$)", body))
+    list(sep = ";", dec = if (euro) "," else ".")
+  }
+  fread <- function(...) {
+    a <- list(...)
+    nm <- names(a); if (is.null(nm)) nm <- rep("", length(a))
+    if (!"dec" %in% nm && !"text" %in% nm && !"cmd" %in% nm) {
+      f <- if ("file" %in% nm) a[["file"]] else if ("input" %in% nm) a[["input"]] else if (length(a) && !nzchar(nm[1])) a[[1]] else NULL
+      if (is.character(f) && length(f) == 1 && !grepl("\n", f, fixed = TRUE) && grepl("\\.(csv|txt)$", f, ignore.case = TRUE) && file.exists(f)) {
+        fm <- .wm_csv_format(f)
+        if (identical(fm$dec, ",")) { a$dec <- ","; if (!"sep" %in% nm) a$sep <- ";" }
+      }
+    }
+    do.call(data.table::fread, a)
+  }
+  fwrite <- function(x, file = "", ...) {
+    a <- list(...); nm <- names(a); if (is.null(nm)) nm <- character(0)
+    if (is.character(file) && grepl("\\.csv$", file, ignore.case = TRUE) && !any(c("sep", "dec") %in% nm) &&
+        isTRUE(getOption("wmed.csv_euro", TRUE))) {
+      a$sep <- ";"; a$dec <- ","
+      if (!"quote" %in% nm) a$quote <- TRUE
+      if (!"bom" %in% nm && !isTRUE(a$append)) a$bom <- TRUE
+      if (isTRUE(a$append) && file.exists(file) && isTRUE(file.info(file)$size > 0)) a$col.names <- if ("col.names" %in% nm) a$col.names else FALSE
+    }
+    if (is.data.frame(x)) {                                  # text as UTF-8
+      ch <- names(x)[vapply(x, function(v) is.character(v) && any(Encoding(v) == "latin1"), logical(1))]
+      if (length(ch)) { x <- as.data.frame(x, stringsAsFactors = FALSE); for (k in ch) x[[k]] <- enc2utf8(x[[k]]) }
+    }
+    do.call(data.table::fwrite, c(list(x = x, file = file), a))
+  }
+  assign(".wm_csv_format", .wm_csv_format, envir = .GlobalEnv)
+  assign("fread", fread, envir = .GlobalEnv)
+  assign("fwrite", fwrite, envir = .GlobalEnv)
+})

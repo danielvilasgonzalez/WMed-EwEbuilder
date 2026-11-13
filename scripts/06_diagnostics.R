@@ -1009,7 +1009,7 @@ validation_plots[["08_fleet_coverage"]] <- tryCatch({
     geom_vline(xintercept = 0.5, linetype = "dashed", colour = "grey50") +
     scale_fill_manual(values = c(`TRUE` = "firebrick", `FALSE` = "grey30")) +
     labs(title = "Named 6-country fleet share of total landings (25 lowest-coverage FGs)",
-         subtitle = "The rest sits in Ecopath_L/Di's 'Target countries - fleet not resolved' column, not lost - just coarser fleet/gear detail",
+         subtitle = "The rest is shared among the EwE fleets by their catch of the same FG (fisheries/fleet_not_resolved_shared_REVIEW.csv)",
          x = "Named-fleet share", y = NULL, fill = "< 50% named") +
     theme_minimal(base_size = 9) + theme(legend.position = "bottom")
 }, error = function(e) { message("[06_diagnostics.R plot] fleet coverage skipped - ", conditionMessage(e)); NULL })

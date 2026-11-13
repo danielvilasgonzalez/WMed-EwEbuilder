@@ -68,7 +68,7 @@ csv_has_nul <- function(path) {
 safe_fwrite <- function(x, file, ...) {
   for (attempt in 1:2) {
     if (file.exists(file)) unlink(file)
-    data.table::fwrite(x, file, nThread = 1L, ...)
+    get0("fwrite", envir = .GlobalEnv, mode = "function", ifnotfound = data.table::fwrite)(x, file, nThread = 1L, ...)
     if (!csv_has_nul(file)) return(invisible(file))
     message("[safe_fwrite] NUL bytes found in '", file, "' after writing (cloud-sync folder) - ",
             if (attempt == 1) "rewriting once." else "still corrupted; check the sync client / write it to a local folder.")
@@ -1735,6 +1735,21 @@ dedupe_lookup <- function(lookup_dt, key_col, source_label) {
 ## FG_name, e.g. small pelagics = sardine|anchovy|...), so "Other small
 ## pelagic fish" gets the q of sardine/anchovy when it has none. The
 ## resolved q of every species is returned as attr(dt, "q_by_species").
+## Mean q of the FG's species that already have a q (each species counted
+## once), given to the FG's species without one.
+.q_fg_mean <- function(dt) {
+  if (!"FG_name" %in% names(dt)) return(dt)
+  sp_q <- unique(dt[!is.na(q_resolved) & !is.na(FG_name) & nzchar(FG_name), .(FG_name, ScientificName, q_resolved)], by = c("FG_name", "ScientificName"))
+  if (!nrow(sp_q)) return(dt)
+  fg_q <- sp_q[, .(q_fg = mean(q_resolved), n_fg_q = .N), by = FG_name]
+  dt <- merge(dt, fg_q, by = "FG_name", all.x = TRUE)
+  n_fg <- dt[is.na(q_resolved) & !is.na(q_fg), uniqueN(ScientificName)]
+  dt[is.na(q_resolved) & !is.na(q_fg), `:=`(q_resolved = q_fg, match_level = paste0("FG mean (", n_fg_q, " species of the same FG)"))]
+  dt[, c("q_fg", "n_fg_q") := NULL]
+  if (n_fg > 0) message(n_fg, " species without a q took the mean q of the species of their FG that have one.")
+  dt
+}
+
 apply_catchability_correction <- function(dt, catchability_table, default_q = 1, species_taxonomy = NULL,
                                           exempt_fg_names = NULL, exempt_species = NULL, q_similar_groups = NULL) {
   dt <- copy(dt)
@@ -1865,6 +1880,10 @@ apply_catchability_correction <- function(dt, catchability_table, default_q = 1,
     dt <- merge(dt, genus_q, by = "Genus", all.x = TRUE, suffixes = c("", "_gen"))
     dt[is.na(q_resolved) & !is.na(q), `:=`(q_resolved = q, match_level = "genus (spp entry)")]
     dt[, q := NULL]
+    ## 2b. a species with no q of its own takes the mean q of the species
+    ## of its FG that have one (species or "Genus spp" entry of the table);
+    ## taxonomic relatives are used only for FGs where no species has a q
+    dt <- .q_fg_mean(dt)
     dt <- apply_proximity_at_rank(dt, "Genus")
     
     ## 3. family-level: proximity only (no "Family spp"-style notation)
@@ -1887,18 +1906,12 @@ apply_catchability_correction <- function(dt, catchability_table, default_q = 1,
             " can't be resolved and will fall back to default_q. Pass species_taxonomy to enable them.")
   }
   
-  ## 6b. FG fallback: mean q of the FG's species that have one
+  ## 6b. FG fallback (no taxonomy given: not done above)
   if ("FG_name" %in% names(dt)) {
-    sp_q <- unique(dt[!is.na(q_resolved) & !is.na(FG_name), .(FG_name, ScientificName, q_resolved)])
-    fg_q <- sp_q[, .(q_fg = mean(q_resolved)), by = FG_name]
-    dt <- merge(dt, fg_q, by = "FG_name", all.x = TRUE)
-    n_fg <- dt[is.na(q_resolved) & !is.na(q_fg), uniqueN(ScientificName)]
-    dt[is.na(q_resolved) & !is.na(q_fg), `:=`(q_resolved = q_fg, match_level = "FG mean (species of the same FG)")]
-    dt[, q_fg := NULL]
-    if (n_fg > 0) message(n_fg, " species took the mean q of their own FG.")
+    dt <- .q_fg_mean(dt)
     ## 6c. similar FGs (e.g. small pelagics share q)
     if (length(q_similar_groups)) {
-      fg_q2 <- unique(dt[!is.na(q_resolved) & !is.na(FG_name) & match_level != "FG mean (species of the same FG)",
+      fg_q2 <- unique(dt[!is.na(q_resolved) & !is.na(FG_name) & !grepl("^FG mean", match_level),
                          .(FG_name, ScientificName, q_resolved)])[, .(q_fg = mean(q_resolved)), by = FG_name]
       for (g in names(q_similar_groups)) {
         re <- q_similar_groups[[g]]
@@ -3938,7 +3951,7 @@ trim_workbook_to_final_sheets <- function(out_path) {
     ## Ecopath models, for direct comparison against this model's own
     ## Ecopath_B/Ecopath_PBQB values). 11 final sheets total.
     target_order = c("info", "FGs", "Fleets", "FG_spp", "Ecopath_B", "Ecopath_L", "Ecopath_Di", "Ecopath_PBQB",
-                     "Ecopath_traits", "Ecopath_diet", "Ecosim_ts", "FG_References", "Ecobase"),
+                     "Ecopath_multistanza", "Ecopath_traits", "Ecopath_diet", "Ecosim_ts", "FG_References", "Ecobase"),
     drop_extras = TRUE
   )
 }
@@ -5821,7 +5834,7 @@ add_pbqb_to_ecopath_workbook <- function(fg_weighted, out_path, species_pb_qb = 
   if (identical(get0("PHYTO_SOURCE", envir = .GlobalEnv, ifnotfound = "isimip"), "copernicus")) {
     ef <- file.path(get0("out_dir", envir = .GlobalEnv, ifnotfound = ""), "environment", "ecopath_phytoplankton_B_PB.csv")
     if (file.exists(ef)) {
-      e <- data.table::fread(ef)
+      e <- get0("fread", envir = .GlobalEnv, mode = "function", ifnotfound = data.table::fread)(ef)
       for (i in seq_len(nrow(e))) {
         key <- if (grepl("^Large", e$TargetGroup[i])) "large phyto" else "small phyto"
         k <- grepl(key, pbqb_sheet$FG_name, ignore.case = TRUE)

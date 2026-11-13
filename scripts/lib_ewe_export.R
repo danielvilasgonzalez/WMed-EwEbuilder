@@ -6,7 +6,7 @@
 ## EwE software reads, with the same layout, column names and file names as
 ## EwE's own csv export ("<model>-Basic_input.csv", ...):
 ##   Basic_input, Diet_composition, Landings, Discards, Definition_of_fleets,
-##   Pedigree, Traits
+##   Pedigree, Traits (+ Stanzas: the inputs of EwE's multi-stanza form)
 ## as csv files (one per table) and/or one xlsx with a sheet per table.
 ##
 ## Layout rules copied from EwE's export:
@@ -17,10 +17,11 @@
 ##     (consumers, by number), then the rows Import, Sum and (1 - Sum)
 ##   - Landings / Discards: one column per fleet "<fleet> (t/km^2/year)",
 ##     Total, and a Sum row
-##   - csv: comma separated, text with spaces quoted, CRLF line ends, no BOM;
-##     decimal separator "," (as EwE writes it on a computer set to Spanish,
-##     French, Italian...) or "." (English settings): pick the one of the
-##     computer that runs EwE.
+##   - csv: decimal separator "," (computer set to Spanish, French,
+##     Italian...) with ";" between columns, or "." (English settings) with
+##     ","; text in double quotes, UTF-8, CRLF line ends, no BOM (EwE reads
+##     the first column name as it is). Pick the one of the computer that
+##     runs EwE.
 ## Stanza groups: FGs whose names differ only by a life-stage word (juv.,
 ## juvenile, adult, recruit, sub-adult) and have consecutive numbers, e.g.
 ## "European hake juv." + "European hake adult" -> stanza "European hake".
@@ -36,15 +37,18 @@
   if (dec != ".") out <- gsub(".", dec, out, fixed = TRUE)
   out
 }
-## one csv line as EwE writes it: quote text with a space, comma or quote
-.ewe_line <- function(v) {
+## one csv line: text in double quotes, numbers (with the chosen decimal
+## separator) and empty cells as they are
+.ewe_line <- function(v, sep = ";", dec = ",") {
   v <- ifelse(is.na(v), "", as.character(v))
-  q <- grepl("[ ,\"]", v)
+  num <- grepl(if (dec == ",") "^-?[0-9]+(,[0-9]+)?([eE][-+]?[0-9]+)?$" else "^-?[0-9]+(\\.[0-9]+)?([eE][-+]?[0-9]+)?$", v)
+  q <- nzchar(v) & !num
   v[q] <- paste0("\"", gsub("\"", "\"\"", v[q]), "\"")
-  paste(v, collapse = ",")
+  paste(v, collapse = sep)
 }
-.ewe_write_csv <- function(tab, file) {
-  lines <- c(.ewe_line(names(tab)), apply(as.matrix(tab), 1, .ewe_line))
+.ewe_write_csv <- function(tab, file, dec = ",") {
+  sep <- if (dec == ",") ";" else ","
+  lines <- c(.ewe_line(names(tab), sep, dec), apply(as.matrix(tab), 1, .ewe_line, sep = sep, dec = dec))
   con <- file(file, open = "wb"); on.exit(close(con))
   writeBin(charToRaw(enc2utf8(paste0(paste(lines, collapse = "\r\n"), "\r\n"))), con)
 }
@@ -104,7 +108,7 @@ EWE_FLEET_COSTS_DEFAULT <- data.frame(
 ewe_fleet_costs <- function(fleets, cost_file = NULL) {
   tab <- EWE_FLEET_COSTS_DEFAULT
   if (!is.null(cost_file) && !is.na(cost_file) && file.exists(cost_file)) {
-    x <- tryCatch(utils::read.csv(cost_file, stringsAsFactors = FALSE, check.names = FALSE, sep = if (grepl(";", readLines(cost_file, n = 1))) ";" else ","),
+    x <- tryCatch(as.data.frame(get0("fread", envir = .GlobalEnv, mode = "function", ifnotfound = data.table::fread)(cost_file)),
                   error = function(e) NULL)
     if (!is.null(x) && all(c("Fleet_pattern", "Fixed_cost_pct", "Effort_cost_pct", "Sailing_cost_pct", "Profit_pct") %in% names(x))) {
       if (!"Country" %in% names(x)) x$Country <- "*"
@@ -112,7 +116,11 @@ ewe_fleet_costs <- function(fleets, cost_file = NULL) {
       tab <- x[, names(EWE_FLEET_COSTS_DEFAULT)]
     }
   }
-  ctry <- trimws(sub(" - .*$", "", fleets)); ftyp <- trimws(sub("^[^-]* - ", "", fleets))
+  ## fleet names "<Country> - <type>" or "<code> <type>" (EwE fleets, e.g. "SPA bottom trawlers")
+  .codes <- c(ALG = "Algeria", FRA = "France", ITA = "Italy", MOR = "Morocco", SPA = "Spain", TUN = "Tunisia")
+  dash <- grepl(" - ", fleets)
+  ctry <- ifelse(dash, trimws(sub(" - .*$", "", fleets)), ifelse(sub(" .*$", "", fleets) %in% names(.codes), .codes[sub(" .*$", "", fleets)], ""))
+  ftyp <- ifelse(dash, trimws(sub("^[^-]* - ", "", fleets)), ifelse(nzchar(ctry), sub("^[A-Z]{3} ", "", fleets), fleets))
   out <- t(vapply(seq_along(fleets), function(i) {
     k <- which((tab$Country %in% c("*", "", NA) | tolower(tab$Country) == tolower(ctry[i])) &
                vapply(tab$Fleet_pattern, function(p) grepl(p, ftyp[i], ignore.case = TRUE), logical(1)))
@@ -136,6 +144,12 @@ ewe_tables <- function(wb_path, dec = ",", fleet_cost_file = NULL) {
   type <- .ewe_type(fg$FG_name, QB)
   st <- ewe_stanza_groups(fg)
   n <- nrow(fg); blank <- rep("", n)
+  ## multi-stanza FGs: Total mortality = Z of the stanza, P/B left blank
+  ## (EwE takes P/B = Z), Q/B of each stanza (Ecopath_multistanza, 03)
+  ms <- rd("Ecopath_multistanza")
+  Zs <- if (!is.null(ms) && all(c("FG_num", "Z") %in% names(ms))) suppressWarnings(as.numeric(ms$Z[match(fg$FG_num, ms$FG_num)])) else rep(NA_real_, n)
+  if (!is.null(ms) && "QB_stanza" %in% names(ms)) { q2 <- suppressWarnings(as.numeric(ms$QB_stanza[match(fg$FG_num, ms$FG_num)])); QB <- ifelse(is.finite(q2), q2, QB) }
+  is_ms <- !is.na(st$stanza) & is.finite(Zs)
   ## insert the stanza header rows (no number) before the first stanza FG
   with_stanza <- function(tab) {
     rows <- list()
@@ -153,8 +167,8 @@ ewe_tables <- function(wb_path, dec = ",", fleet_cost_file = NULL) {
     a = as.character(fg$FG_num), `Group name` = fg$FG_name,
     `Hab area (proportion)` = .ewe_fix(rep(1, n), 3, dec),
     `Biomass in habitat area (t/km^2)` = .ewe_num(ifelse(type == "detritus" & !grepl("detritus", fg$FG_name, ignore.case = TRUE), NA, B), dec),
-    `Total mortality (/year)` = blank,
-    `Production / biomass (/year)` = .ewe_num(ifelse(type == "detritus", NA, PB), dec),
+    `Total mortality (/year)` = ifelse(is_ms, .ewe_num(Zs, dec), ""),
+    `Production / biomass (/year)` = .ewe_num(ifelse(type == "detritus" | is_ms, NA, PB), dec),
     `Consumption / biomass (/year)` = .ewe_num(ifelse(cons, QB, NA), dec),
     `Ecotrophic Efficiency` = .ewe_num(ifelse(type == "detritus", NA, EE), dec),
     `Other mortality` = blank, `Production / consumption` = blank,
@@ -251,6 +265,25 @@ ewe_tables <- function(wb_path, dec = ",", fleet_cost_file = NULL) {
   trt <- as.data.frame(do.call(rbind, lapply(rows, unlist)), stringsAsFactors = FALSE)
   names(trt) <- c("", "Species", names(tcols))
   out$Traits <- trt
+  ## Stanzas: what EwE's multi-stanza form asks for, one row per stanza
+  ## (stanza group, its life stages, age at start, Z, leading stanza,
+  ## K, Wmat/Winf, BA/B, recruitment power 1). Not an EwE export table:
+  ## typed into Edit multi-stanza groups.
+  if (!is.null(ms) && all(c("FG_num", "Stanza", "Z") %in% names(ms))) {
+    m <- ms[!is.na(suppressWarnings(as.numeric(ms$FG_num))), , drop = FALSE]
+    if (nrow(m)) {
+      num <- function(col) if (col %in% names(m)) suppressWarnings(as.numeric(m[[col]])) else rep(NA_real_, nrow(m))
+      ba <- if ("BA_B_reference" %in% names(m)) num("BA_B_reference") else rep(NA_real_, nrow(m))
+      grp <- st$stanza[match(as.numeric(m$FG_num), fg$FG_num)]
+      out$Stanzas <- data.frame(`Stanza group` = ifelse(is.na(grp), m$Species, grp), `Group` = as.character(m$FG_num),
+                                `Group name` = m$FG_name, `Leading stanza` = ifelse(m$Leading_stanza %in% TRUE, "yes", ""),
+                                `Age start (months)` = .ewe_num(num("Age_start_months"), dec), `Z (/year)` = .ewe_num(num("Z"), dec),
+                                `Q/B (/year)` = .ewe_num(num("QB_stanza"), dec), `K (VBGF, /year)` = .ewe_num(num("K_VBGF"), dec),
+                                `Wmat/Winf` = .ewe_num(num("Wmat_Winf"), dec), `BA/B (/year)` = .ewe_num(ba, dec),
+                                `Recruitment power` = .ewe_fix(rep(1, nrow(m)), 3, dec),
+                                check.names = FALSE, stringsAsFactors = FALSE)
+    }
+  }
   out
 }
 
@@ -266,7 +299,7 @@ write_ewe_tables <- function(wb_path, out_dir, model_name = "Western_Mediterrane
   if (format %in% c("csv", "both")) {
     tc <- if (format == "both" && dec != ".") ewe_tables(wb_path, dec = dec, fleet_cost_file = fleet_cost_file) else tabs
     for (nm in names(tc)) {
-      f <- file.path(out_dir, paste0(model_name, "-", nm, ".csv")); .ewe_write_csv(tc[[nm]], f); paths <- c(paths, f)
+      f <- file.path(out_dir, paste0(model_name, "-", nm, ".csv")); .ewe_write_csv(tc[[nm]], f, dec = dec); paths <- c(paths, f)
     }
   }
   if (format %in% c("xlsx", "both")) {

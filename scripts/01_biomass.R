@@ -825,7 +825,19 @@ if (AREA_MODE == "westmed") {
 ## CSV (species/FG_number/FG_name/taxonomy/source/status), not the old
 ## FG_WMed.xlsx sheet 4 (ESPECIE/GF/FG_name). Column names differ accordingly:
 ## species -> ScientificName, FG_number -> FG_num, same FG_name either way.
-fg_raw <- fread(fg_species_file)
+fg_raw <- fread(fg_species_file, encoding = "UTF-8")
+## Species names: non-breaking spaces (UTF-8 or Latin-1, from Excel copies),
+## stray bytes and double spaces made the same species two names (e.g.
+## "Munida perarmata" + NBSP had no FG and no q). Cleaned in every table
+## matched on ScientificName.
+.clean_sp_name <- function(x) {
+  x <- as.character(x); u <- unique(x); x0 <- x; x <- u
+  x <- iconv(x, "UTF-8", "UTF-8", sub = " ")
+  x <- vapply(x, function(s) if (is.na(s)) NA_character_ else { v <- utf8ToInt(s); if (anyNA(v)) s else intToUtf8(replace(v, v == 160L, 32L)) },
+              character(1), USE.NAMES = FALSE)
+  trimws(gsub("[[:space:]]+", " ", x))[match(x0, u)]
+}
+fg_raw[, species := .clean_sp_name(species)]
 dataframe2 <- unique(fg_raw[, .(ScientificName = species, FG_num = FG_number, FG_name)])
 
 ## --- dataframe1: MEDITS' TA.csv (samples/hauls) + TB.csv (catch) -----------
@@ -968,6 +980,7 @@ if (AREA_MODE == "custom" && CUSTOM_AREA_TYPE %in% c("bbox", "shapefile")) {
 message("dataframe1 built: ", nrow(dataframe1), " observations from ",
         uniqueN(dataframe1$SampleID), " samples.")
 
+dataframe1[, ScientificName := .clean_sp_name(ScientificName)]
 validate_survey_data(dataframe1, dataframe2, strata = STRATA)
 
 ## Sample coverage diagnostic - worth looking at before the rest of the
@@ -1377,6 +1390,7 @@ if (!isTRUE(APPLY_CATCHABILITY)) {
   catchability_raw <- fread(file = CATCHABILITY_CSV_PATH)
   CATCHABILITY_TABLE <- if (all(c("ScientificName", "q") %in% names(catchability_raw))) catchability_raw[, .(ScientificName, q = as.numeric(q))] else
     catchability_raw[, .(ScientificName = species, q = q_FACTOR)]
+  CATCHABILITY_TABLE[, ScientificName := .clean_sp_name(ScientificName)]
   message("Loaded catchability table: ", nrow(CATCHABILITY_TABLE), " entries from ", CATCHABILITY_CSV_PATH)
   ## A "q" column in the FG file (FG_WMed_2026.csv) wins over the
   ## catchability table for the species where it is filled in.
@@ -4436,6 +4450,9 @@ tryCatch({
   .bq <- merge(FG_spp_Ecopath[, .(FG_num, FG_name, Species, B_with_q_t_km2 = Biomass_t_km2, prop_with_q = prop_sp_fg, prop_basis = prop_sp_fg_basis, FG_B = Ecopath_B_Biomass)],
                .sv, by = c("FG_num", "Species"), all.x = TRUE)
   .bq <- merge(.bq, .qtab[, .(FG_num, Species = ScientificName, q, q_match)], by = c("FG_num", "Species"), all.x = TRUE)
+  ## q is a MEDITS (bottom trawl) property: species not caught in MEDITS
+  ## (MEDIAS acoustic, stock assessment, literature, unsurveyed) have q = 1
+  .bq[is.na(q), `:=`(q = 1, q_match = "not in MEDITS (q = 1)")]
   .src <- fg_index_regional_combined[Year %in% YEAR_ECOPATH & !is.na(biomass_source), .(FG_source = biomass_source[1]), by = FG_num]
   .bq <- merge(.bq, .src, by = "FG_num", all.x = TRUE)
   .bq[, `:=`(sw = sum(survey_with_q, na.rm = TRUE), swo = sum(survey_without_q, na.rm = TRUE)), by = FG_num]

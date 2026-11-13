@@ -952,7 +952,7 @@ build_species_to_fg <- function(needed_species, reference_path, missing_csv_path
   from_missing_csv <- data.table(species = character(), fg_name = character(), proportion = numeric())
   if (length(still_missing) > 0) {
     if (file.exists(missing_csv_path)) {
-      from_missing_csv <- as.data.table(read.csv(missing_csv_path, stringsAsFactors = FALSE))
+      from_missing_csv <- as.data.table(fread(missing_csv_path))
       covered_by_csv <- intersect(still_missing, from_missing_csv$species)
       still_missing  <- setdiff(still_missing, from_missing_csv$species)
       if (length(covered_by_csv) > 0) {
@@ -1011,7 +1011,7 @@ read_biomass_proportion_from_workbook <- function(workbook_path, csv_name = "bio
             "for now (or the equal-split default inside build_fg_diet() for anything that misses too).")
     return(data.table(species = character(), fg_name = character(), biomass_proportion = numeric()))
   }
-  fg_spp <- as.data.table(read.csv(csv_path, stringsAsFactors = FALSE))
+  fg_spp <- as.data.table(fread(csv_path))
   needed <- c("Species", "FG_name", "prop_sp_fg")
   missing_cols <- setdiff(needed, names(fg_spp))
   if (length(missing_cols) > 0) {
@@ -1028,7 +1028,7 @@ build_biomass_in_fg <- function(needed_species_fg, workbook_path, fallback_csv_p
   
   from_fallback <- data.table(species = character(), fg_name = character(), biomass_proportion = numeric())
   if (nrow(still_missing) > 0 && file.exists(fallback_csv_path)) {
-    from_fallback <- as.data.table(read.csv(fallback_csv_path, stringsAsFactors = FALSE))
+    from_fallback <- as.data.table(fread(fallback_csv_path))
     n_covered_by_fallback <- sum(paste(still_missing$species, still_missing$fg_name) %in% paste(from_fallback$species, from_fallback$fg_name))
     message("[04_diets.R] ", n_covered_by_fallback, " of ", nrow(still_missing), " species x FG pair(s) missing biomass share ",
             "from biomass_proportion_by_species_fg.csv were covered by ", fallback_csv_path, ".")
@@ -1221,7 +1221,7 @@ build_group_table_auto <- function(workbook_path, biomass_csv_dir, manual_overri
   }
   
   if (!is.null(manual_override_path) && file.exists(manual_override_path)) {
-    overrides <- as.data.table(read.csv(manual_override_path, stringsAsFactors = FALSE))
+    overrides <- as.data.table(fread(manual_override_path))
     if (all(c("group_number", "is_predator") %in% names(overrides))) {
       overrides[, group_number := as.character(group_number)]
       group_table <- merge(group_table, overrides[, .(group_number, is_predator_override = is_predator)], by = "group_number", all.x = TRUE)

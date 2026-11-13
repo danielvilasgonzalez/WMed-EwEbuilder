@@ -73,7 +73,7 @@ On a new computer only `rmarkdown`, `knitr` and `shiny` must be installed before
 | 4 Biomass settings (01, 01b) | Survey estimator, outliers, catchability (and your own q table), filling missing Ecopath B, Ecosim normalisation, phytoplankton source, and the upload of biomass from any survey. |
 | 5 Environment and Ecospace (05, 05b) | Your Copernicus login for step 05, and (collapsed) the Ecospace base map, resolution, map viewer and downloads for 05b. |
 | 6 Run | Tick the scripts to run (01–06; they run in order and 06 diagnostics runs last), then **Run pipeline** / **Stop**, with progress and time left per step. The *Settings block* shows the same run as R code: copy or download it, and **Load settings (.R)** fills the page again from a downloaded file (the file is read, never run). |
-| 7 Results | Download the workbook, diet matrices, review tables, all tables or the logs, and the **EwE import files** (Basic_input, Diet_composition, Landings, Discards, Definition_of_fleets, Pedigree, Traits in the layout and names of EwE's own export; csv files or one xlsx, decimal comma or point; also written to `ewe_import/` at the end of each run). A summary of the last run (errors, warnings, FGs with F > 1, FGs without Ecopath B). FGs with high F are only reported, with a recommendation each (high_F_REVIEW.csv). The **FG explorer** (one group's Ecosim biomass with the survey uncertainty band and the same series without catchability q, and its catches; point at a year to see the species shares), the key plots and every plot, with zoom. |
+| 7 Results | Download the workbook, diet matrices, review tables, all tables or the logs, and the **EwE import files** (Basic_input, Diet_composition, Landings, Discards, Definition_of_fleets, Pedigree, Traits in the layout and names of EwE's own export, plus Stanzas with the multi-stanza inputs; csv files or one xlsx, decimal comma (columns ";") or point (columns ","), text in double quotes, UTF-8; also written to `ewe_import/` at the end of each run). A summary of the last run (errors, warnings, FGs with F > 1, FGs without Ecopath B). FGs with high F are only reported, with a recommendation each (high_F_REVIEW.csv). The **FG explorer** (one group's Ecosim biomass with the survey uncertainty band and the same series without catchability q, and its catches; point at a year to see the species shares), the key plots and every plot, with zoom. |
 
 The floating **Run / Results / Methods** bar jumps around the page; **Hide methods** hides the documentation while you work.
 
@@ -153,6 +153,8 @@ The main inputs, under `EwE Western Med 2026/data/`:
 - `data_sources.csv` (optional): source, citation, years, licence and URL of each input file (columns `file,source,citation,years,licence,url`). Each run joins it to `data_catalogue.csv`.
 
 ## Outputs (under `out_dir`)
+
+Every csv is written with `;` between columns, `,` as decimal separator, text in double quotes and UTF-8 (with BOM), so it opens directly in Excel with Spanish/European settings (`options(wmed.csv_euro = FALSE)` before a run gives `,` and `.`). The pipeline reads both formats.
 
 ```
 ecopath_ecosim_inputs.xlsx      # the EwE workbook: info, FGs, Fleets, FG_spp, Ecopath_B, Ecopath_L,

@@ -63,7 +63,7 @@ model_cells <- reactive({
   last_finished()
   f <- if (!is.na(.out_dir)) file.path(.out_dir, "biomass", "model_area_cells.csv") else ""
   if (!file.exists(f)) return(NULL)
-  x <- tryCatch(utils::read.csv(f), error = function(e) NULL)
+  x <- tryCatch(as.data.frame(fread(f)), error = function(e) NULL)
   if (is.null(x) || !all(c("AreaID", "Depth_min_m", "Depth_max_m", "area_km2") %in% names(x))) NULL else x
 })
 ## --- Functional groups: the species -> FG csv the run uses -------------------
@@ -97,7 +97,7 @@ catch_path <- reactiveVal(NA_character_)
 observeEvent(input$catch_upload, {   # an uploaded catchability table is kept next to the run files
   dest <- file.path(.run_dir, paste0("catchability_", gsub("[^A-Za-z0-9_.-]", "_", input$catch_upload$name)))
   file.copy(input$catch_upload$datapath, dest, overwrite = TRUE)
-  x <- tryCatch(data.table::fread(file = dest), error = function(e) NULL)
+  x <- tryCatch(fread(file = dest), error = function(e) NULL)
   if (is.null(x) || !all(c("ScientificName", "q") %in% names(x))) {
     showNotification("The catchability table needs columns ScientificName and q.", type = "error"); return() }
   catch_path(normalizePath(dest))
@@ -166,7 +166,7 @@ observe({
 .esp_index <- reactive({
   m <- input$esp_view_map; req(m, nzchar(m))
   f <- file.path(.esp_root(), m, "ecospace_driver_index.csv"); req(file.exists(f))
-  data.table::fread(f)
+  fread(f)
 })
 observe({
   ix <- .esp_index(); v <- c("all", unique(ix$variable), "depth"); cur <- isolate(input$esp_view_var)
@@ -345,7 +345,7 @@ observeEvent(input$other_survey_upload, {
   dest <- file.path(.survey_dir, paste0("other_survey_", gsub("[^A-Za-z0-9_.-]", "_", input$other_survey_upload$name)))
   dir.create(.survey_dir, recursive = TRUE, showWarnings = FALSE)
   file.copy(input$other_survey_upload$datapath, dest, overwrite = TRUE)
-  x <- tryCatch(data.table::fread(dest), error = function(e) NULL)
+  x <- tryCatch(fread(dest), error = function(e) NULL)
   if (!is.null(x)) data.table::setnames(x, tolower(trimws(names(x))))
   if (is.null(x) || !all(c("species", "year") %in% names(x)) || !any(c("biomass_t_km2", "biomass", "density_t_km2", "density") %in% names(x))) {
     showNotification("The survey csv needs columns species (scientific name), year and biomass_t_km2.", type = "error"); return() }
@@ -370,7 +370,7 @@ observeEvent(input$fg_upload, {   # an uploaded csv is kept next to the run file
 fg_table <- reactive({
   f <- fg_path()
   if (is.na(f) || !file.exists(f)) return(list(error = paste("File not found:", f)))
-  x <- tryCatch(data.table::fread(f, encoding = "UTF-8"), error = function(e) NULL)
+  x <- tryCatch(fread(f, encoding = "UTF-8"), error = function(e) NULL)
   if (is.null(x)) return(list(error = paste("Could not read", basename(f))))
   need <- c("FG_number", "FG_name", "species")
   if (!all(need %in% names(x))) return(list(error = paste0(basename(f), " is missing column(s): ", paste(setdiff(need, names(x)), collapse = ", "),
@@ -388,7 +388,7 @@ fg_table <- reactive({
   ## (biomass/catchability_q_by_species.csv)
   .qf <- file.path(.inputs_run_dir(), "biomass", "catchability_q_by_species.csv")
   if (file.exists(.qf)) {
-    .qs <- tryCatch(unique(data.table::fread(.qf)[, .(species = ScientificName, q_run = q_resolved)], by = "species"), error = function(e) NULL)
+    .qs <- tryCatch(unique(fread(.qf)[, .(species = ScientificName, q_run = q_resolved)], by = "species"), error = function(e) NULL)
     if (!is.null(.qs)) {
       if (!"q" %in% names(x)) x[, q := NA_real_]
       x[, q := suppressWarnings(as.numeric(q))]
@@ -420,7 +420,7 @@ fg_table <- reactive({
   }
   saf_sp <- tryCatch({
     f <- file.path(.pcloud_dir, "data", "fisheries", "GFCM_SAF", "gfcm_saf_stock_assessments_ALL.csv")
-    if (file.exists(f)) unique(data.table::fread(f, select = "species")$species) else character(0)
+    if (file.exists(f)) unique(fread(f, select = "species")$species) else character(0)
   }, error = function(e) character(0))
   ms[, has_saf := species %in% saf_sp]
   sp2 <- x[!is.na(species) & nzchar(species), .(n = data.table::uniqueN(FG_number)), by = species][n > 1, species]
@@ -436,7 +436,7 @@ fg_table <- reactive({
   ## fg_species_coverage.csv); refreshed when a run finishes.
   run_state()
   .cov_f <- file.path(.inputs_run_dir(), "biomass", "fg_species_coverage.csv")
-  cov <- if (file.exists(.cov_f)) tryCatch(data.table::fread(.cov_f), error = function(e) NULL) else NULL
+  cov <- if (file.exists(.cov_f)) tryCatch(fread(.cov_f), error = function(e) NULL) else NULL
   has_cov <- !is.null(cov) && all(c("FG_num", "coverage", "coverage_survey") %in% names(cov))
   if (has_cov) fg <- merge(fg, cov[, .(FG_number = as.numeric(FG_num), coverage, coverage_survey, species_without_biomass)], by = "FG_number", all.x = TRUE)
   ## Ecopath B of each FG in the last run (Ecopath_B sheet) and where it
@@ -507,7 +507,7 @@ fg_table <- reactive({
         ## unique species (01 writes the totals); older runs: species in the
         ## FG file minus those without biomass in every FG they are in
         .tf <- file.path(dirname(.cov_f), "fg_species_coverage_totals.csv")
-        .tot <- if (file.exists(.tf)) tryCatch(data.table::fread(.tf), error = function(e) NULL) else NULL
+        .tot <- if (file.exists(.tf)) tryCatch(fread(.tf), error = function(e) NULL) else NULL
         if (is.null(.tot) || !nrow(.tot)) {
           .nm <- table(x$species)
           .wo <- table(unlist(strsplit(cov$species_without_biomass[!is.na(cov$species_without_biomass)], "; ", fixed = TRUE)))
@@ -1388,7 +1388,7 @@ output$run_summary <- renderUI({
                   lapply(seq_along(all_msg), function(i) tags$li(class = if (i <= length(err)) "text-danger" else NULL, substr(all_msg[i], 1, 400)))))
               else first))
   })
-  rd <- function(p) { f <- file.path(.out_dir, p); if (file.exists(f)) tryCatch(data.table::fread(f), error = function(e) NULL) else NULL }
+  rd <- function(p) { f <- file.path(.out_dir, p); if (file.exists(f)) tryCatch(fread(f), error = function(e) NULL) else NULL }
   fhi <- rd("validation/F_above_1_REVIEW.csv"); nob <- rd("biomass/fg_missing_ecopath_B_REVIEW.csv")
   tags$div(class = "card mb-3", tags$div(class = "card-body py-2",
     tags$strong("Summary of the last run"),
@@ -1599,7 +1599,7 @@ observe({
   .ecosim_ts()
   f <- file.path(.out_dir, "biomass", "fg_biomass_q_by_year.csv")
   if (is.na(.out_dir) || !file.exists(f)) return(NULL)
-  tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+  tryCatch(as.data.frame(fread(f)), error = function(e) NULL)
 })
 .fg_q_year <- function(fg) { x <- .fg_q_all(); if (is.null(x)) NULL else x[x$FG_num == fg, , drop = FALSE] }
 .fg_panels <- reactive({
@@ -1611,7 +1611,7 @@ observe({
   cvf <- file.path(.out_dir, "biomass", "survey_index_cv_by_fg_year.csv")
   b <- d[d$type == "Biomass (relative)", ]
   if (nrow(b) && file.exists(cvf)) {
-    cv <- tryCatch(data.table::fread(cvf), error = function(e) NULL)
+    cv <- tryCatch(fread(cvf), error = function(e) NULL)
     if (!is.null(cv) && all(c("FG_num", "Year", "cv_index") %in% names(cv))) {
       cv <- as.data.frame(cv)[cv$FG_num == .fg_now, c("Year", "cv_index")]
       b <- merge(b, cv, by = "Year", all.x = TRUE)
@@ -1731,14 +1731,14 @@ output$fg_explore_plot_catch <- renderPlot(.fg_panels()$p2, res = 96)
   .ecosim_ts()
   f <- file.path(.out_dir, "biomass", "species_density_regional_combined.csv")
   if (is.na(.out_dir) || !file.exists(f)) return(NULL)
-  x <- tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+  x <- tryCatch(as.data.frame(fread(f)), error = function(e) NULL)
   if (is.null(x) || !all(c("Year", "FG_num", "ScientificName", "mean_density") %in% names(x))) NULL else x
 })
 .sp_ecopath <- reactive({
   .ecosim_ts()
   f <- file.path(.out_dir, "biomass", "biomass_proportion_by_species_fg.csv")
   if (is.na(.out_dir) || !file.exists(f)) return(NULL)
-  x <- tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+  x <- tryCatch(as.data.frame(fread(f)), error = function(e) NULL)
   if (is.null(x) || !all(c("FG_num", "Species") %in% names(x))) return(NULL)
   x$w <- if ("Biomass_t_km2" %in% names(x)) suppressWarnings(as.numeric(x$Biomass_t_km2)) else NA_real_
   if ("prop_sp_fg" %in% names(x)) x$w[!is.finite(x$w)] <- suppressWarnings(as.numeric(x$prop_sp_fg[!is.finite(x$w)]))
@@ -1807,7 +1807,7 @@ output$fg_explore_tip <- renderUI({
   .ecosim_ts()
   f <- file.path(.out_dir, "fisheries", "catch_species_by_fg_year.csv")
   if (is.na(.out_dir) || !file.exists(f)) return(NULL)
-  x <- tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+  x <- tryCatch(as.data.frame(fread(f)), error = function(e) NULL)
   if (is.null(x) || !all(c("FG_num", "Year", "Species", "Landings_t", "source") %in% names(x))) NULL else x
 })
 .fg_catch_shares <- function(fg, yr, what = c("Catches", "Discards")) {
@@ -1847,16 +1847,16 @@ output$fg_explore_tip_catch <- renderUI({
   if (is.na(.out_dir)) return(NULL)
   f <- file.path(.out_dir, "biomass", "fg_species_biomass_q.csv")
   if (file.exists(f)) {
-    x <- tryCatch(as.data.frame(data.table::fread(f)), error = function(e) NULL)
+    x <- tryCatch(as.data.frame(fread(f)), error = function(e) NULL)
     if (!is.null(x)) { attr(x, "approx") <- FALSE; return(x) }
   }
   fp <- file.path(.out_dir, "biomass", "biomass_proportion_by_species_fg.csv")
   if (!file.exists(fp)) return(NULL)
-  x <- tryCatch(data.table::fread(fp), error = function(e) NULL)
+  x <- tryCatch(fread(fp), error = function(e) NULL)
   if (is.null(x) || !all(c("FG_num", "Species", "Biomass_t_km2") %in% names(x))) return(NULL)
   x <- x[, .(FG_num, FG_name, Species, B_with_q_t_km2 = Biomass_t_km2, prop_with_q = if ("prop_sp_fg" %in% names(x)) prop_sp_fg else NA_real_)]
   qf <- file.path(.out_dir, "biomass", "catchability_q_by_species.csv")
-  qt <- if (file.exists(qf)) tryCatch(unique(data.table::fread(qf)[, .(FG_num, Species = ScientificName, q = q_resolved)], by = c("FG_num", "Species")), error = function(e) NULL) else NULL
+  qt <- if (file.exists(qf)) tryCatch(unique(fread(qf)[, .(FG_num, Species = ScientificName, q = q_resolved)], by = c("FG_num", "Species")), error = function(e) NULL) else NULL
   has_q <- !is.null(qt)
   if (has_q) x <- merge(x, qt, by = c("FG_num", "Species"), all.x = TRUE) else x[, q := NA_real_]
   x[, B_without_q_t_km2 := if (!has_q) NA_real_ else B_with_q_t_km2 * data.table::fifelse(is.finite(q), q, 1)]
@@ -1901,9 +1901,9 @@ output$dl_fw_sp <- downloadHandler(
   function() { f <- fg_path(); paste0(if (is.null(f) || is.na(f)) "FG_table" else tools::file_path_sans_ext(basename(f)), "_biomass_q.csv") },
   function(file) {
     x <- .sp_q(); f <- fg_path()
-    fg <- if (!is.null(f) && !is.na(f) && file.exists(f)) tryCatch(data.table::fread(f), error = function(e) NULL) else NULL
+    fg <- if (!is.null(f) && !is.na(f) && file.exists(f)) tryCatch(fread(f), error = function(e) NULL) else NULL
     cols <- c("B_with_q_t_km2", "B_without_q_t_km2", "prop_with_q", "prop_without_q")
-    if (is.null(x)) { data.table::fwrite(if (is.null(fg)) data.frame() else fg, file); return(invisible()) }
+    if (is.null(x)) { fwrite(if (is.null(fg)) data.frame() else fg, file, sep = ";", dec = ",", quote = TRUE, bom = TRUE); return(invisible()) }
     b <- data.table::as.data.table(x)[, c("FG_num", "Species", if (!"q" %in% names(.or(fg, list()))) "q", cols), with = FALSE]
     if (!is.null(fg) && all(c("FG_number", "species") %in% names(fg))) {
       fg[, `.k` := paste(FG_number, trimws(species))]; b[, `.k` := paste(FG_num, Species)]
@@ -1930,7 +1930,7 @@ output$dl_fw_sp <- downloadHandler(
     ## Spanish/French/Italian, "," and decimal point for English (the
     ## "Decimal separator" choice of the EwE files in Results); UTF-8 with BOM
     euro <- !identical(input$ewe_dec, ".")
-    data.table::fwrite(out, file, sep = if (euro) ";" else ",", dec = if (euro) "," else ".", bom = TRUE)
+    fwrite(out, file, sep = if (euro) ";" else ",", dec = if (euro) "," else ".", quote = TRUE, bom = TRUE)
   })
 
 ## --- Survey hauls map (haul_density.rds, 01) --------------------------
@@ -2117,15 +2117,15 @@ output$dl_fg_template <- downloadHandler(
     if (is.null(f) || is.na(f) || !file.exists(f)) stop("FG table not found - is pCloud Drive running?")
     ## with a q column: the file's own q where filled in, else the q the
     ## last run used for that species (catchability_q_by_species.csv)
-    x <- tryCatch(data.table::fread(f), error = function(e) NULL)
+    x <- tryCatch(fread(f), error = function(e) NULL)
     qf <- file.path(.inputs_run_dir(), "biomass", "catchability_q_by_species.csv")
     if (!is.null(x) && file.exists(qf) && "species" %in% names(x)) {
-      qs <- unique(data.table::fread(qf)[, .(species = ScientificName, q_run = q_resolved)], by = "species")
+      qs <- unique(fread(qf)[, .(species = ScientificName, q_run = q_resolved)], by = "species")
       if (!"q" %in% names(x)) x[, q := NA_real_]
       x[, q := suppressWarnings(as.numeric(q))]
       x[, q_run := qs$q_run[match(trimws(species), qs$species)]]
       x[is.na(q), q := q_run][, q_run := NULL]
-      data.table::fwrite(x, file, sep = if (grepl(";", readLines(f, n = 1))) ";" else ",")
+      fwrite(x, file, sep = ";", dec = ",", quote = TRUE, bom = TRUE)
     } else file.copy(f, file)
   })
 output$dl_catch_template <- downloadHandler(

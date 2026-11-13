@@ -586,7 +586,7 @@ model_cells <- reactive({
   last_finished()
   f <- if (!is.na(.out_dir)) file.path(.out_dir, "biomass", "model_area_cells.csv") else ""
   if (!file.exists(f)) return(NULL)
-  x <- tryCatch(utils::read.csv(f), error = function(e) NULL)
+  x <- tryCatch(as.data.frame(fread(f)), error = function(e) NULL)
   if (is.null(x) || !all(c("AreaID", "Depth_min_m", "Depth_max_m", "area_km2") %in% names(x))) NULL else x
 })
 ## --- Functional groups: the species -> FG csv the run uses -------------------
@@ -602,7 +602,7 @@ catch_path <- reactiveVal(NA_character_)
 observeEvent(input$catch_upload, {   # an uploaded catchability table is kept next to the run files
   dest <- file.path(.run_dir, paste0("catchability_", gsub("[^A-Za-z0-9_.-]", "_", input$catch_upload$name)))
   file.copy(input$catch_upload$datapath, dest, overwrite = TRUE)
-  x <- tryCatch(data.table::fread(file = dest), error = function(e) NULL)
+  x <- tryCatch(fread(file = dest), error = function(e) NULL)
   if (is.null(x) || !all(c("ScientificName", "q") %in% names(x))) {
     showNotification("The catchability table needs columns ScientificName and q.", type = "error"); return() }
   catch_path(normalizePath(dest))
@@ -616,7 +616,7 @@ observeEvent(input$fg_upload, {   # an uploaded csv is kept next to the run file
 fg_table <- reactive({
   f <- fg_path()
   if (is.na(f) || !file.exists(f)) return(list(error = paste("File not found:", f)))
-  x <- tryCatch(data.table::fread(f, encoding = "UTF-8"), error = function(e) NULL)
+  x <- tryCatch(fread(f, encoding = "UTF-8"), error = function(e) NULL)
   if (is.null(x)) return(list(error = paste("Could not read", basename(f))))
   need <- c("FG_number", "FG_name", "species")
   if (!all(need %in% names(x))) return(list(error = paste0(basename(f), " is missing column(s): ", paste(setdiff(need, names(x)), collapse = ", "),
@@ -646,7 +646,7 @@ output$fg_summary <- renderUI({
   ## fg_species_coverage.csv); refreshed when a run finishes.
   run_state()
   .cov_f <- file.path(.out_dir, if (identical(input$area_mode, "custom")) gsub("[^A-Za-z0-9_-]", "_", input$area_name) else "", "biomass", "fg_species_coverage.csv")
-  cov <- if (file.exists(.cov_f)) tryCatch(data.table::fread(.cov_f), error = function(e) NULL) else NULL
+  cov <- if (file.exists(.cov_f)) tryCatch(fread(.cov_f), error = function(e) NULL) else NULL
   has_cov <- !is.null(cov) && all(c("FG_num", "coverage", "coverage_survey") %in% names(cov))
   if (has_cov) fg <- merge(fg, cov[, .(FG_number = as.numeric(FG_num), coverage, coverage_survey, species_without_biomass)], by = "FG_number", all.x = TRUE)
   rows <- lapply(seq_len(nrow(fg)), function(i)
@@ -1516,7 +1516,7 @@ dt <- apply_catchability_correction(
 )
 ```
 
-Real catchability tables mix true species binomials with broader taxonomic-group entries (e.g. "Isopoda", "Hydrozoa" - order/class names) and genus-level "spp" entries ("Cirolana spp", meaning any species in that genus). `apply_catchability_correction()` classifies each table entry by its apparent level from its text shape and resolves species against it in order of specificity - genus before order, order before phylum - so a genus-level match always wins over a broader but explicit rule for the same species. For species matching nothing in the table at any level, a **taxonomic-proximity fallback** looks for other species already in the table sharing genus, then family, then order, and borrows the average of their $q$ rather than falling straight to a generic default.
+Real catchability tables mix true species binomials with broader taxonomic-group entries (e.g. "Isopoda", "Hydrozoa" - order/class names) and genus-level "spp" entries ("Cirolana spp", meaning any species in that genus). `apply_catchability_correction()` classifies each table entry by its apparent level from its text shape and resolves species against it in order of specificity - genus before order, order before phylum - so a genus-level match always wins over a broader but explicit rule for the same species. A species with no $q$ of its own (no species or "Genus spp" entry) takes the **mean $q$ of the species of its FG that have one** (each species counted once). Only for FGs where no species has a $q$, a **taxonomic-proximity fallback** looks for other species already in the table sharing genus, then family, then order, and borrows the average of their $q$ rather than falling straight to a generic default. Groups not sampled by MEDITS (MEDIAS acoustic, stock assessments, literature, unsurveyed groups) have $q = 1$.
 
 `exempt_fg_names`/`exempt_species` force $q=1$ (no correction) regardless of anything else resolved - for groups a bottom trawl isn't designed to sample representatively at all (pelagic, planktonic, seagrass/algae FGs), where "catchability" as a concept doesn't apply the same way.
 

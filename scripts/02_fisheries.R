@@ -7234,7 +7234,90 @@ if (nrow(multistanza_props_applied)) {
             round(100 * pp$d_prop, 1), "% of discards of every fleet's FG", pp$fg_adult, " catch.")
   }
 }
-ecopath_fleet_long[, `:=`(Fleet = paste(Country, FleetType, sep = " - "),
+## --- EwE fleets (2026-11-13): the model's 30 fleets, nothing unclassified --
+## Every country x gear fleet of the catch tables is mapped to one of the
+## fleets of EWE_FLEETS (country code + fleet; recreational catch of every
+## country goes to one "Recreational fisheries" fleet). Gear rules
+## (EWE_FLEET_RULES, first match on the fleet type, lower case):
+##   recreational -> Recreational fisheries; purse seine / surrounding ->
+##   purse seiners; midwater / pelagic trawl -> midwater trawlers (or
+##   trawlers, else bottom trawlers, where the country has no midwater
+##   fleet); other trawls -> bottom trawlers (or trawlers); drifting
+##   longline -> drifting longliners (or longliners); set longlines and
+##   hooks not on drifting lines -> set longliners (or longliners); other
+##   longlines -> set longliners (or longliners); artisanal, gillnets,
+##   trammel nets, traps, pots, dredges, seines, hand lines and other small
+##   gears -> artisanal.
+## Catch with no gear (Unclassified, gear not known) is shared among the
+## country's fleets in proportion to their catch of the same FG (all FGs
+## of the country if that FG has no gear-resolved catch). Mapping and
+## shares: fisheries/fleet_to_ewe_fleet_REVIEW.csv.
+if (!exists("EWE_FLEETS", envir = .GlobalEnv, inherits = FALSE)) EWE_FLEETS <- c(
+  "ALG artisanal", "ALG bottom trawlers", "ALG longliners", "ALG midwater trawlers", "ALG purse seiners",
+  "FRA artisanal", "FRA bottom trawlers", "FRA drifting longliners", "FRA midwater trawlers", "FRA purse seiners", "FRA set longliners",
+  "ITA artisanal", "ITA bottom trawlers", "ITA drifting longliners", "ITA purse seiners", "ITA set longliners",
+  "MOR artisanal", "MOR longliners", "MOR purse seiners", "MOR trawlers",
+  "SPA artisanal", "SPA bottom trawlers", "SPA drifting longliners", "SPA purse seiners", "SPA set longliners",
+  "TUN artisanal", "TUN longliners", "TUN purse seiners", "TUN trawlers",
+  "Recreational fisheries")
+EWE_FLEET_COUNTRY_CODE <- c(Algeria = "ALG", France = "FRA", Italy = "ITA", Morocco = "MOR", Spain = "SPA", Tunisia = "TUN")
+## fleet type (regex) -> candidate fleets, first one the country has wins
+EWE_FLEET_RULES <- list(
+  list("recreational", "Recreational fisheries"),
+  list("purse|surrounding", "purse seiners"),
+  list("midwater|pelagic trawl", c("midwater trawlers", "trawlers", "bottom trawlers")),
+  list("trawl", c("bottom trawlers", "trawlers")),
+  list("drifting longline", c("drifting longliners", "longliners")),
+  list("set longline|not drifting|longline", c("set longliners", "longliners")),
+  list("artisanal|small.scale|gillnet|entangl|trammel|trap|pot|dredge|seine|hand ?line|hooks|line|harpoon|misc|tool", "artisanal"))
+.ewe_fleet_of <- function(country, fleet_type) {
+  cc <- unname(EWE_FLEET_COUNTRY_CODE[country]); ft <- tolower(fleet_type)
+  vapply(seq_along(ft), function(i) {
+    if (is.na(ft[i])) return(NA_character_)
+    for (r in EWE_FLEET_RULES) if (grepl(r[[1]], ft[i])) {
+      cand <- if (identical(r[[2]], "Recreational fisheries")) r[[2]] else paste(cc[i], r[[2]])
+      hit <- cand[cand %in% EWE_FLEETS]
+      return(if (length(hit)) hit[1] else NA_character_)
+    }
+    NA_character_
+  }, character(1))
+}
+ecopath_fleet_long[, EwE_fleet := .ewe_fleet_of(Country, FleetType)]
+.fl_map <- ecopath_fleet_long[, .(Catch_t_avg = sum(Catch_t_avg, na.rm = TRUE)), by = .(Country, FleetType, EwE_fleet)]
+.fl_map[, rule := fifelse(is.na(EwE_fleet), "no gear: shared among the country's fleets by their catch of the same FG", "gear rule (EWE_FLEET_RULES)")]
+## unresolved rows: shared by the country's resolved catch of the same FG, else of all FGs
+.unres <- ecopath_fleet_long[is.na(EwE_fleet)]
+.res <- ecopath_fleet_long[!is.na(EwE_fleet) & EwE_fleet != "Recreational fisheries"]
+if (nrow(.unres)) {
+  .w_fg <- .res[, .(w = sum(Catch_t_avg, na.rm = TRUE)), by = .(Country, FG_num, EwE_fleet)][w > 0]
+  .w_ct <- .res[, .(w = sum(Catch_t_avg, na.rm = TRUE)), by = .(Country, EwE_fleet)][w > 0]
+  .alloc <- rbindlist(lapply(split(.unres, by = c("Country", "FG_num")), function(u) {
+    w <- .w_fg[Country == u$Country[1] & FG_num == u$FG_num[1]]; basis <- "same FG"
+    if (!nrow(w)) { w <- .w_ct[Country == u$Country[1]]; basis <- "all FGs of the country" }
+    if (!nrow(w)) {                                   # country with no gear-resolved catch at all
+      cc <- unname(EWE_FLEET_COUNTRY_CODE[u$Country[1]])
+      w <- data.table(EwE_fleet = paste(cc, "artisanal"), w = 1); basis <- "no catch by gear in this country: artisanal"
+    }
+    w[, sh := w / sum(w)]
+    tot <- u[, .(Catch_t_avg = sum(Catch_t_avg, na.rm = TRUE), Discard_t_avg = sum(Discard_t_avg, na.rm = TRUE), Landings_t_avg = sum(Landings_t_avg, na.rm = TRUE))]
+    w[, .(Country = u$Country[1], FG_num = u$FG_num[1], FG_name = u$FG_name[1], Sector = "Unclassified", FleetType = "Unclassified",
+          EwE_fleet, Catch_t_avg = tot$Catch_t_avg * sh, Discard_t_avg = tot$Discard_t_avg * sh, Landings_t_avg = tot$Landings_t_avg * sh,
+          share = sh, basis = basis)]
+  }), fill = TRUE)
+  fwrite(.alloc[, .(Country, FG_num, FG_name, EwE_fleet, share = round(share, 4), Catch_t_avg, basis)][order(Country, FG_num, -share)],
+         file.path(csv_out_dir, "fleet_unclassified_shared_REVIEW.csv"))
+  message("[EwE fleets] ", round(sum(.unres$Catch_t_avg, na.rm = TRUE)), " t/year of catch with no gear (",
+          paste(unique(.unres$FleetType), collapse = ", "), ") shared among the fleets of its country (fleet_unclassified_shared_REVIEW.csv).")
+  ecopath_fleet_long <- rbindlist(list(ecopath_fleet_long[!is.na(EwE_fleet)], .alloc[, !c("share", "basis")]), use.names = TRUE, fill = TRUE)
+}
+fwrite(.fl_map[order(Country, -Catch_t_avg)], file.path(csv_out_dir, "fleet_to_ewe_fleet_REVIEW.csv"))
+message("[EwE fleets] ", uniqueN(.fl_map[, .(Country, FleetType)]), " country x gear fleets mapped to ", length(EWE_FLEETS),
+        " EwE fleets (fleet_to_ewe_fleet_REVIEW.csv).")
+ecopath_fleet_long <- ecopath_fleet_long[, .(Catch_t_avg = sum(Catch_t_avg, na.rm = TRUE), Discard_t_avg = sum(Discard_t_avg, na.rm = TRUE),
+                                             Landings_t_avg = sum(Landings_t_avg, na.rm = TRUE)),
+                                         by = .(FG_num, FG_name, Sector = fifelse(EwE_fleet == "Recreational fisheries", "Recreational", "Commercial"), EwE_fleet)]
+ecopath_fleet_long[, `:=`(Country = NA_character_, FleetType = EwE_fleet)]
+ecopath_fleet_long[, `:=`(Fleet = factor(EwE_fleet, levels = EWE_FLEETS),
                           Catch_t_km2_avg = Catch_t_avg * .kc(FG_num) / Total_Area_km2,
                           Discard_t_km2_avg = Discard_t_avg * .kc(FG_num) / Total_Area_km2,
                           Landings_t_km2_avg = Landings_t_avg * .kc(FG_num) / Total_Area_km2)]  # build the Fleet label and convert catch/discards/landings to density
@@ -7313,6 +7396,41 @@ message("\n[Ecopath by fleet] Ecopath_L/Ecopath_Di: ", nrow(landings_ecopath_by_
 ## two sheets from the FG-only Catches_Discards_FG_ts CSV - that had no
 ## fleet dimension at all, so it can't produce the per-fleet columns
 ## the final spec requires).
+## The residual (target-country catch with no fleet in the fleet split) is
+## shared among the commercial EwE fleets in proportion to their catch of
+## the same FG (all FGs if none): no "fleet not resolved" column. Every
+## EwE fleet gets its column, in the order of EWE_FLEETS.
+.ewe_fill_fleets <- function(w, resid_col = NULL, what = "") {
+  for (f in setdiff(EWE_FLEETS, names(w))) w[, (f) := 0]
+  com <- setdiff(EWE_FLEETS, "Recreational fisheries")
+  if (!is.null(resid_col) && resid_col %in% names(w)) {
+    tot <- colSums(w[, ..com], na.rm = TRUE)
+    rs <- w[[resid_col]]; rs[is.na(rs)] <- 0
+    m <- as.matrix(w[, ..com]); m[is.na(m)] <- 0
+    rsum <- rowSums(m)
+    sh <- m / ifelse(rsum > 0, rsum, NA)
+    if (sum(tot) > 0) for (i in which(rsum <= 0)) sh[i, ] <- tot / sum(tot)
+    sh[is.na(sh)] <- 0
+    add <- sh * rs
+    for (j in seq_along(com)) set(w, j = com[j], value = w[[com[j]]] + add[, j])
+    rv <- data.table(FG_num = w$FG_num, FG_name = w$FG_name, table = what, fleet_not_resolved_t_km2 = rs,
+                     basis = fifelse(rsum > 0, "fleets' catch of the same FG", "all commercial fleets' catch"))[fleet_not_resolved_t_km2 > 0]
+    w[, (resid_col) := NULL]
+    attr(w, "resid_review") <- rv
+  }
+  setcolorder(w, c("FG_num", "FG_name", EWE_FLEETS))
+  w
+}
+landings_ecopath_by_fleet_wide <- .ewe_fill_fleets(landings_ecopath_by_fleet_wide, OTHER_GFCM_COL, "landings")
+discards_ecopath_by_fleet_wide <- .ewe_fill_fleets(discards_ecopath_by_fleet_wide, OTHER_GFCM_COL, "discards")
+.rr <- rbindlist(list(attr(landings_ecopath_by_fleet_wide, "resid_review"), attr(discards_ecopath_by_fleet_wide, "resid_review")), fill = TRUE)
+if (nrow(.rr)) {
+  fwrite(.rr[order(table, -fleet_not_resolved_t_km2)], file.path(csv_out_dir, "fleet_not_resolved_shared_REVIEW.csv"))
+  message("[EwE fleets] Catch of the target countries outside the fleet split (", .rr[table == "landings", .N], " FGs with landings) shared among",
+          " the commercial fleets by their catch of the same FG (fleet_not_resolved_shared_REVIEW.csv).")
+}
+landings_fleet_cols <- discards_fleet_cols <- EWE_FLEETS
+
 upsert_workbook_sheets(
   list(Ecopath_L = landings_ecopath_by_fleet_wide, Ecopath_Di = discards_ecopath_by_fleet_wide),
   ECOPATH_WORKBOOK_PATH
@@ -7360,7 +7478,7 @@ setorder(ecopath_l_coverage_check, -Landings_t_broad)
 n_mostly_other <- sum(ecopath_l_coverage_check$mostly_other_countries, na.rm = TRUE)
 message("\n[Ecopath_L fleet-split coverage] ", n_mostly_other, " of ", nrow(ecopath_l_coverage_check), " FG(s) get less than",
         " half their total landings (catches_discards_fg, ", paste(range(YEAR_ECOPATH), collapse = "-"), " average) from a",
-        " named target-country fleet - the rest sits in Ecopath_L/Di's 'Target countries - fleet not resolved' column (see",
+        " named target-country fleet - the rest is shared among the EwE fleets by their catch of the same FG (see",
         " ecopath_L_fg_coverage_check.csv). Totals still reconcile with Catches_Ecopath; only the fleet/gear breakdown",
         " is coarser for these FGs.")
 write_native_sheet_csv(ecopath_l_coverage_check, "ecopath_L_fg_coverage_check", csv_out_dir)
@@ -7374,6 +7492,7 @@ catches_ecopath_by_fleet_wide <- dcast(ecopath_fleet_long, FG_num + FG_name ~ Fl
 ## silently absent from the sheet.
 n_fg_before_complete <- nrow(catches_ecopath_by_fleet_wide)  # row count before completing to every FG
 catches_ecopath_by_fleet_wide <- merge(full_fg_list, catches_ecopath_by_fleet_wide, by = c("FG_num", "FG_name"), all.x = TRUE)  # add rows for FGs with no fleet catch at all
+catches_ecopath_by_fleet_wide <- .ewe_fill_fleets(catches_ecopath_by_fleet_wide)   # every EwE fleet, in order
 fleet_cols <- setdiff(names(catches_ecopath_by_fleet_wide), c("FG_num", "FG_name"))  # every fleet column
 for (cc in fleet_cols) catches_ecopath_by_fleet_wide[is.na(get(cc)), (cc) := 0]  # fill missing fleet catch with explicit 0
 setorder(catches_ecopath_by_fleet_wide, FG_num)  # sort by FG number

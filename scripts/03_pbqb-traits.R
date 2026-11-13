@@ -4122,9 +4122,8 @@ message("\nSaved: ecopath_ready_PB_QB.csv (", nrow(ecopath_final), " FG rows,",
         " formatted to match Ecopath's real Basic Input structure",
         " (comma-decimal, correct column set) - selection mode: '",
         PB_QB_SELECTION_MODE, "'.")
-message("NOTE: multi-stanza groups need their own header row above the stanza members in",
-        " the real Ecopath format - this export does not build it; the stanza inputs",
-        " (leading B, Z, K, Wmat/Winf, BA/B) are in the Ecopath_multistanza sheet.")
+message("NOTE: this file has no multi-stanza header rows; the EwE import files (ewe_import/, built at the end of",
+        " the run) do, with Z per stanza and the Stanzas table. The stanza inputs are in the Ecopath_multistanza sheet.")
 
 ## =================================================================
 ## Multistanza parameters: fill the gaps left by 01_biomass.R
@@ -4149,6 +4148,63 @@ if (file.exists(.ms_path)) {
   ms_par[.st & is.na(Wmat_Winf) & is.finite(Wmat_Winf_FishBase), `:=`(Wmat_Winf = Wmat_Winf_FishBase, Wmat_Winf_source = "FishBase/FishLife Lm, a, b (03_pbqb-traits.R)")]
   ms_par <- merge(ms_par, ecopath_ready[, .(FG_num, PB_stanza_FG = PB_FG, QB_stanza_FG = QB_FG)], by = "FG_num", all.x = TRUE, sort = FALSE)
   ms_par[.st & is.na(Z) & is.finite(PB_stanza_FG), `:=`(Z = PB_stanza_FG, Z_source = "P/B of the stanza FG (03_pbqb-traits.R)")]
+  ## Stanza P/B and Q/B (EwE multi-stanza, Christensen & Walters 2004):
+  ## P/B of each stanza = its Z; Q/B of the leading stanza = the FG's Q/B
+  ## (the species' Q/B, 03), Q/B of the other stanzas from the same
+  ## monthly age structure EwE builds: weight w_a = (1 - exp(-K a))^3
+  ## (von Bertalanffy, Winf = 1), survival l_a = exp(-sum Z/12), stanza
+  ## B_s = sum l_a w_a, consumption C_s = sum l_a w_a^(2/3), so
+  ## Q/B_s = Q/B_lead x (C_s / B_s) / (C_lead / B_lead). Also the stanza
+  ## biomass ratio B_s / B_lead implied by K and Z (to compare with the
+  ## survey/assessment split, B_ratio_model vs B_ratio_pipeline).
+  ms_par[, `:=`(PB_stanza = NA_real_, QB_stanza = NA_real_, B_ratio_model = NA_real_, B_ratio_pipeline = NA_real_, PBQB_stanza_source = NA_character_)]
+  for (.sp in unique(ms_par[.st, Species])) {
+    .k <- which(ms_par$Species == .sp & .st)
+    .s <- ms_par[.k][order(Age_start_months)]
+    .K <- suppressWarnings(as.numeric(.s$K_VBGF[is.finite(as.numeric(.s$K_VBGF))][1]))
+    .Z <- suppressWarnings(as.numeric(.s$Z)); .a0 <- suppressWarnings(as.numeric(.s$Age_start_months))
+    .lead <- which(.s$Leading_stanza %in% TRUE)[1]
+    .qb_lead <- suppressWarnings(as.numeric(.s$QB_stanza_FG[.lead]))
+    if (!is.finite(.K) || anyNA(.Z) || anyNA(.a0) || is.na(.lead)) {
+      message("[Multistanza] ", .sp, ": K, Z or age at stanza start missing - stanza P/B and Q/B not computed.")
+      next
+    }
+    .ages <- 0:600                                              # months
+    .stz <- findInterval(.ages, .a0)                            # stanza of each month
+    .surv <- exp(-cumsum(c(0, .Z[.stz][-length(.ages)] / 12)))
+    .w <- (1 - exp(-.K * .ages / 12))^3
+    .B <- tapply(.surv * .w, .stz, sum); .C <- tapply(.surv * .w^(2 / 3), .stz, sum)
+    .rel <- (.C / .B) / (.C[.lead] / .B[.lead])
+    .Bp <- suppressWarnings(as.numeric(.s$B_pipeline_t_km2))
+    for (j in seq_len(nrow(.s))) {
+      i <- .k[match(.s$FG_num[j], ms_par$FG_num[.k])]
+      ms_par[i, `:=`(PB_stanza = .Z[j], QB_stanza = if (is.finite(.qb_lead)) .qb_lead * .rel[j] else NA_real_,
+                     B_ratio_model = .B[j] / .B[.lead], B_ratio_pipeline = .Bp[j] / .Bp[.lead],
+                     PBQB_stanza_source = paste0("P/B = Z of the stanza; Q/B ", if (j == .lead) "of the FG (leading stanza)" else
+                       paste0("= leading Q/B x ", signif(.rel[j], 3), " (von Bertalanffy K ", .K, ", consumption ~ W^2/3, Christensen & Walters 2004)")))]
+    }
+    message("[Multistanza] ", .sp, ": P/B = Z (", paste0(.s$Stanza, " ", signif(.Z, 3), collapse = ", "), "); Q/B ",
+            paste0(.s$Stanza, " ", signif(.qb_lead * .rel, 3), collapse = ", "), "; B ratio non-leading/leading from K and Z ",
+            paste(signif(.B[-.lead] / .B[.lead], 3), collapse = ", "), " (pipeline ", paste(signif(.Bp[-.lead] / .Bp[.lead], 3), collapse = ", "), ").")
+  }
+  ## Stanza P/B and Q/B into Ecopath_PBQB (workbook) and PB_QB.csv
+  .upd <- ms_par[.st & is.finite(PB_stanza), .(FG_num, PB_stanza, QB_stanza, PBQB_stanza_source)]
+  if (nrow(.upd)) tryCatch({
+    .pq <- as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, sheet = "Ecopath_PBQB", check.names = FALSE, sep.names = " "))
+    .m <- match(.pq$FG_num, .upd$FG_num); .h <- which(!is.na(.m))
+    if (length(.h)) {
+      .pq[.h, PB_FG := .upd$PB_stanza[.m[.h]]]
+      .pq[.h, QB_FG := fifelse(is.finite(.upd$QB_stanza[.m[.h]]), .upd$QB_stanza[.m[.h]], QB_FG)]
+      if ("PB_source" %in% names(.pq)) .pq[.h, PB_source := "multi-stanza: Z of the stanza"]
+      if ("QB_source" %in% names(.pq)) .pq[.h, QB_source := "multi-stanza (see Ecopath_multistanza)"]
+      upsert_workbook_sheets(list(Ecopath_PBQB = .pq), ECOPATH_WORKBOOK_PATH)
+      .pqc <- file.path(csv_out_dir, "PB_QB.csv")
+      if (file.exists(.pqc)) { .c <- fread(.pqc); .m2 <- match(.c$FG_num, .upd$FG_num); .h2 <- which(!is.na(.m2))
+        .c[.h2, PB_FG := .upd$PB_stanza[.m2[.h2]]]; .c[.h2, QB_FG := fifelse(is.finite(.upd$QB_stanza[.m2[.h2]]), .upd$QB_stanza[.m2[.h2]], QB_FG)]
+        fwrite(.c, .pqc) }
+      message("[Multistanza] Ecopath_PBQB: ", length(.h), " stanza FG(s) now have P/B = Z and their own Q/B.")
+    }
+  }, error = function(e) message("[Multistanza] Ecopath_PBQB not updated: ", conditionMessage(e)))
   setorder(ms_par, Species, -Leading_stanza, Stanza)
   fwrite(ms_par, file.path(csv_out_dir, "multistanza_parameters.csv"))
   upsert_workbook_sheets(list(Ecopath_multistanza = ms_par), ECOPATH_WORKBOOK_PATH)

@@ -68,7 +68,7 @@ wmed_data_catalogue <- function(git_dir, pcloud_dir) {
   if (is.null(cat)) return(data.frame())
   src <- file.path(data_dir, "data_sources.csv")             # curated: file, source, citation, years, licence, url
   if (file.exists(src)) {
-    s <- tryCatch(utils::read.csv(src, stringsAsFactors = FALSE), error = function(e) NULL)
+    s <- tryCatch(as.data.frame(get0("fread", envir = .GlobalEnv, mode = "function", ifnotfound = data.table::fread)(src)), error = function(e) NULL)
     if (!is.null(s) && "file" %in% names(s)) cat <- merge(cat, s, by = "file", all.x = TRUE)
   }
   cat[order(cat$path_in_shared_data), ]
@@ -107,7 +107,7 @@ wmed_save_package_versions <- function(git_dir) {
 wmed_write_run_record <- function(out_dir, git_dir, pcloud_dir, t0, settings = list(), step_minutes = NULL) {
   stamp <- format(Sys.time(), "%Y%m%d_%H%M")
   cat <- tryCatch(wmed_data_catalogue(git_dir, pcloud_dir), error = function(e) data.frame())
-  if (nrow(cat)) utils::write.csv(cat, file.path(out_dir, "data_catalogue.csv"), row.names = FALSE)
+  if (nrow(cat)) get0("fwrite", envir = .GlobalEnv, mode = "function", ifnotfound = data.table::fwrite)(cat, file.path(out_dir, "data_catalogue.csv"))
   rec <- list(
     run_finished = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
     minutes_total = round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 1),
