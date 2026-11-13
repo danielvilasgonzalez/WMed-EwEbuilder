@@ -212,8 +212,9 @@ dietcalc_fg_diet <- function(group_table, species_biomass, fg_species = NULL,
   } else {
     sb <- b01[, .(FG_num, Species, B, Bfg, w)]
   }
-  sb[!(is.finite(B) & B > 0) & is.finite(Bfg) & Bfg > 0 & is.finite(w) & w > 0, B := Bfg * w]
-  sb[!(is.finite(B) & B > 0), B := TINY]
+  sb[, B_from := fifelse(is.finite(B) & B > 0, "01 species biomass", NA_character_)]
+  sb[is.na(B_from) & is.finite(Bfg) & Bfg > 0 & is.finite(w) & w > 0, `:=`(B = Bfg * w, B_from = "share of the FG's Ecopath B")]
+  sb[is.na(B_from), `:=`(B = TINY, B_from = "tiny (no biomass)")]
   sb[, k := key(Species)]
   sb[, species_code := si$species_code[match(k, si$k)]]
   n_match <- sb[!is.na(species_code), uniqueN(Species)]
@@ -256,6 +257,19 @@ dietcalc_fg_diet <- function(group_table, species_biomass, fg_species = NULL,
                                 species_info = species_info, compatibility = comp, region = region_code,
                                 year_start = as.integer(min(years)), year_end = as.integer(max(years)),
                                 collecting_data_codes = data_codes, diet_method = methods, no_biomass_prey = no_biomass_prey)
+  ## species matching: FG-table species and the database species joined by genus/family
+  gnm <- setNames(as.character(gt$group_name), as.character(gt$group_number))
+  nrec <- as.data.table(diets)[, .(n_diet_records = .N, n_studies = uniqueN(reference)), by = .(species_code = predator_code)]
+  sm <- rbind(
+    sb[, .(FG_num, Species, species_code = fifelse(grepl("^wmed_", species_code), NA_character_, species_code),
+           matched_by = fifelse(grepl("^wmed_", species_code), "not in the database", "scientific name"), biomass = B, biomass_from = B_from)],
+    if (nrow(pi)) pi[, .(FG_num, Species = species_name, species_code, matched_by = paste0("database species joined by ", by_rank),
+                         biomass = TINY, biomass_from = "tiny (no biomass)")], fill = TRUE)
+  sm[, FG_name := unname(gnm[as.character(FG_num)])]
+  sm <- merge(sm, nrec, by = "species_code", all.x = TRUE)
+  sm[is.na(n_diet_records), `:=`(n_diet_records = 0L, n_studies = 0L)]
+  setcolorder(sm, c("FG_num", "FG_name", "Species", "species_code", "matched_by", "n_diet_records", "n_studies", "biomass", "biomass_from"))
+  sm <- sm[order(FG_num, -n_diet_records, Species)]
   m <- p$outputs$ewe_diet_matrix
   if (is.null(m) || !ncol(m)) m <- matrix(numeric(0), 0, 0)
   nm <- setNames(gt$group_name, as.character(gt$group_number))
@@ -264,7 +278,21 @@ dietcalc_fg_diet <- function(group_table, species_biomass, fg_species = NULL,
   long[, `:=`(predator_fg = unname(nm[pred_code]), prey_fg = fifelse(prey_code %in% names(nm), unname(nm[prey_code]), prey_code))]
   long <- long[!is.na(predator_fg)]
   long[, weight := weight / sum(weight), by = predator_fg]
-  ped <- as.data.table(p$outputs$ewe_diet_pedigree)
+  ped0 <- as.data.frame(p$outputs$ewe_diet_pedigree)
+  ped <- if (!is.null(ped0) && nrow(ped0)) data.table(FG_num = as.integer(ped0[[1]]), FG_name = unname(gnm[as.character(ped0[[1]])]),
+                                                    diet_pedigree = suppressWarnings(as.numeric(ped0[[3]])))[!is.na(FG_num)] else
+    data.table(FG_num = integer(0), FG_name = character(0), diet_pedigree = numeric(0))
+  ## species and FG names on dietcalcR's tables (they carry database codes)
+  spn <- setNames(as.character(si$species_name), as.character(si$species_code))
+  sfg <- unique(as.data.table(gs))[, .(FG = paste(unique(gnm[group_code]), collapse = " | ")), by = species_code]
+  lab <- function(x) {
+    x <- as.data.table(x); if (!nrow(x)) return(x)
+    for (r in c("predator", "prey")) { cc <- paste0(r, "_code")
+      if (cc %in% names(x)) {
+        x[, (paste0(r, "_name")) := unname(spn[as.character(get(cc))])]
+        x[, (paste0(r, "_FG")) := sfg$FG[match(as.character(get(cc)), sfg$species_code)]]
+      } }
+    x }
   ## coverage per predator FG: why an FG has (no) dietcalcR diet
   prd <- unique(as.data.table(diets)[, .(species_code = predator_code, dated = !is.na(year_start) & !is.na(year_end))])
   gsd <- merge(as.data.table(gs), prd[, .(any_rec = TRUE, dated = any(dated)), by = species_code], by = "species_code", all.x = TRUE)
@@ -277,6 +305,10 @@ dietcalc_fg_diet <- function(group_table, species_biomass, fg_species = NULL,
                 fifelse(predators_with_records == 0, "its species are in the database only as prey (no diet records)",
                 fifelse(predators_with_dated_records == 0, "its diet records have no sampling years", "its records give no prey of the model"))))]
   list(fg_diet = long[, .(predator_fg, prey_fg, weight)], pedigree = ped, project = p, coverage = cov[order(FG_num)],
-       records = as.data.table(p$scores$record), studies = as.data.table(p$selection$studies),
-       fg_mismatch = fg_mismatch)
+       records = lab(p$scores$record), studies = lab(p$selection$studies),
+       study_scores = lab(p$scores$study), diets_merged = lab(p$selection$diets_merged),
+       ewe_diet_table = as.data.table(p$outputs$ewe_diet_table), ewe_diet_matrix = as.data.table(p$outputs$ewe_diet_matrix_table),
+       species_match = sm, fg_mismatch = fg_mismatch, dc = dc,
+       inputs = list(region = region, region_code = region_code, years = range(years), db = db, config_dir = config_dir,
+                     diets = diets, biomass = bio, group_species = gs, groups = groups))
 }

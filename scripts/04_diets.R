@@ -1526,6 +1526,7 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
     }, error = function(e) { message("[04_diets.R] dietcalcR not used: ", conditionMessage(e)); structure(list(), why = conditionMessage(e)) })
     ## what happened, for the Diet explorer of the page
     .dcd <- file.path(csv_out_dir, "dietcalc"); dir.create(.dcd, showWarnings = FALSE)
+    unlink(list.files(.dcd, "\\.(csv|txt)$", full.names = TRUE))   # no stale tables from an earlier run
     writeLines(c(format(Sys.time(), "%Y-%m-%d %H:%M"),
                  if (!length(dc_res)) paste0("dietcalcR not used: ", attr(dc_res, "why"))
                  else if (!nrow(dc_res$fg_diet)) "dietcalcR ran but gave no FG diet (no records for the model's predators)"
@@ -1534,6 +1535,31 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
     if (length(dc_res) && !is.null(dc_res$coverage)) {
       fwrite(dc_res$coverage, file.path(.dcd, "dietcalc_coverage_REVIEW.csv"))
       if (!is.null(dc_res$fg_mismatch) && nrow(dc_res$fg_mismatch)) fwrite(dc_res$fg_mismatch, file.path(.dcd, "dietcalc_fg_vs_01_biomass_REVIEW.csv"))
+      ## dietcalcR's own outputs (its logging.R tables, with species and FG
+      ## names added): matching, scores, selection, merged diets, EwE tables
+      .dcw <- function(x, f) if (!is.null(x) && NROW(x)) fwrite(x, file.path(.dcd, f))
+      .dcw(dc_res$species_match, "dietcalc_species_matching.csv")
+      .dcw(dc_res$records, "dietcalc_record_scores.csv")
+      .dcw(dc_res$study_scores, "dietcalc_study_scores.csv")
+      .dcw(dc_res$studies, "dietcalc_selected_studies.csv")
+      .dcw(dc_res$diets_merged, "dietcalc_selection_diets_merged.csv")
+      .dcw(dc_res$ewe_diet_table, "dietcalc_ewe_diet_table.csv")
+      .dcw(dc_res$ewe_diet_matrix, "dietcalc_ewe_diet_matrix.csv")
+      .dcw(dc_res$pedigree, "dietcalc_diet_pedigree.csv")
+      tryCatch({
+        .pp <- dc_res$project; .dcx <- dc_res$dc; .in <- dc_res$inputs
+        if (is.list(.pp$decisions)) {
+          .dcw(data.frame(region = .in$region, region_code = .in$region_code, year_start = .in$years[1], year_end = .in$years[2]), "dietcalc_scenario_query.csv")
+          .dcw(.pp$decisions$excluded_predator_studies, "dietcalc_excluded_predator_studies.csv")
+          .dcw(.pp$decisions$predator_overrides, "dietcalc_predator_overrides.csv")
+        }
+        if (is.function(.dcx$dietcalc_write_run_summary))
+          .dcx$dietcalc_write_run_summary(
+            scenario = list(name = "WMed-EwEbuilder", query = list(region = .in$region, year_start = .in$years[1], year_end = .in$years[2]),
+                            paths = list(diets_db = .in$db, biomass_xlsx = "01 biomass + FG table (04_diets.R)", config_dir = if (is.null(.in$config_dir)) "dietcalcR defaults" else .in$config_dir)),
+            loaded = list(region_code = .in$region_code, diets = .in$diets, biomass = .in$biomass, group_species = .in$group_species, groups = .in$groups),
+            project = .pp, log_dir = .dcd)
+      }, error = function(e) message("[04_diets.R] dietcalcR run summary not written - ", conditionMessage(e)))
       .nc <- dc_res$coverage[dietcalc_diet == FALSE]
       if (nrow(.nc)) message("[04_diets.R] dietcalcR has no diet for ", nrow(.nc), " predator FG(s) (dietcalc_coverage_REVIEW.csv): ",
                              paste(.nc[, .N, by = why][, paste0(N, " ", why)], collapse = "; "), " - the other sources fill them.")
@@ -1544,9 +1570,6 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
       predator_fg_still_missing <- setdiff(predator_fg_still_missing, dietcalc_fgs)
       fwrite(dc_res$fg_diet, file.path(.dcd, "dietcalc_fg_diet.csv"))
       tryCatch(fwrite(build_ecopath_diet_sheet(dc_res$fg_diet, group_table), file.path(.dcd, "diet_matrix_dietcalc.csv")), error = function(e) NULL)
-      if (nrow(dc_res$pedigree)) fwrite(dc_res$pedigree, file.path(.dcd, "dietcalc_diet_pedigree.csv"))
-      if (!is.null(dc_res$records) && nrow(dc_res$records)) fwrite(dc_res$records, file.path(.dcd, "dietcalc_record_scores.csv"))
-      if (!is.null(dc_res$studies) && nrow(dc_res$studies)) fwrite(dc_res$studies, file.path(.dcd, "dietcalc_selected_studies.csv"))
       message("[04_diets.R] dietcalcR diets used for ", length(dietcalc_fgs), " predator FG(s); the pipeline tiers kept for the other ",
               length(setdiff(predator_fg_names_all, dietcalc_fgs)), " (diet/dietcalc/).")
     }

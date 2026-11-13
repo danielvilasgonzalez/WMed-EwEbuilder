@@ -1608,6 +1608,19 @@ pedigree <- tryCatch({
   allp[, rule_input := fcase(input == "B", "B", input %in% c("P/B", "Q/B"), "PBQB", input == "Diet", "Diet", input == "L", "L", input == "Di", "Di")]
   allp[, c("index", "category") := .pedigree_of(rule_input[1], source), by = rule_input]
   allp <- merge(allp, bb[, .(FG_num, FG_name)], by = "FG_num", all.x = TRUE)
+  ## Diet of the FGs taken from dietcalcR: its own pedigree (biomass-weighted
+  ## score of the selected studies of the FG's species), not the regex rule
+  .dcp <- file.path(out_dir, "diet", "dietcalc", "dietcalc_diet_pedigree.csv")
+  if (file.exists(.dcp) && !is.null(ped_D)) {
+    .dp <- fread(file = .dcp)
+    .dcfg <- dp[diet_source == "dietcalc", FG_name]
+    .dp <- .dp[FG_name %in% .dcfg & is.finite(as.numeric(diet_pedigree))]
+    if (nrow(.dp)) {
+      allp[input == "Diet" & FG_name %in% .dp$FG_name, `:=`(index = round(as.numeric(.dp$diet_pedigree[match(FG_name, .dp$FG_name)]), 2),
+                                                           category = "dietcalcR diet pedigree (scores of the selected studies)")]
+      message("[06_diagnostics.R] Diet pedigree of ", nrow(.dp), " FG(s) from dietcalcR.")
+    }
+  }
   allp <- allp[!grepl("detritus|discard", FG_name, ignore.case = TRUE)]
   allp[, source := substr(sub("^__NA_B__$", "Biomass left for Ecopath (EE fixed)", source), 1, 200)]
   setcolorder(allp, c("FG_num", "FG_name", "input", "index", "category", "source"))

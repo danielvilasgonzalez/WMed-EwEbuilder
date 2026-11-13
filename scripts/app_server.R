@@ -1457,7 +1457,15 @@ observe({
   D <- if (byfg) t(d$D[k, , drop = FALSE]) else d$D[, k, drop = FALSE]
   if (identical(input$fleet_view_what, "L")) D <- D * 0
   if (identical(input$fleet_view_what, "D")) L <- L * 0
-  list(L = L, D = D, k = k, byfg = byfg)
+  Lf <- L; Df <- D
+  if (byfg && identical(input$fleet_view_group, "country")) {
+    ## all the fleets of a country together (fleet names start with its code)
+    cn <- c(ALG = "Algeria", FRA = "France", ITA = "Italy", MOR = "Morocco", SPA = "Spain", TUN = "Tunisia")
+    pre <- toupper(sub(" .*$", "", rownames(L)))
+    g <- ifelse(pre %in% names(cn), cn[pre], ifelse(grepl("recreational", rownames(L), ignore.case = TRUE), "Recreational", rownames(L)))
+    L <- rowsum(L, g, reorder = FALSE); D <- rowsum(D, g, reorder = FALSE)
+  }
+  list(L = L, D = D, Lf = Lf, Df = Df, k = k, byfg = byfg)
 })
 output$fleet_plot_catch <- renderPlot({
   x <- .fleet_sel()
@@ -1470,7 +1478,7 @@ output$fleet_plot_catch <- renderPlot({
   op <- par(mar = c(4.5, 17, 3.5, 1), cex.axis = 1.05, cex.lab = 1.1, cex.main = 1); on.exit(par(op))
   barplot(m, horiz = TRUE, las = 1, col = cols, border = NA, names.arg = .fleet_short(names(tot)[o]), xlab = "t/km\u00b2/year (Ecopath years)",
           main = paste0(if (one) .fleet_short(x$k, 46) else paste0(length(x$k), if (x$byfg) " FGs" else " fleets"), ": ",
-                        if (x$byfg) "catch by fleet" else "catch by FG", if (n_all > 25) paste0(" (top 25 of ", n_all, ")") else "",
+                        if (x$byfg) (if (identical(input$fleet_view_group, "country")) "catch by country (all fleets)" else "catch by fleet") else "catch by FG", if (n_all > 25) paste0(" (top 25 of ", n_all, ")") else "",
                         "\ntotal ", signif(sum(tot), 3), " t/km\u00b2/year"))
   legend("bottomright", if (one) c("Landings", "Discards") else .fleet_short(x$k, 30), fill = cols, border = NA, bty = "n", cex = if (length(x$k) > 8) 0.85 else 1.05)
 })
@@ -1478,7 +1486,7 @@ output$fleet_plot_effort <- renderPlot({
   x <- .fleet_sel(); d <- .fleet_dat()
   if (is.null(x)) { plot.new(); return(invisible()) }
   ## fleets to draw: the selected ones, or the (up to 6) fleets that catch most of the selected FGs
-  fl <- if (x$byfg) { t <- rowSums(x$L + x$D); names(head(sort(t[t > 0], decreasing = TRUE), 6)) } else x$k
+  fl <- if (x$byfg) { t <- rowSums(x$Lf + x$Df); names(head(sort(t[t > 0], decreasing = TRUE), 6)) } else x$k
   E <- d$E; vc <- if (!is.null(E)) intersect(c("nom_active_kWdays_effective", "nom_active_kWdays"), names(E))[1] else NA
   ok <- !is.null(E) && !is.na(vc) && "Fleet" %in% names(E)
   ye <- tryCatch(as.integer(input$ecopath_years), error = function(e) NULL)
@@ -1582,6 +1590,74 @@ output$diet_view_plot <- renderPlot({
   if (length(miss)) mtext(paste0("No diet for this predator from ", paste(miss, collapse = ", "),
                                  if ("dietcalcR" %in% miss && is.null(t$dietcalcR)) paste0(" (dietcalcR: ", attr(t, "why")[["dietcalcR"]], ")") else ""),
                           side = 1, line = 4.6, cex = 0.85, col = "grey30", adj = 0)
+})
+
+## --- dietcalcR outputs (Diet explorer, mode "dc"): the tables of diet/dietcalc/
+.dc_files <- c(pedigree = "dietcalc_diet_pedigree.csv", coverage = "dietcalc_coverage_REVIEW.csv", matching = "dietcalc_species_matching.csv",
+               selected = "dietcalc_selected_studies.csv", study_scores = "dietcalc_study_scores.csv", record_scores = "dietcalc_record_scores.csv",
+               merged = "dietcalc_selection_diets_merged.csv", ewe_table = "dietcalc_ewe_diet_table.csv", mismatch = "dietcalc_fg_vs_01_biomass_REVIEW.csv")
+.dc_dir <- function() file.path(.out_dir, "diet", "dietcalc")
+.dc_tab <- reactive({
+  run_state(); w <- input$diet_dc_what
+  if (is.null(w) || identical(w, "summary") || is.na(.out_dir)) return(NULL)
+  f <- file.path(.dc_dir(), .dc_files[[w]]); if (!file.exists(f)) return(NULL)
+  tryCatch(as.data.frame(fread(f)), error = function(e) NULL)
+})
+observe({
+  run_state()
+  f <- file.path(.dc_dir(), "dietcalc_species_matching.csv")
+  fg <- if (!is.na(.out_dir) && file.exists(f)) tryCatch(unique(as.character(fread(f)$FG_name)), error = function(e) character(0)) else character(0)
+  fg <- .diet_fg_order(fg[!is.na(fg) & nzchar(fg)])
+  updateSelectInput(session, "diet_dc_fg", choices = c("All" = "", fg), selected = if (isTRUE(isolate(input$diet_dc_fg) %in% fg)) isolate(input$diet_dc_fg) else "")
+})
+.dc_filtered <- reactive({
+  x <- .dc_tab(); g <- input$diet_dc_fg
+  if (is.null(x) || is.null(g) || !nzchar(g)) return(x)
+  fgc <- intersect(c("FG_name", "predator_FG", "FG_app", "PredatorFG", "Consumer"), names(x))
+  if (!length(fgc)) return(x)
+  keep <- Reduce(`|`, lapply(fgc, function(cc) { v <- as.character(x[[cc]]); !is.na(v) & (v == g | grepl(paste0("(^| \\| )", gsub("([][{}()+*^$.|?\\\\])", "\\\\\\1", g), "( \\| |$)"), v)) }))
+  x[keep, , drop = FALSE]
+})
+output$diet_dc_n <- renderText({
+  w <- input$diet_dc_what; if (is.null(w) || w %in% c("summary", "pedigree")) return("")
+  x <- .dc_filtered(); if (is.null(x)) "" else paste0(nrow(x), " rows", if (nrow(x) > 500) " (first 500 shown; all in the download)" else "")
+})
+output$diet_dc_ui <- renderUI({
+  w <- input$diet_dc_what; if (is.null(w)) return()
+  st <- file.path(.dc_dir(), "dietcalc_status.txt")
+  if (is.na(.out_dir) || !file.exists(st))
+    return(tags$div(class = "wm-help", "No dietcalcR outputs yet: tick dietcalcR in card 2 and run 04 diets."))
+  if (w == "summary") return(verbatimTextOutput("diet_dc_summary"))
+  if (w == "pedigree") return(plotOutput("diet_dc_ped", height = "640px"))
+  if (is.null(.dc_tab())) return(tags$div(class = "wm-help", paste0("No ", .dc_files[[w]], " in the last run (", paste(readLines(st, warn = FALSE)[2], collapse = " "), ").")))
+  tags$div(style = "max-height:620px; overflow:auto; font-size:0.85em", tableOutput("diet_dc_table"))
+})
+output$diet_dc_summary <- renderText({
+  run_state(); d <- .dc_dir()
+  f <- file.path(d, c("dietcalc_status.txt", "run_summary.txt")); f <- f[file.exists(f)]
+  paste(unlist(lapply(f, readLines, warn = FALSE)), collapse = "\n")
+})
+output$diet_dc_table <- renderTable({
+  x <- .dc_filtered(); if (is.null(x)) return(NULL)
+  x <- utils::head(x, 500)
+  num <- vapply(x, is.numeric, logical(1)); x[num] <- lapply(x[num], function(v) signif(v, 4))
+  x
+}, striped = TRUE, spacing = "xs", na = "")
+output$diet_dc_ped <- renderPlot({
+  run_state(); f <- file.path(.dc_dir(), "dietcalc_diet_pedigree.csv")
+  if (!file.exists(f)) { plot.new(); text(0.5, 0.5, "No dietcalcR diet pedigree in the last run.", cex = 1.2); return(invisible()) }
+  x <- as.data.frame(fread(f)); x <- x[is.finite(x$diet_pedigree), , drop = FALSE]
+  if (!nrow(x)) { plot.new(); text(0.5, 0.5, "dietcalcR gave no diet pedigree.", cex = 1.2); return(invisible()) }
+  x <- x[match(rev(.diet_fg_order(x$FG_name)), x$FG_name), , drop = FALSE]
+  prov <- attr(.diet_tabs(), "prov"); used <- !is.null(prov) && "diet_source" %in% names(prov)
+  usedv <- if (used) x$FG_name %in% prov$FG_name[prov$diet_source == "dietcalc"] else rep(TRUE, nrow(x))
+  hl <- !is.null(input$diet_dc_fg) && nzchar(input$diet_dc_fg)
+  col <- ifelse(usedv, "#d62728", "grey75"); if (hl) col[x$FG_name != input$diet_dc_fg] <- adjustcolor(col[x$FG_name != input$diet_dc_fg], 0.35)
+  op <- par(mar = c(4.5, 17, 2.5, 1)); on.exit(par(op))
+  barplot(x$diet_pedigree, horiz = TRUE, las = 1, col = col, border = NA, xlim = c(0, 1), xlab = "Diet pedigree index (0-1)",
+          names.arg = ifelse(nchar(x$FG_name) > 34, paste0(substr(x$FG_name, 1, 33), "…"), x$FG_name), cex.names = 0.8,
+          main = "dietcalcR diet pedigree by predator FG")
+  legend("bottomright", c("used in the model's diet", "not used (another source)"), fill = c("#d62728", "grey75"), border = NA, bty = "n")
 })
 
 ## the diet matrix of each source (Metaweb, MAISHA, FishBase, dietcalc), the reference matrix and where each FG's diet came from
