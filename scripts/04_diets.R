@@ -345,6 +345,9 @@ if (!exists("DIET_STILL_MISSING_CSV_PATH",   envir = .GlobalEnv, inherits = FALS
 ## diets replace the pipeline's for every predator FG it covers, the
 ## pipeline tiers fill the rest). dietcalcR settings in lib_dietcalc.R.
 if (!exists("DIET_ENGINE", envir = .GlobalEnv, inherits = FALSE)) DIET_ENGINE <- "pipeline"
+## The metaweb template (data_entry_metaweb) is only read without dietcalcR,
+## which works on the full diet database it belongs to
+if (!exists("DIET_USE_METAWEB", envir = .GlobalEnv, inherits = FALSE)) DIET_USE_METAWEB <- !identical(DIET_ENGINE, "dietcalc")
 if (!exists("DIETCALC_DIR", envir = .GlobalEnv, inherits = FALSE)) DIETCALC_DIR <- file.path(pcloud_dir, "data/diet/dietcalcR")
 if (!exists("DIETCALC_DB", envir = .GlobalEnv, inherits = FALSE)) {
   .cand <- list.files(file.path(pcloud_dir, "data/diet/dietcalc_db"), pattern = "\\.(accdb|mdb|sqlite|sqlite3|db)$", full.names = TRUE, ignore.case = TRUE)
@@ -1285,6 +1288,7 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
   use_fg_matrix <- identical(DIET_FISHBASE_METHOD, "fg_matrix")
   mw_rec <- if (use_fg_matrix) metaweb_diet_records(metaweb$data_entry, metaweb$tax_codes, metaweb$nontax_groups,
                                                     review_dir = csv_out_dir) else data.table()
+  if (!isTRUE(DIET_USE_METAWEB) && nrow(mw_rec)) { message("[04_diets.R] DIET_USE_METAWEB = FALSE - metaweb records not used."); mw_rec <- mw_rec[0] }
   if (use_fg_matrix) {
     species_diet <- data.table(predator_name = character(), prey_name = character(), proportion = numeric(), n_studies = integer())
     predator_references <- data.table(predator_name = character(), references = character())
@@ -1514,6 +1518,7 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
       predator_fg_still_missing <- setdiff(predator_fg_still_missing, dietcalc_fgs)
       .dcd <- file.path(csv_out_dir, "dietcalc"); dir.create(.dcd, showWarnings = FALSE)
       fwrite(dc_res$fg_diet, file.path(.dcd, "dietcalc_fg_diet.csv"))
+      tryCatch(fwrite(build_ecopath_diet_sheet(dc_res$fg_diet, group_table), file.path(.dcd, "diet_matrix_dietcalc.csv")), error = function(e) NULL)
       if (nrow(dc_res$pedigree)) fwrite(dc_res$pedigree, file.path(.dcd, "dietcalc_diet_pedigree.csv"))
       if (!is.null(dc_res$records) && nrow(dc_res$records)) fwrite(dc_res$records, file.path(.dcd, "dietcalc_record_scores.csv"))
       if (!is.null(dc_res$studies) && nrow(dc_res$studies)) fwrite(dc_res$studies, file.path(.dcd, "dietcalc_selected_studies.csv"))

@@ -355,7 +355,7 @@ observe({
   p <- p[Driver == d & Source %in% input$resp_view_src]
   p[, lab := paste0(FG_num, " ", FG_name)]
   if (length(input$resp_view_fg)) p <- p[lab %in% input$resp_view_fg]
-  if (isTRUE(input$resp_view_both)) p <- p[FG_num %in% p[, uniqueN(Source), by = FG_num][V1 > 1, FG_num]]
+  if (isTRUE(input$resp_view_both)) p <- p[FG_num %in% p[, data.table::uniqueN(Source), by = FG_num][V1 > 1, FG_num]]
   p
 })
 ## AquaMaps vs GLOSSA per FG: ranges at >= 0.5, peaks, Schoener's D and r on the common range
@@ -364,10 +364,10 @@ output$resp_compare <- renderTable({
   if (is.null(p) || is.null(d)) return(NULL)
   p <- p[Driver == d]; p[, lab := paste0(FG_num, " ", FG_name)]
   if (length(input$resp_view_fg)) p <- p[lab %in% input$resp_view_fg]
-  both <- p[, uniqueN(Source), by = FG_num][V1 > 1, FG_num]
+  both <- p[, data.table::uniqueN(Source), by = FG_num][V1 > 1, FG_num]
   if (!length(both)) return(data.frame(Note = "No FG has both an AquaMaps and a GLOSSA function for this driver yet."))
   rng <- function(z) { k <- z$y >= 0.5; if (!any(k)) "-" else paste0(signif(min(z$x[k]), 3), " - ", signif(max(z$x[k]), 3)) }
-  out <- rbindlist(lapply(both, function(f) {
+  out <- data.table::rbindlist(lapply(both, function(f) {
     a <- p[FG_num == f & Source == "AquaMaps"][order(x)]; g <- p[FG_num == f & Source == "GLOSSA"][order(x)]
     lo <- max(min(a$x), min(g$x)); hi <- min(max(a$x), max(g$x))
     D <- r <- NA_real_
@@ -377,7 +377,7 @@ output$resp_compare <- renderTable({
       if (sum(ya) > 0 && sum(yg) > 0) D <- 1 - 0.5 * sum(abs(ya / sum(ya) - yg / sum(yg)))
       if (sd(ya) > 0 && sd(yg) > 0) r <- stats::cor(ya, yg)
     }
-    data.table(FG = a$lab[1], `AquaMaps >= 0.5` = rng(a), `GLOSSA >= 0.5` = rng(g),
+    data.table::data.table(FG = a$lab[1], `AquaMaps >= 0.5` = rng(a), `GLOSSA >= 0.5` = rng(g),
                `AquaMaps peak` = signif(a$x[which.max(a$y)], 3), `GLOSSA peak` = signif(g$x[which.max(g$y)], 3),
                `Common range` = if (hi > lo) paste0(signif(lo, 3), " - ", signif(hi, 3)) else "none",
                Overlap = round(D, 2), r = round(r, 2))
@@ -387,7 +387,7 @@ output$resp_compare <- renderTable({
 .resp_ncol <- 4L
 output$resp_view_ui <- renderUI({
   p <- .resp_sel()
-  n <- if (is.null(p) || !nrow(p)) 1L else uniqueN(p$FG_num)
+  n <- if (is.null(p) || !nrow(p)) 1L else data.table::uniqueN(p$FG_num)
   plotOutput("resp_view_plot", height = paste0(max(260, ceiling(n / .resp_ncol) * 210 + 40), "px"))
 })
 .resp_draw <- function() {
@@ -420,7 +420,7 @@ output$resp_view_plot <- renderPlot(.resp_draw())
 output$dl_resp_fig <- downloadHandler(
   filename = function() paste0("ecospace_responses_", input$resp_view_drv, ".png"),
   content = function(file) {
-    p <- .resp_sel(); n <- if (is.null(p) || !nrow(p)) 1 else uniqueN(p$FG_num)
+    p <- .resp_sel(); n <- if (is.null(p) || !nrow(p)) 1 else data.table::uniqueN(p$FG_num)
     grDevices::png(file, width = 1600, height = max(500, ceiling(n / .resp_ncol) * 380 + 80), res = 130)
     on.exit(grDevices::dev.off())
     .resp_draw()
@@ -877,8 +877,12 @@ config_code <- reactive({
       sprintf("ECOSPACE_CELL_SIZE <- %s/60   # Ecospace base map at %s arc-min, depth from EMODnet (05b)", input$esp_cell_arcmin, input$esp_cell_arcmin),
     if (6 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
     if (6 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
-    if (4 %in% steps_sel() && identical(input$diet_engine, "dietcalc")) c(
-      "DIET_ENGINE <- \"dietcalc\"   # diet matrix from dietcalcR (04)",
+    if (4 %in% steps_sel()) c(
+      sprintf("DIET_ENGINE <- \"%s\"   # diet sources (04)", if ("dietcalc" %in% input$diet_sources) "dietcalc" else "pipeline"),
+      sprintf("DIET_FALLBACK_ENABLE_MAISHA <- %s", tf("maisha" %in% input$diet_sources)),
+      sprintf("DIET_FALLBACK_ENABLE_FISHBASE <- %s", tf("fishbase" %in% input$diet_sources)),
+      sprintf("DIET_FALLBACK_ENABLE_ECOBASE <- %s", tf("ecobase" %in% input$diet_sources))),
+    if (4 %in% steps_sel() && "dietcalc" %in% input$diet_sources) c(
       if (!is.null(input$dietcalc_dir) && nzchar(trimws(input$dietcalc_dir))) sprintf("DIETCALC_DIR <- \"%s\"", .fwd(path.expand(trimws(input$dietcalc_dir)))),
       if (!is.null(input$dietcalc_db) && nzchar(trimws(input$dietcalc_db))) sprintf("DIETCALC_DB <- \"%s\"", .fwd(path.expand(trimws(input$dietcalc_db)))),
       if (!is.null(input$dietcalc_config) && nzchar(trimws(input$dietcalc_config))) sprintf("DIETCALC_CONFIG_DIR <- \"%s\"", .fwd(path.expand(trimws(input$dietcalc_config)))),
@@ -1415,6 +1419,152 @@ makeActiveBinding(".diet_path", function() if (!is.na(.out_dir)) file.path(.out_
 }
 .stamp <- function() format(Sys.time(), "%Y%m%d")
 output$dl_workbook <- downloadHandler(function() paste0("ecopath_ecosim_inputs_", .stamp(), ".xlsx"), .send_file(function() .wb_path))
+## --- Fleet explorer (Results): landings, discards and effort by fleet --------
+.fleet_dat <- reactive({
+  run_state()
+  if (is.na(.out_dir) || !file.exists(.wb_path)) return(NULL)
+  rd <- function(sh) tryCatch(openxlsx::read.xlsx(.wb_path, sh, check.names = FALSE, sep.names = " "), error = function(e) NULL)
+  L <- rd("Ecopath_L"); D <- rd("Ecopath_Di"); if (is.null(L)) return(NULL)
+  mat <- function(x) { if (is.null(x)) return(NULL); cols <- setdiff(names(x), c("FG_num", "FG_name"))
+    m <- as.matrix(as.data.frame(lapply(x[cols], function(v) suppressWarnings(as.numeric(v))))); m[!is.finite(m)] <- 0
+    dimnames(m) <- list(as.character(x$FG_name), cols); m }
+  Lm <- mat(L); Dm <- mat(D)
+  if (!is.null(Dm)) { Dm2 <- Lm * 0; cc <- intersect(colnames(Dm), colnames(Lm)); rr <- intersect(rownames(Dm), rownames(Lm)); Dm2[rr, cc] <- Dm[rr, cc]; Dm <- Dm2 } else Dm <- Lm * 0
+  ef <- c(file.path(.out_dir, "fisheries", "Fishing_Effort_by_Fleet.csv"), file.path(.out_dir, "fisheries", "intermediate", "Fishing_Effort_by_Fleet.csv"))
+  ef <- ef[file.exists(ef)][1]
+  E <- if (!is.na(ef)) tryCatch(as.data.frame(fread(ef)), error = function(e) NULL)
+  list(L = Lm, D = Dm, E = E)
+})
+observe({
+  d <- .fleet_dat(); if (is.null(d)) return()
+  ch <- if (identical(input$fleet_view_mode, "fg")) rownames(d$L)[rowSums(d$L + d$D) > 0] else colnames(d$L)[colSums(d$L + d$D) > 0]
+  updateSelectInput(session, "fleet_explore", choices = ch, selected = if (isTRUE(isolate(input$fleet_explore) %in% ch)) isolate(input$fleet_explore) else ch[1])
+})
+.fleet_short <- function(v, n = 36) ifelse(nchar(v) > n, paste0(substr(v, 1, n - 1), "\u2026"), v)
+output$fleet_plot_catch <- renderPlot({
+  d <- .fleet_dat(); k <- input$fleet_explore
+  if (is.null(d) || is.null(k) || !nzchar(k)) { plot.new(); text(0.5, 0.5, "No workbook yet: run 02 fisheries.", cex = 1.2); return(invisible()) }
+  byfg <- identical(input$fleet_view_mode, "fg")
+  if ((byfg && !k %in% rownames(d$L)) || (!byfg && !k %in% colnames(d$L))) { plot.new(); return(invisible()) }
+  l <- if (byfg) d$L[k, ] else d$L[, k]; di <- if (byfg) d$D[k, ] else d$D[, k]
+  if (identical(input$fleet_view_what, "L")) di <- di * 0
+  if (identical(input$fleet_view_what, "D")) l <- l * 0
+  tot <- l + di; o <- order(tot, decreasing = TRUE); o <- o[tot[o] > 0]; n_all <- length(o); o <- rev(head(o, 25))
+  if (!length(o)) { plot.new(); text(0.5, 0.5, "No catch.", cex = 1.2); return(invisible()) }
+  op <- par(mar = c(4.5, 17, 3.5, 1), cex.axis = 1.05, cex.lab = 1.1, cex.main = 1); on.exit(par(op))
+  barplot(rbind(l[o], di[o]), horiz = TRUE, las = 1, col = c("#1f77b4", "#ff7f0e"), border = NA, names.arg = .fleet_short(names(tot)[o]),
+          xlab = "t/km\u00b2/year (Ecopath years)",
+          main = paste0(.fleet_short(k, 46), ": ", if (byfg) "catch by fleet" else "catch by FG", if (n_all > 25) paste0(" (top 25 of ", n_all, ")") else "",
+                        "\ntotal ", signif(sum(tot), 3), " t/km\u00b2/year"))
+  legend("bottomright", c("Landings", "Discards"), fill = c("#1f77b4", "#ff7f0e"), border = NA, bty = "n", cex = 1.1)
+})
+output$fleet_plot_effort <- renderPlot({
+  d <- .fleet_dat(); k <- input$fleet_explore
+  if (is.null(d) || is.null(k) || !nzchar(k)) { plot.new(); return(invisible()) }
+  fl <- if (identical(input$fleet_view_mode, "fg")) { if (!k %in% rownames(d$L)) return(invisible()); t <- d$L[k, ] + d$D[k, ]; names(t)[which.max(t)] } else k
+  E <- d$E; vc <- if (!is.null(E)) intersect(c("nom_active_kWdays_effective", "nom_active_kWdays"), names(E))[1] else NA
+  e <- if (!is.null(E) && !is.na(vc) && "Fleet" %in% names(E)) E[E$Fleet == fl, , drop = FALSE] else NULL
+  if (is.null(e) || !nrow(e)) {
+    plot.new(); text(0.5, 0.5, paste0("No effort series for\n", fl, "\n(rerun 02 for the effort by EwE fleet)"), cex = 1.1); return(invisible()) }
+  e <- stats::aggregate(e[[vc]], list(Year = e$Year), sum, na.rm = TRUE); e <- e[order(e$Year), ]
+  ye <- tryCatch(as.integer(input$ecopath_years), error = function(e) NULL)
+  ref <- if (length(ye) == 2) mean(e$x[e$Year >= ye[1] & e$Year <= ye[2]], na.rm = TRUE) else NA
+  if (!is.finite(ref) || ref <= 0) ref <- e$x[which(e$x > 0)[1]]
+  y <- e$x / ref
+  op <- par(mar = c(4.5, 4.5, 3, 1), cex.axis = 1.05, cex.lab = 1.1); on.exit(par(op))
+  plot(e$Year, y, type = "l", lwd = 2.2, col = "#2c3e50", xlab = "", ylab = "Effort index (Ecopath years = 1)", ylim = c(0, max(1.1, max(y, na.rm = TRUE)) * 1.05),
+       main = paste0("Ecosim effort: ", .fleet_short(fl, 40)))
+  abline(h = 1, lty = 2, col = "grey50")
+  if ("source" %in% names(E)) mtext(.fleet_short(paste(unique(E$source[E$Fleet == fl]), collapse = " + "), 70), side = 3, line = 0.2, cex = 0.85, col = "grey30")
+})
+
+## --- Diet viewer (card 2): the diet of each source, side by side ------------
+.diet_tabs <- reactive({
+  run_state()
+  d <- file.path(.out_dir, "diet"); if (is.na(.out_dir) || !dir.exists(d)) return(NULL)
+  rd <- function(f, col = "weight") {
+    f <- c(file.path(d, f), file.path(d, "intermediate", f)); f <- f[file.exists(f)][1]
+    if (is.na(f)) return(NULL)
+    x <- tryCatch(fread(f), error = function(e) NULL)
+    if (is.null(x) || !all(c("predator_fg", "prey_fg", col) %in% names(x))) return(NULL)
+    x <- data.frame(predator_fg = x$predator_fg, prey_fg = x$prey_fg, weight = suppressWarnings(as.numeric(x[[col]])), stringsAsFactors = FALSE)
+    x[is.finite(x$weight) & x$weight > 0, , drop = FALSE]
+  }
+  out <- list(Model = rd("diet_main_vs_reference_REVIEW.csv", "main"), dietcalcR = rd(file.path("dietcalc", "dietcalc_fg_diet.csv")),
+              MAISHA = rd(file.path("MAISHA", "maisha_diet_matrix_fg_long.csv")), FishBase = rd(file.path("FishBase", "fishbase_diet_matrix_fg_long.csv")),
+              Metaweb = rd(file.path("Metaweb", "metaweb_diet_matrix_fg_long.csv")))
+  out <- out[!vapply(out, function(x) is.null(x) || !nrow(x), logical(1))]
+  pv <- c(file.path(d, "diet_provenance_by_predator_fg.csv"), file.path(d, "intermediate", "diet_provenance_by_predator_fg.csv")); pv <- pv[file.exists(pv)][1]
+  attr(out, "prov") <- if (!is.na(pv)) tryCatch(as.data.frame(fread(pv)), error = function(e) NULL)
+  out
+})
+.diet_fg_order <- function(nm) {
+  fg <- tryCatch(.fg_sum()$table, error = function(e) NULL)
+  ord <- if (!is.null(fg) && "FG_name" %in% names(fg)) as.character(fg$FG_name) else character(0)
+  c(intersect(ord, nm), sort(setdiff(nm, ord)))
+}
+observe({
+  t <- .diet_tabs(); if (is.null(t) || !length(t)) return()
+  preds <- .diet_fg_order(unique(unlist(lapply(t, function(x) x$predator_fg))))
+  updateSelectInput(session, "diet_view_pred", choices = preds, selected = if (isTRUE(isolate(input$diet_view_pred) %in% preds)) isolate(input$diet_view_pred) else preds[1])
+  updateSelectInput(session, "diet_view_src1", choices = names(t), selected = if (isTRUE(isolate(input$diet_view_src1) %in% names(t))) isolate(input$diet_view_src1) else names(t)[1])
+  updateCheckboxGroupInput(session, "diet_view_src", choices = names(t), selected = names(t), inline = TRUE)
+})
+.diet_cols <- c(Model = "#333333", dietcalcR = "#d62728", MAISHA = "#1f77b4", FishBase = "#2ca02c", Metaweb = "#9467bd")
+.diet_pred_data <- reactive({
+  t <- .diet_tabs(); p <- input$diet_view_pred
+  if (is.null(t) || is.null(p) || !nzchar(p)) return(NULL)
+  src <- intersect(names(t), input$diet_view_src); if (!length(src)) return(NULL)
+  l <- lapply(src, function(s) { x <- t[[s]][t[[s]]$predator_fg == p, , drop = FALSE]; if (nrow(x)) tapply(x$weight, x$prey_fg, sum) else numeric(0) })
+  names(l) <- src
+  prey <- unique(unlist(lapply(l, names))); if (!length(prey)) return(NULL)
+  m <- sapply(l, function(v) { o <- v[prey]; o[is.na(o)] <- 0; unname(o) }); if (is.null(dim(m))) m <- matrix(m, nrow = length(prey), dimnames = list(NULL, src))
+  rownames(m) <- prey
+  m <- m[apply(m, 1, max) >= 0.01, , drop = FALSE]
+  m[order(apply(m, 1, max)), , drop = FALSE]
+})
+output$diet_view_ui <- renderUI({
+  h <- if (identical(input$diet_view_mode, "matrix")) 900 else { m <- .diet_pred_data(); max(320, 60 + (if (is.null(m)) 4 else nrow(m)) * (14 + 9 * (if (is.null(m)) 1 else ncol(m)))) }
+  plotOutput("diet_view_plot", height = paste0(h, "px"))
+})
+output$diet_view_plot <- renderPlot({
+  t <- .diet_tabs()
+  if (is.null(t) || !length(t)) { plot.new(); text(0.5, 0.5, "No diet outputs yet: run 04 diets.", cex = 1.2); return(invisible()) }
+  if (identical(input$diet_view_mode, "matrix")) {
+    s <- input$diet_view_src1; x <- t[[s]]; if (is.null(x)) { plot.new(); return(invisible()) }
+    pr <- .diet_fg_order(unique(x$predator_fg)); py <- .diet_fg_order(unique(x$prey_fg))
+    m <- matrix(0, length(py), length(pr), dimnames = list(py, pr))
+    m[cbind(match(x$prey_fg, py), match(x$predator_fg, pr))] <- x$weight
+    sh <- function(v) ifelse(nchar(v) > 28, paste0(substr(v, 1, 27), "\u2026"), v)
+    op <- par(mar = c(13, 13, 2.5, 1)); on.exit(par(op))
+    image(seq_along(pr), seq_along(py), t(m[rev(py), , drop = FALSE]), col = c("white", grDevices::hcl.colors(30, "YlOrRd", rev = TRUE)),
+          breaks = c(-1, seq(1e-9, 1, length.out = 31)), axes = FALSE, xlab = "", ylab = "", main = paste0("Diet matrix: ", s, " (columns = predators, rows = prey)"))
+    axis(1, seq_along(pr), sh(pr), las = 2, cex.axis = 0.75); axis(2, seq_along(py), sh(rev(py)), las = 2, cex.axis = 0.75); box()
+    return(invisible())
+  }
+  m <- .diet_pred_data()
+  if (is.null(m) || !nrow(m)) { plot.new(); text(0.5, 0.5, "No diet for this predator in the ticked sources.", cex = 1.2); return(invisible()) }
+  prov <- attr(t, "prov"); pl <- if (!is.null(prov) && input$diet_view_pred %in% prov$FG_name) prov$diet_source[match(input$diet_view_pred, prov$FG_name)] else NA
+  op <- par(mar = c(4.5, 17, 3, 1), cex.axis = 1.05, cex.lab = 1.1); on.exit(par(op))
+  cols <- unname(.diet_cols[colnames(m)])
+  barplot(t(m), beside = TRUE, horiz = TRUE, las = 1, col = cols, border = NA, xlim = c(0, max(0.05, max(m)) * 1.08), xlab = "Share of the diet",
+          names.arg = ifelse(nchar(rownames(m)) > 34, paste0(substr(rownames(m), 1, 33), "\u2026"), rownames(m)),
+          main = paste0(input$diet_view_pred, if (!is.na(pl)) paste0("   (model diet from: ", pl, ")") else ""))
+  legend("bottomright", legend = rev(colnames(m)), fill = rev(cols), border = NA, bty = "n", cex = 1.1)
+})
+
+## the diet matrix of each source (Metaweb, MAISHA, FishBase, dietcalc), the reference matrix and where each FG's diet came from
+output$dl_diet_src <- downloadHandler(
+  filename = function() paste0("diet_by_source_", .stamp(), ".zip"),
+  content = function(file) {
+    d <- file.path(.out_dir, "diet"); if (!dir.exists(d)) stop("No diet outputs - run 04 first.")
+    old <- setwd(d); on.exit(setwd(old))
+    f <- c(list.files(c("Metaweb", "MAISHA", "FishBase", "dietcalc")[dir.exists(c("Metaweb", "MAISHA", "FishBase", "dietcalc"))], recursive = TRUE, full.names = TRUE),
+           list.files(".", pattern = "reference|provenance|main_vs_reference", recursive = TRUE))
+    f <- unique(f[file.exists(f)])
+    if (!length(f)) stop("No per-source diet tables yet - run 04.")
+    if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, f) else utils::zip(file, f, flags = "-q")
+  })
 output$dl_diet     <- downloadHandler(function() paste0("diet_matrix_main_vs_reference_", .stamp(), ".xlsx"), .send_file(function() .diet_path))
 output$dl_review   <- downloadHandler(function() paste0("WMed_EwE_REVIEW_tables_", .stamp(), ".zip"), .send_zip("REVIEW"))
 output$dl_all      <- downloadHandler(function() paste0("WMed_EwE_all_tables_", .stamp(), ".zip"), .send_zip("."))

@@ -2126,6 +2126,27 @@ columns sum to 1; [@christensen2005]). It sources
 
 ### Tiers (first available per predator FG)
 
+The sources are ticked on the page (card 2, *Diet data sources*). Each
+one writes its own predator FG × prey FG matrix (`diet/dietcalc`,
+`diet/MAISHA`, `diet/FishBase`), shown side by side in the diet viewer
+of card 2; the model's matrix takes each predator FG from the first
+source in this order that has it.
+
+0.  **dietcalcR** (the iMARES diet calculator; `DIET_ENGINE = "dietcalc"`,
+    `lib_dietcalc.R`), on the Mediterranean diet database
+    [@collmetaweb] (`DIETCALC_DB`). Every diet record gets a score
+    $s = (w_R s_R + w_T s_T + w_D s_D + w_M s_M) / \sum w$ from its
+    region (compatibility with the model region), years (distance to
+    the Ecopath years), type of data and method (dietcalcR's
+    compatibility tables and field weights, `DIETCALC_CONFIG_DIR`); the
+    studies of each predator species are selected and merged by score,
+    and the species of an FG are weighted by their biomass in the model
+    (`prop_sp_fg`, 01). Prey are matched to the FG table by scientific
+    name (then by genus); prey with no FG are dropped and the column
+    renormalised (`DIETCALC_NO_BIOMASS_PREY`). Its FG diets replace
+    those of the tiers below for every predator FG it covers, and its
+    diet pedigree is kept (`diet/dietcalc/`). With dietcalcR ticked the
+    metaweb template of tier 1 is not read.
 1.  **Mediterranean trophic metaweb** [@collmetaweb]
     (`data_entry_metaweb_empty.xlsx`, `DATA_ENTRY`; codes resolved
     through its `Taxonomic_codes` and `Non_taxonomic_groups` tabs). One
