@@ -26,7 +26,8 @@
 ## Inputs (settings, pCloud data/diet/ by default):
 ##   DIETCALC_DIR         dietcalcR source folder (or the installed package
 ##                        "dietcalc"); the R files are sourced, no install
-##   DIETCALC_DB          the diet database: Access (.accdb/.mdb; needs the
+##   DIETCALC_DB          the diet database: its data-entry workbook
+##                        (data_entry_metaweb*.xlsx), Access (.accdb/.mdb; needs the
 ##                        Access ODBC driver, Windows, or mdbtools'
 ##                        mdb-export), SQLite (.sqlite/.db) or a folder of
 ##                        CSV/TSV files, with the tables Diets_data,
@@ -66,14 +67,49 @@
 ## Access database on a computer without the Access ODBC driver: its
 ## tables exported to CSV with mdbtools (mdb-export), when installed
 .dietcalc_access_to_csv <- function(db, tables) {
-  if (!nzchar(Sys.which("mdb-export"))) return(NULL)
+  ## RStudio on a Mac does not see Homebrew's folder in PATH: look there too
+  exe <- c(Sys.which("mdb-export"), "/opt/homebrew/bin/mdb-export", "/usr/local/bin/mdb-export")
+  exe <- exe[nzchar(exe) & file.exists(exe)][1]
+  if (is.na(exe)) return(NULL)
   d <- file.path(tempdir(), paste0("dietcalc_db_", tools::md5sum(db)))
   dir.create(d, showWarnings = FALSE)
   for (t in tables) {
     f <- file.path(d, paste0(t, ".csv"))
-    if (!file.exists(f)) system2("mdb-export", c(shQuote(db), shQuote(t)), stdout = f)
+    if (!file.exists(f) || file.mtime(f) < file.mtime(db)) system2(exe, c(shQuote(db), shQuote(t)), stdout = f)
   }
   d
+}
+
+## The data-entry workbook of the Mediterranean diet database
+## (data_entry_metaweb*.xlsx): DATA_ENTRY -> diet records, Taxonomic_codes ->
+## species, Region -> regions; data and method codes as in its
+## Description_tabs (Data: 0 unknown, 1 adults and juveniles, 2 adults,
+## 3 juveniles, 4 larvae; Method: 0 unknown, 1 stable isotopes, 2 visual
+## observations, 3 stomach content, 4 others, 5 metabarcoding). Diet value:
+## "both_prey" when filled, else %W, %Vol, %N, IRI, %F (first available).
+.dietcalc_read_entry_xlsx <- function(f) {
+  rx <- function(sh, skip = 0) { x <- as.data.frame(readxl::read_excel(f, sheet = sh, skip = skip, .name_repair = "minimal"), stringsAsFactors = FALSE)
+    names(x) <- gsub("^_+|_+$", "", gsub("[^a-z0-9]+", "_", tolower(trimws(names(x))))); x }
+  d <- rx("DATA_ENTRY")
+  d <- d[!is.na(d$code_predator) & !is.na(d$code_prey), , drop = FALSE]
+  num <- function(v) suppressWarnings(as.numeric(v))
+  val <- rep(NA_real_, nrow(d))
+  for (cc in c("both_prey", "weight", "volume", "number", "iri", "frequency")) if (cc %in% names(d)) val <- ifelse(is.na(val), num(d[[cc]]), val)
+  reg <- rx("Region")
+  rl <- data.frame(region_code = as.integer(num(reg$code_region)), region_name = as.character(reg$region_0), stringsAsFactors = FALSE)
+  rl <- rl[!is.na(rl$region_code) & !is.na(rl$region_name), ]
+  rcode <- rl$region_code[match(tolower(trimws(d$region_0)), tolower(trimws(rl$region_name)))]
+  diets <- data.frame(record_id = as.character(seq_len(nrow(d))), predator_code = as.character(d$code_predator), prey_code = as.character(d$code_prey),
+                      diet_value = val, data_code = as.integer(num(d$data)), method_code = as.integer(num(d$method)),
+                      year_start = as.integer(num(d$beginning_year)), year_end = as.integer(num(d$end_year)), region_code = as.integer(rcode),
+                      reference = as.character(d$reference), stringsAsFactors = FALSE)
+  diets <- diets[is.finite(diets$diet_value) & diets$diet_value > 0, , drop = FALSE]
+  tx <- rx("Taxonomic_codes")
+  si <- data.frame(species_code = as.character(tx$valid_code), species_name = as.character(tx$valid_name), phylum = as.character(tx$phylum),
+                   class_name = as.character(tx$class), order_name = as.character(tx$order), family = as.character(tx$family), stringsAsFactors = FALSE)
+  list(diets = diets, species_info = si[!is.na(si$species_code), ], region_lookup = rl,
+       data_codes = data.frame(code_data = 0:4, data_collected = c("Unknown", "Adults and juveniles", "Adults", "Juveniles", "Larvae")),
+       methods = data.frame(method_code = 0:5, method_name = c("Unknown", "Stable isotopes", "Visual observations", "Stomach content", "Others", "Metabarcoding")))
 }
 
 dietcalc_fg_diet <- function(group_table, species_biomass,
@@ -92,16 +128,22 @@ dietcalc_fg_diet <- function(group_table, species_biomass,
     ok <- tryCatch({ dc$read_access_table(db, "Region"); TRUE }, error = function(e) FALSE)
     if (!ok) {
       src <- .dietcalc_access_to_csv(db, tabs)
-      if (is.null(src)) stop("cannot read the Access database here (no Access ODBC driver, no mdb-export). ",
+      if (is.null(src)) stop("cannot read the Access database here (no Access ODBC driver, no mdb-export; on a Mac: brew install mdbtools). ",
                              "Export its tables ", paste(tabs, collapse = ", "), " to CSV files in one folder (or to SQLite) and set DIETCALC_DB to it.")
       message("[dietcalc] Access database read through mdb-export.")
     }
   }
-  rd <- function(fun) fun(src, reader = dc$read_scenario_table)
-  diets <- rd(dc$load_diets); species_info <- rd(dc$load_species_info)
-  data_codes <- tryCatch(rd(dc$load_collecting_data_codes), error = function(e) NULL)
-  methods <- tryCatch(rd(dc$load_diet_method), error = function(e) NULL)
-  region_lookup <- tryCatch(rd(dc$load_region_lookup), error = function(e) dc$default_region_lookup())
+  if (grepl("\\.xlsx$", db, ignore.case = TRUE)) {
+    x <- .dietcalc_read_entry_xlsx(db)
+    diets <- x$diets; species_info <- x$species_info; data_codes <- x$data_codes; methods <- x$methods; region_lookup <- x$region_lookup
+  } else {
+    rd <- function(fun) fun(src, reader = dc$read_scenario_table)
+    diets <- rd(dc$load_diets); species_info <- rd(dc$load_species_info)
+    data_codes <- tryCatch(rd(dc$load_collecting_data_codes), error = function(e) NULL)
+    methods <- tryCatch(rd(dc$load_diet_method), error = function(e) NULL)
+    region_lookup <- tryCatch(rd(dc$load_region_lookup), error = function(e) dc$default_region_lookup())
+  }
+  if (!nrow(diets)) stop("the diet database has no diet records yet (", basename(db), ").")
   region_code <- dc$resolve_region_code(region, region_lookup)
   comp <- if (!is.null(config_dir) && !is.na(config_dir) && file.exists(file.path(config_dir, "RegionCompatibility.xlsx"))) {
     dc$load_config_xlsx(config_dir)
