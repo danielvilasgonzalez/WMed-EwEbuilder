@@ -5,8 +5,8 @@
 ##
 ## Runs the whole WMed EwE input pipeline in one go:
 ##   01_biomass.R -> 02_fisheries.R -> 03_pbqb-traits.R -> 04_diets.R
-##   -> 05_environment.R -> 05b_ecospace_drivers.R -> 06_diagnostics.R
-##   (05 and 05b only when asked: RUN_STEPS 5 and 6)
+##   -> 05_environment.R -> 05b_ecospace_drivers.R + 05c_habitat_responses.R
+##   -> 06_diagnostics.R (05, 05b and 05c only when asked: RUN_STEPS 5 and 6)
 ## The order matters: 02 needs Ecopath_B and strata_area_by_area.csv from
 ## 01 (F = C / B), 03 needs F_by_fg.csv from 02 (P/B = M + F), 04 needs
 ## the species biomass shares from 01, and 06 reads everything.
@@ -36,7 +36,7 @@ options(warn = 1)
 ## RUN_STEPS: which scripts to run, in this order: 1 = 01_biomass,
 ## 2 = 02_fisheries, 3 = 03_pbqb-traits, 4 = 04_diets, 5 = 05_environment
 ## (Copernicus environmental drivers), 6 = 05b_ecospace_drivers (Ecospace
-## ASCII maps), 7 = 06_diagnostics (last, so it can check everything).
+## ASCII maps) + 05c_habitat_responses (response functions), 7 = 06_diagnostics (last, so it can check everything).
 ## Default c(1:4, 7); e.g. RUN_STEPS <- 7 redraws the validation plots from
 ## the outputs already on disk (used by WMed-EwEbuilder.qmd).
 if (!exists("RUN_STEPS", envir = .GlobalEnv, inherits = FALSE)) RUN_STEPS <- c(1:4, 7)
@@ -271,6 +271,11 @@ if (5 %in% RUN_STEPS)
 if (6 %in% RUN_STEPS)
   tryCatch(.run_step(6, "05b_ecospace_drivers.R", "[Ecospace: monthly ASCII driver maps on the Ecospace base map] "),
            error = function(e) message("05b_ecospace_drivers.R failed (the other steps are not affected): ", conditionMessage(e)))
+## Ecospace response functions of the FGs (05c_habitat_responses.R:
+## AquaMaps envelopes and GLOSSA functional responses), with step 6
+if (6 %in% RUN_STEPS)
+  tryCatch(source(file.path(git_dir, "scripts", "05c_habitat_responses.R")),
+           error = function(e) message("05c_habitat_responses.R failed (the other steps are not affected): ", conditionMessage(e)))
 
 if (!exists("RUN_VALIDATION", envir = .GlobalEnv, inherits = FALSE)) RUN_VALIDATION <- TRUE
 ## 7 = diagnostics, always last
@@ -283,7 +288,7 @@ if (isTRUE(RUN_VALIDATION) && 7 %in% RUN_STEPS) {
 
 ## Run record: settings, minutes per step, git commit, R and package
 ## versions, input files (out_dir/run_record_<time>.json + the info sheet)
-.rec_names <- c("RUN_STEPS", "NEI_SPLIT_BY_REGION", "USE_EXTRA_DATA", "EXTRA_DATA_DIR", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
+.rec_names <- c("RUN_STEPS", "NEI_SPLIT_BY_REGION", "USE_EXTRA_DATA", "EXTRA_DATA_DIR", "RESPONSE_SOURCES", "RESPONSE_DRIVERS", "GLOSSA_MODE", "GLOSSA_MONTHS", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
                 "AREA_MODE", "AREA_NAME", "CUSTOM_AREA_TYPE", "CUSTOM_BBOX", "STRATA", "DROP_OUTLIERS", "NORMALIZE_TS",
                 "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE",
                 "ECOSIM_CATCH_COUNTRIES", "ECOSIM_CATCH_START_YEAR", "ECOSIM_CATCH_SCALING", "MULTISTANZA_B_SOURCE",

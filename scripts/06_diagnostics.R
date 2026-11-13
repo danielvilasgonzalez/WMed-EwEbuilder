@@ -181,8 +181,8 @@ if (exists("out_dir", envir = .GlobalEnv, inherits = FALSE) &&
   pcloud_dir <- rstudioapi::selectDirectory()
   if (is.null(pcloud_dir) || pcloud_dir == "" || !dir.exists(pcloud_dir)) stop("No valid pcloud directory selected.")
   
-  rstudioapi::showQuestion(title = "Select Github WMed_EwE Directory",
-                           message = "Please select the directory where you cloned the WMed_EwE repository.")
+  rstudioapi::showQuestion(title = "Select the WMed-EwEbuilder repository folder",
+                           message = "Please select the directory where you cloned the WMed-EwEbuilder repository.")
   git_dir <- rstudioapi::selectDirectory()
   if (is.null(git_dir) || git_dir == "" || !dir.exists(git_dir)) stop("No valid Github directory selected.")
 }

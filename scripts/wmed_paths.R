@@ -5,9 +5,9 @@
 ## Created by: Daniel Vilas
 ##
 ## Finds the three folders the pipeline needs, on any laptop that has
-## the WMed_EwE repo (GitHub) and the pCloud Drive folder
+## the WMed-EwEbuilder repo (GitHub) and the pCloud Drive folder
 ## "EwE Western Med 2026":
-##   git_dir    - the WMed_EwE repo (the folder that holds scripts/);
+##   git_dir    - the WMed-EwEbuilder repo (the folder that holds scripts/);
 ##                always the repo this file sits in
 ##   pcloud_dir - the shared data folder "EwE Western Med 2026"
 ##   out_dir    - where the outputs are written (local to each laptop)
@@ -182,7 +182,7 @@ wmed_find_paths <- function(git_dir = NULL) {
        shared_dir = shared$path, local_data_dir = local_dir,
        using_local_copy = identical(pc$path, local_dir), use_shared = use_shared,
        problem = if (ok) "" else paste0(
-         if (is.na(git_dir) || !file.exists(file.path(git_dir, "scripts", "01_biomass.R"))) "WMed_EwE repo not found. " else "",
+         if (is.na(git_dir) || !file.exists(file.path(git_dir, "scripts", "01_biomass.R"))) "WMed-EwEbuilder repo not found. " else "",
          if (is.na(pc$path)) paste0("pCloud folder '", .wmed_pcloud_name, "' not found (is pCloud Drive running?). ",
                                     "Set it in config.local.R or with the environment variable WMED_PCLOUD_DIR. ") else ""))
 }

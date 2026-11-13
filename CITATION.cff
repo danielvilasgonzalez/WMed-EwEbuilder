@@ -6,7 +6,7 @@ authors:
   - family-names: Vilas
     given-names: Daniel
     affiliation: "iMARES, Institut de Ciències del Mar (ICM-CSIC)"
-repository-code: "https://github.com/danielvilasgonzalez/WMed_EwE"
+repository-code: "https://github.com/danielvilasgonzalez/WMed-EwEbuilder"
 keywords:
   - Ecopath with Ecosim
   - ecosystem model

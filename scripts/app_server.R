@@ -336,6 +336,76 @@ output$dl_esp_zip <- downloadHandler(
     f <- list.files(".", recursive = TRUE)
     if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, f) else utils::zip(file, f, flags = "-q")
   })
+## --- Ecospace response functions of the FGs (05c) --------------------------
+.resp_dir <- function() file.path(.inputs_run_dir(), "environment", "ecospace_responses")
+.resp_pts <- reactive({
+  run_state()
+  f <- file.path(.resp_dir(), "ecospace_response_points.csv")
+  if (!file.exists(f)) return(NULL)
+  tryCatch(fread(f), error = function(e) NULL)
+})
+observe({
+  p <- .resp_pts(); d <- input$resp_view_drv
+  ch <- if (is.null(p) || is.null(d)) character(0) else unique(p[Driver == d][order(FG_num), paste0(FG_num, " ", FG_name)])
+  updateSelectizeInput(session, "resp_view_fg", choices = ch, selected = intersect(isolate(input$resp_view_fg), ch))
+})
+.resp_sel <- reactive({
+  p <- .resp_pts(); d <- input$resp_view_drv
+  if (is.null(p) || is.null(d)) return(NULL)
+  p <- p[Driver == d & Source %in% input$resp_view_src]
+  p[, lab := paste0(FG_num, " ", FG_name)]
+  if (length(input$resp_view_fg)) p <- p[lab %in% input$resp_view_fg]
+  p
+})
+.resp_ncol <- 4L
+output$resp_view_ui <- renderUI({
+  p <- .resp_sel()
+  n <- if (is.null(p) || !nrow(p)) 1L else uniqueN(p$FG_num)
+  plotOutput("resp_view_plot", height = paste0(max(260, ceiling(n / .resp_ncol) * 210 + 40), "px"))
+})
+.resp_draw <- function() {
+  p <- .resp_sel()
+  if (is.null(p) || !nrow(p)) {
+    plot.new()
+    text(0.5, 0.5, if (is.null(.resp_pts())) "No response functions yet: run 05c (tick \u201c05b Ecospace maps + 05c responses\u201d in Run)." else
+      "No response function for this driver, source or FG.", cex = 1.2)
+    return(invisible())
+  }
+  labs <- unique(p[order(FG_num), lab]); n <- length(labs)
+  nc <- min(.resp_ncol, n); nr <- ceiling(n / nc)
+  drv_lab <- c(depth = "Depth (m)", temp_surf = "SST (deg C)", temp_bot = "SBT (deg C)", sal_surf = "Salinity (PSU)", npp = "NPP (g C m-2 d-1)")[input$resp_view_drv]
+  cols <- c(AquaMaps = "#1f77b4", GLOSSA = "#d62728")
+  op <- par(mfrow = c(nr, nc), mar = c(4, 4, 2.4, 0.8), oma = c(0, 0, 2, 0), cex.axis = 1.05, cex.lab = 1.1, cex.main = 1.05)
+  on.exit(par(op))
+  for (l in labs) {
+    q <- p[lab == l]
+    plot(range(q$x), c(0, 1.05), type = "n", xlab = drv_lab, ylab = "Relative capacity", main = if (nchar(l) > 34) paste0(substr(l, 1, 33), "\u2026") else l)
+    for (s in intersect(c("GLOSSA", "AquaMaps"), unique(q$Source))) {
+      z <- q[Source == s][order(x)]
+      if (s == "GLOSSA" && any(is.finite(z$y_q2.5)))
+        polygon(c(z$x, rev(z$x)), pmin(c(z$y_q2.5, rev(z$y_q97.5)), 1.05), col = grDevices::adjustcolor(cols[s], 0.2), border = NA)
+      lines(z$x, z$y, col = cols[s], lwd = 2.2)
+    }
+  }
+  mtext(paste0("Ecospace response functions: ", drv_lab, "   (blue AquaMaps, red GLOSSA)"), outer = TRUE, cex = 1.15, font = 2)
+}
+output$resp_view_plot <- renderPlot(.resp_draw())
+output$dl_resp_fig <- downloadHandler(
+  filename = function() paste0("ecospace_responses_", input$resp_view_drv, ".png"),
+  content = function(file) {
+    p <- .resp_sel(); n <- if (is.null(p) || !nrow(p)) 1 else uniqueN(p$FG_num)
+    grDevices::png(file, width = 1600, height = max(500, ceiling(n / .resp_ncol) * 380 + 80), res = 130)
+    on.exit(grDevices::dev.off())
+    .resp_draw()
+  })
+output$dl_resp_zip <- downloadHandler(
+  filename = function() "ecospace_response_functions.zip",
+  content = function(file) {
+    d <- .resp_dir(); if (!dir.exists(d)) stop("No response functions - run 05c first.")
+    old <- setwd(d); on.exit(setwd(old))
+    f <- list.files(".", pattern = "\\.(csv|png)$")
+    if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, f) else utils::zip(file, f, flags = "-q")
+  })
 output$ecospace_depth_info <- renderUI({
   f <- ecospace_depth()
   tags$div(class = "wm-help", if (is.na(f)) "Default base map: data/Bathymetry/depth_wmed.asc (1/6 deg)." else paste("Base map:", basename(f)))
@@ -558,7 +628,7 @@ output$fg_table_view <- renderUI({
 ## 2026-10-29 are used. 01 is slower the first time after a change of GSAs
 ## (bathymetry download).
 .step_min_default <- c(6.8, 11.7, 4.9, 5.1, 15, 2, 1.6)   # 05: a rerun with the years cached; the first run takes hours; 05b: minutes
-.step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 environment", "05b Ecospace maps", "06 diagnostics")
+.step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 environment", "05b Ecospace maps + 05c responses", "06 diagnostics")
 
 ## --- Custom region from an uploaded shapefile / polygon file ---------------
 custom_shape <- reactiveVal(NULL)   # list(path, sf) of the uploaded region
@@ -780,6 +850,8 @@ config_code <- reactive({
       sprintf("ECOSPACE_CELL_SIZE <- %s/60   # Ecospace base map at %s arc-min, depth from EMODnet (05b)", input$esp_cell_arcmin, input$esp_cell_arcmin),
     if (6 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
     if (6 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
+    if (6 %in% steps_sel()) sprintf("RESPONSE_SOURCES <- c(%s)   # 05c response functions", paste0("\"", if (length(input$resp_src)) input$resp_src else "none", "\"", collapse = ", ")),
+    if (6 %in% steps_sel() && !is.null(input$glossa_mode)) sprintf("GLOSSA_MODE <- \"%s\"", input$glossa_mode),
     if (!is.null(survey_files()$TA)) sprintf("MEDITS_TA_FILE   <- \"%s\"   # own MEDITS hauls", .fwd(survey_files()$TA$path)),
     if (!is.null(survey_files()$TB)) sprintf("MEDITS_TB_FILE   <- \"%s\"   # own MEDITS catch", .fwd(survey_files()$TB$path)),
     if (!is.null(survey_files()$TC)) sprintf("MEDITS_TC_FILE   <- \"%s\"   # own MEDITS length/maturity", .fwd(survey_files()$TC$path)),

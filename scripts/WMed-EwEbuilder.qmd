@@ -2614,6 +2614,46 @@ filled, mean, min, max) and `ecospace_driver_mean_maps.png`. Tested
 on the 1/6° base map (one coastal cell filled per month), a 1/36° grid
 (2% of the cells filled, bilinear) and a 10 km EPSG:3035 grid.
 
+### Ecospace response functions (`05c_habitat_responses.R`)
+
+Habitat capacity in Ecospace multiplies, in each cell, the responses of
+an FG to the drivers of that cell [@christensen2014habitat]. 05c writes
+one response function per FG and driver (depth, bottom and surface
+temperature, surface salinity, NPP), in the form EwE keeps them: 1200
+values between X min and X max, scaled to a maximum of 1. Two sources,
+side by side (step "05b Ecospace maps + 05c responses"; card 5 picks
+them):
+
+- **AquaMaps** [@kaschner2019]. Each species' envelope (Min, PrefMin,
+  PrefMax, Max) is a trapezoid $T_s(x)$: 0 outside Min–Max, 1 between
+  PrefMin and PrefMax, linear in between. The FG curve is
+  $R_f(x) = \sum_s w_s T_s(x) / \max_x \sum_s w_s T_s(x)$, with $w_s$ the
+  species' share of the FG biomass (`prop_sp_fg`, 01). An FG of one
+  species gets the trapezoid itself (EwE function type 9, as EwE's own
+  AquaMaps import). Temperature goes to bottom or surface temperature
+  after AquaMaps' `Layer` of the species; primary production is
+  converted from mg to g C m⁻² d⁻¹.
+- **GLOSSA** [@mestretomas2025glossa]: Bayesian Additive Regression
+  Trees fitted to the presence/absence of each FG in the MEDITS hauls
+  (`haul_density.rds`, 01; FGs present in at least 30 hauls), with the
+  environment of the haul's year (mean of May–July, `GLOSSA_MONTHS`, of
+  the monthly maps of 05; depth from EMODnet). The functional response
+  (partial dependence: posterior mean probability of presence and its
+  95% interval) is rescaled to a maximum of 1. `GLOSSA_MODE = "prepare"`
+  writes the occurrences and `fit_layers.zip` for the GLOSSA app;
+  GLOSSA's exported functional responses, saved in
+  `glossa_results/`, are read with `"read"`; `"run"` fits the models in
+  R (`glossa::glossa_analysis()`).
+
+Outputs in `environment/ecospace_responses/`:
+`ecospace_response_functions.csv` (one row per function, with EwE's
+fields: Title `#AM_<driver>_fg_<n>` / `#GL_<driver>_fg_<n>`,
+FunctionType, XAxisMin, XAxisMax, FunctionParams and the 1200 values),
+`ewe_response_<source>_<driver>.csv` (the functions side by side),
+`ecospace_capacity_drivers.csv` (the function of each FG and driver to
+assign in Ecospace → Habitat capacity), `ecospace_response_points.csv`
+and one figure per driver.
+
 ## Known limitations {#sec-open-issues .unnumbered}
 
 Points to review before using the inputs in a balanced Ecopath model.
