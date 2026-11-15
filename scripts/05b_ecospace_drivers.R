@@ -59,6 +59,9 @@
 ##   ecospace_driver_mean_maps.png  mean map of each variable (check)
 ##   depth_used.asc                 the base map (depth > 0 = water; land 0) - the
 ##                                  Ecospace depth map to use with these drivers
+##   scenarios/<scenario>/          the same maps for each climate scenario of
+##                                  05s (environment/scenarios/<scenario>/),
+##                                  every year it covers, with its own index
 ## =================================================================
 
 suppressPackageStartupMessages({ library(data.table); library(terra) })
@@ -189,27 +192,33 @@ unlink(file.path(esp_dir, "depth_used.prj"))
 }
 
 ## --- Regrid, fill and write ----------------------------------------------
+## One set of maps: native maps of 05 (native_of(v)) -> out_d. Relative
+## scaling always uses the hindcast's base year (so scenarios are on the
+## same scale); years = the years kept (NULL = all).
+.esp_make <- function(native_of, out_d, years_keep, label = "") {
+dir.create(out_d, recursive = TRUE, showWarnings = FALSE)
 index <- list(); mean_maps <- list()
 for (v in vars) {
-  r <- terra::rast(.native(v))
+  if (is.na(native_of(v))) next
+  r <- terra::rast(native_of(v))
   yrs <- as.integer(substr(names(r), 1, 4)); mos <- as.integer(substr(names(r), 6, 7))
-  keep <- if (is.null(ECOSPACE_DRIVER_YEARS)) rep(TRUE, length(yrs)) else yrs %in% ECOSPACE_DRIVER_YEARS
-  base_keep <- yrs == ENV_BASE_YEAR
-  if (!any(keep)) { .esp_msg("[05b] ", v, ": no months in the selected years - skipped."); next }
+  keep <- if (is.null(years_keep)) rep(TRUE, length(yrs)) else yrs %in% years_keep
+  if (!any(keep)) { .esp_msg("[05b] ", label, v, ": no months in the selected years - skipped."); next }
   method <- if (.cell_km(depth) >= .cell_km(r)) "average" else "bilinear"
-  .esp_msg("[05b] ", v, ": ", sum(keep), " month(s), native ", signif(.cell_km(r), 3), " km -> base map ",
+  .esp_msg("[05b] ", label, v, ": ", sum(keep), " month(s), native ", signif(.cell_km(r), 3), " km -> base map ",
            signif(.cell_km(depth), 3), " km (", method, ")")
-  ## relative scaling: the map mean of the base year's months
+  ## relative scaling: the map mean of the hindcast base year's months
   rel_den <- NA_real_
   if (identical(ECOSPACE_DRIVER_SCALING, "relative")) {
+    rb <- terra::rast(.native(v)); base_keep <- as.integer(substr(names(rb), 1, 4)) == ENV_BASE_YEAR
     if (!any(base_keep)) stop("[05b] ECOSPACE_DRIVER_SCALING = 'relative' needs the base year ", ENV_BASE_YEAR, " in the 05 maps.", call. = FALSE)
-    b <- terra::project(r[[which(base_keep)]], depth, method = method)
+    b <- terra::project(rb[[which(base_keep)]], depth, method = method)
     rel_den <- mean(terra::global(terra::mask(b, water, maskvalues = c(NA, 0)), "mean", na.rm = TRUE)[, 1], na.rm = TRUE)
   }
   steps <- if (identical(ECOSPACE_DRIVER_STEP, "annual")) {
     lapply(sort(unique(yrs[keep])), function(y) list(y = y, m = NA_integer_, k = which(keep & yrs == y)))
   } else lapply(which(keep), function(k) list(y = yrs[k], m = mos[k], k = k))
-  vdir <- file.path(esp_dir, v); dir.create(vdir, showWarnings = FALSE)
+  vdir <- file.path(out_d, v); dir.create(vdir, showWarnings = FALSE)
   acc <- NULL
   for (i in seq_along(steps)) {
     s <- steps[[i]]
@@ -230,18 +239,39 @@ for (v in vars) {
   mean_maps[[v]] <- acc / length(steps)
 }
 index <- rbindlist(index)
-fwrite(index, file.path(esp_dir, "ecospace_driver_index.csv"))
+if (!nrow(index)) return(invisible(NULL))
+fwrite(index, file.path(out_d, "ecospace_driver_index.csv"))
 
 ## --- Check figure: mean map per variable -----------------------------------
 tryCatch({
-  png(file.path(esp_dir, "ecospace_driver_mean_maps.png"), width = 1800, height = 300 + 450 * ceiling(length(mean_maps) / 2), res = 150)
+  png(file.path(out_d, "ecospace_driver_mean_maps.png"), width = 1800, height = 300 + 450 * ceiling(length(mean_maps) / 2), res = 150)
   op <- par(mfrow = c(ceiling(length(mean_maps) / 2), 2), mar = c(2, 2, 2.5, 4))
-  for (v in names(mean_maps)) terra::plot(mean_maps[[v]], main = paste0(v, " (", unique(index[variable == v, unit]), "), mean of the time steps"))
+  for (v in names(mean_maps)) terra::plot(mean_maps[[v]], main = paste0(label, v, " (", unique(index[variable == v, unit]), "), mean of the time steps"))
   par(op); dev.off()
 }, error = function(e) { try(dev.off(), silent = TRUE); .esp_msg("[05b] mean-map figure not drawn: ", conditionMessage(e)) })
 
 .mx <- index[, .(steps = .N, max_filled = max(filled_from_neighbours + filled_with_map_mean), any_map_mean = sum(filled_with_map_mean)), by = variable]
-.esp_msg("[05b] Ecospace drivers written: ", paste(sprintf("%s %d %s step(s) (up to %d of %d water cells filled from neighbours%s)",
+.esp_msg("[05b] ", label, "Ecospace drivers written: ", paste(sprintf("%s %d %s step(s) (up to %d of %d water cells filled from neighbours%s)",
          .mx$variable, .mx$steps, ECOSPACE_DRIVER_STEP, .mx$max_filled, n_water,
          ifelse(.mx$any_map_mean > 0, ", some with the map mean", "")), collapse = "; "),
-         ". Index: ", file.path(esp_dir, "ecospace_driver_index.csv"))
+         ". Index: ", file.path(out_d, "ecospace_driver_index.csv"))
+invisible(index)
+}
+
+## hindcast (05)
+index <- .esp_make(.native, esp_dir, ECOSPACE_DRIVER_YEARS)
+
+## climate scenarios (05s): <env>/scenarios/<scenario>/<var>_monthly_native.tif
+## -> <base map>/scenarios/<scenario>/ (same layout and index, every year;
+## depth_used.asc copied so each folder loads on its own in Ecospace)
+.scn_dirs <- list.dirs(file.path(.env_dirs[1], "scenarios"), recursive = FALSE)
+for (sd in .scn_dirs) {
+  sc <- basename(sd)
+  nat <- function(v) { f <- file.path(sd, paste0(v, "_monthly_native.tif")); if (file.exists(f)) f else NA_character_ }
+  if (all(is.na(vapply(vars, nat, "")))) next
+  od <- file.path(esp_dir, "scenarios", sc)
+  tryCatch({
+    .esp_make(nat, od, NULL, label = paste0(sc, " "))
+    file.copy(file.path(esp_dir, "depth_used.asc"), file.path(od, "depth_used.asc"), overwrite = TRUE)
+  }, error = function(e) .esp_msg("[05b] scenario ", sc, " failed: ", conditionMessage(e)))
+}

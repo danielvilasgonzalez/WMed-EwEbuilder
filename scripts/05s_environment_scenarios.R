@@ -1,0 +1,278 @@
+## WMed-EwEbuilder - building Ecopath with Ecosim inputs for the Western Mediterranean
+## (biomass, fisheries, P/B, Q/B, traits and diets). This file: 05s_environment_scenarios.R
+## =================================================================
+## 05s_environment_scenarios.R
+## Created by: Daniel Vilas
+##
+## Future scenarios of the environmental drivers: the monthly maps of 05
+## (Copernicus hindcast) continued to ENV_SCEN_END under each climate
+## scenario in ENV_SCENARIOS, for Ecosim (forcing series) and, through
+## 05b, for Ecospace (driver maps on the base map). Sourced at the end of
+## 05_environment.R when ENV_SCENARIOS is not empty (it uses 05's maps,
+## model-area mask and helpers).
+##
+## SOURCE
+##   ISIMIP3b ocean climate input data (Frieler et al. 2024, Geosci Model
+##   Dev 17: 1-51; files.isimip.org, "uncorrected", monthly, 1 deg):
+##   CMIP6 Earth system models ENV_SCEN_MODELS (GFDL-ESM4, IPSL-CM6A-LR),
+##   experiment "historical" (1850-2014) and each SSP (2015-2100).
+##   Variables: tos (temp_surf), tob (temp_bot), so-surf / sos
+##   (sal_surf), intpp (npp). Only the model-area box is taken: the
+##   ISIMIP files service cuts it out (select_bbox); if that fails the
+##   whole global file is downloaded once and cropped. Cut-outs are kept
+##   in ISIMIP3B_CACHE_DIR, so later runs download nothing.
+##   ISIMIP3b has SSP1-2.6, SSP3-7.0 and SSP5-8.5; a scenario with no
+##   files (e.g. SSP2-4.5 for most models) is reported and skipped.
+##
+## METHOD (delta / change-factor method, per model, variable and month)
+##   Reference period R = ENV_SCEN_REF_YEARS that the hindcast covers
+##   (default 1995-2014, the overlap of the hindcast and the ISIMIP3b
+##   historical run).
+##   1. Model anomaly of each future month (year y, month m):
+##        temperature, salinity: A(y,m) = G(y,m) - mean_R G(., m)
+##        NPP:                   A(y,m) = G(y,m) / mean_R G(., m),
+##                               held to [1/ENV_SCEN_RATIO_MAX, ENV_SCEN_RATIO_MAX]
+##      with G the model field (historical + SSP joined at 2014/2015).
+##      Model cells next to the coast without values are filled from
+##      their neighbours (3 x 3 mean, up to 5 passes).
+##   2. Ensemble: mean of the models' anomalies (NPP: mean ratio).
+##   3. Regrid the anomaly to the 05 map grid (bilinear) and add it to
+##      the hindcast climatology of that month over R (NPP: multiply):
+##        X(y,m) = mean_R H(., m) + A(y,m)        (H = Copernicus hindcast)
+##      so the future keeps the hindcast's level, spatial pattern and
+##      seasonal cycle and takes the change of the climate models.
+##   Years: from the year after the hindcast to ENV_SCEN_END.
+##   ASSUMPTION (flagged): the hindcast pattern is kept; interannual
+##   variability comes from the models only.
+##
+## OUTPUT (out_dir/environment/scenarios/<scenario>/)
+##   <var>_monthly_native.tif     monthly maps (same grid as 05), read by
+##                                05b for the Ecospace maps of the scenario
+##   ecosim_forcing_<var>_monthly.csv / _annual.csv
+##                                hindcast + scenario, relative to
+##                                ENV_BASE_YEAR (= 1), as 05's forcing files
+## and in out_dir/environment/scenarios/:
+##   environment_scenarios_monthly.csv / _annual.csv  area mean and
+##                                10-90 % range per scenario, variable, year
+##   environment_scenarios_models.csv  which model files each scenario used
+##   plots/environment/environment_scenarios.png  hindcast and scenarios
+##
+## References
+##   Frieler K et al. (2024) Scenario setup and forcing data for impact
+##     model evaluation and impact attribution within the third round of
+##     the Inter-Sectoral Model Intercomparison Project (ISIMIP3a). Geosci
+##     Model Dev 17: 1-51; ISIMIP3b protocol, isimip.org.
+##   Lange S (2019) Trend-preserving bias adjustment and statistical
+##     downscaling with ISIMIP3BASD. Geosci Model Dev 12: 3055-3070
+##     (delta and change-factor methods).
+## =================================================================
+
+.scn_default <- function(name, value) if (!exists(name, envir = .GlobalEnv, inherits = FALSE)) assign(name, value, envir = .GlobalEnv)
+.scn_default("ENV_SCENARIOS", character(0))                       # e.g. c("ssp126", "ssp245", "ssp370", "ssp585")
+.scn_default("ENV_SCEN_END", 2050L)                               # last year of the scenarios
+.scn_default("ENV_SCEN_MODELS", c("GFDL-ESM4", "IPSL-CM6A-LR"))   # ISIMIP3b climate models
+.scn_default("ENV_SCEN_REF_YEARS", 1995:2014)                     # reference period of the delta method
+.scn_default("ENV_SCEN_VARS", c("temp_surf", "temp_bot", "sal_surf", "npp"))
+.scn_default("ENV_SCEN_RATIO_MAX", 4)                             # NPP change factor held to [1/4, 4]
+.scn_default("ISIMIP3B_CACHE_DIR", file.path(out_dir, "isimip3b_cache"))
+.scn_default("ISIMIP_FILES_API", "https://files.isimip.org/api/v2")
+.scn_default("ISIMIP_FILES_URL", "https://files.isimip.org")
+
+.scn_msg <- function(...) message("[05s] ", ...)
+.scn_isimip_var <- list(temp_surf = c("tos"), temp_bot = c("tob"), sal_surf = c("so-surf", "sos"), npp = c("intpp"))
+.scn_type <- c(temp_surf = "add", temp_bot = "add", sal_surf = "add", npp = "ratio")
+.scn_label <- c(ssp126 = "SSP1-2.6", ssp245 = "SSP2-4.5", ssp370 = "SSP3-7.0", ssp585 = "SSP5-8.5")
+
+ENV_SCENARIOS <- unique(tolower(gsub("[^a-z0-9]", "", tolower(ENV_SCENARIOS))))
+scen_dir <- file.path(env_dir, "scenarios")
+dir.create(scen_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(ISIMIP3B_CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
+
+## --- ISIMIP3b files ---------------------------------------------------------
+.scn_path <- function(model, exp, var) {
+  yrs <- if (exp == "historical") "1850_2014" else "2015_2100"
+  sprintf("ISIMIP3b/InputData/climate/ocean/uncorrected/global/monthly/%s/%s/%s_r1i1p1f1_%s_%s_60arcmin_global_monthly_%s.nc",
+          exp, model, tolower(model), exp, var, yrs)
+}
+.scn_box <- function() { b <- ENV_BBOX; c(west = b[["lon_min"]] - 2, east = b[["lon_max"]] + 2, south = b[["lat_min"]] - 2, north = b[["lat_max"]] + 2) }
+
+## monthly layers named "YYYY-MM" (by position: the files are complete monthly series)
+.scn_name_layers <- function(r, exp) {
+  y0 <- if (exp == "historical") 1850L else 2015L
+  n <- terra::nlyr(r); n_full <- if (exp == "historical") 165L * 12L else 86L * 12L
+  tt <- tryCatch(terra::time(r), error = function(e) NULL)
+  if (n != n_full && !is.null(tt) && !anyNA(tt)) {          # not the full series: use the file's own dates
+    names(r) <- format(as.Date(tt), "%Y-%m"); return(r)
+  }
+  names(r) <- sprintf("%d-%02d", y0 + (seq_len(n) - 1L) %/% 12L, (seq_len(n) - 1L) %% 12L + 1L)
+  r
+}
+.scn_read_nc <- function(nc, var, exp) {
+  r <- tryCatch(terra::rast(nc, subds = sub("-.*$", "", var)), error = function(e) terra::rast(nc))
+  if (terra::nlyr(r) %% 12L != 0L) stop("unexpected number of months (", terra::nlyr(r), ") in ", basename(nc))
+  if (is.na(terra::crs(r)) || !nzchar(terra::crs(r))) terra::crs(r) <- "EPSG:4326"
+  b <- .scn_box()
+  r <- terra::crop(r, terra::ext(b[["west"]], b[["east"]], b[["south"]], b[["north"]]))
+  .scn_name_layers(r, exp)
+}
+
+## 1. cut-out by the ISIMIP files service (only the box is downloaded)
+.scn_cutout <- function(path, var, exp, dest) tryCatch({
+  b <- .scn_box()
+  body <- list(paths = list(path), operations = list(list(operation = "select_bbox", bbox = unname(c(b[["west"]], b[["east"]], b[["south"]], b[["north"]])))))
+  t0 <- Sys.time()
+  repeat {
+    res <- httr::POST(ISIMIP_FILES_API, body = body, encode = "json", httr::timeout(120))
+    j <- httr::content(res, as = "parsed", type = "application/json")
+    if (httr::status_code(res) >= 400 || identical(j$status, "failed"))
+      stop("service answered ", httr::status_code(res), ": ", paste(unlist(if (!is.null(j$errors)) j$errors else j), collapse = " "))
+    if (identical(j$status, "finished") && !is.null(j$file_url)) break
+    if (as.numeric(difftime(Sys.time(), t0, units = "mins")) > 30) stop("cut-out not ready after 30 min")
+    Sys.sleep(10)
+  }
+  zf <- tempfile(fileext = ".zip"); on.exit(unlink(zf), add = TRUE)
+  utils::download.file(j$file_url, zf, mode = "wb", quiet = TRUE)
+  ex <- tempfile(); dir.create(ex); on.exit(unlink(ex, recursive = TRUE), add = TRUE)
+  utils::unzip(zf, exdir = ex)
+  nc <- list.files(ex, "\\.nc$", full.names = TRUE, recursive = TRUE)[1]
+  if (is.na(nc)) stop("no netCDF in the cut-out")
+  terra::writeRaster(.scn_read_nc(nc, var, exp), dest, overwrite = TRUE, gdal = "COMPRESS=DEFLATE")
+  dest
+}, error = function(e) { .scn_msg("  cut-out of ", basename(path), " not available (", conditionMessage(e), ") - trying the whole file."); NULL })
+
+## 2. the whole global file, cropped and deleted
+.scn_full <- function(path, var, exp, dest) tryCatch({
+  tmp <- file.path(ISIMIP3B_CACHE_DIR, basename(path)); on.exit(unlink(tmp), add = TRUE)
+  .scn_msg("  downloading ", basename(path), " (whole global file, one-off; it is cropped and deleted)...")
+  op <- options(timeout = max(3600, getOption("timeout"))); on.exit(options(op), add = TRUE)
+  utils::download.file(paste(ISIMIP_FILES_URL, path, sep = "/"), tmp, mode = "wb", quiet = TRUE)
+  terra::writeRaster(.scn_read_nc(tmp, var, exp), dest, overwrite = TRUE, gdal = "COMPRESS=DEFLATE")
+  dest
+}, error = function(e) { .scn_msg("  ", basename(path), " not available (", conditionMessage(e), ")."); NULL })
+
+## model field of a variable for one experiment: the cached cut-out, else download
+.scn_get <- function(model, exp, v) {
+  for (iv in .scn_isimip_var[[v]]) {
+    dest <- file.path(ISIMIP3B_CACHE_DIR, sprintf("%s_%s_%s_wmed.tif", tolower(model), exp, iv))
+    if (file.exists(dest)) {
+      r <- terra::rast(dest)
+      if (anyNA(suppressWarnings(as.integer(substr(names(r), 1, 4))))) r <- .scn_name_layers(r, exp)
+      return(r)
+    }
+    path <- .scn_path(model, exp, iv)
+    f <- .scn_cutout(path, iv, exp, dest)
+    if (is.null(f)) f <- .scn_full(path, iv, exp, dest)
+    if (!is.null(f)) return(terra::rast(f))
+  }
+  NULL
+}
+
+## fill model cells without values next to the coast (3 x 3 mean, 5 passes)
+.scn_fill <- function(r, passes = 5) {
+  for (p in seq_len(passes)) {
+    if (!any(is.na(terra::values(r[[1]], mat = FALSE)))) break
+    f <- terra::focal(r, w = 3, fun = "mean", na.rm = TRUE, na.policy = "only")
+    r <- terra::cover(r, f)
+  }
+  r
+}
+.scn_ym <- function(r) list(y = as.integer(substr(names(r), 1, 4)), m = as.integer(substr(names(r), 6, 7)))
+
+## =================================================================
+## Scenario maps
+## =================================================================
+.scn_native <- function(v) { f <- file.path(env_dir, paste0(v, "_monthly_native.tif")); if (file.exists(f)) f else NA_character_ }
+scn_vars <- ENV_SCEN_VARS[!is.na(vapply(ENV_SCEN_VARS, .scn_native, ""))]
+scn_used <- list(); scn_ts <- list()
+if (!length(scn_vars)) {
+  .scn_msg("No monthly maps of 05 to continue - scenarios skipped.")
+} else for (v in scn_vars) {
+  H <- terra::rast(.scn_native(v)); hym <- .scn_ym(H)
+  ref <- intersect(ENV_SCEN_REF_YEARS, unique(hym$y))
+  if (length(ref) < 5) { .scn_msg(v, ": the hindcast covers only ", length(ref), " year(s) of the reference period - skipped."); next }
+  yrs_f <- (max(hym$y) + 1L):as.integer(ENV_SCEN_END)
+  if (max(hym$y) >= ENV_SCEN_END) { .scn_msg(v, ": the hindcast already reaches ", ENV_SCEN_END, " - nothing to add."); next }
+  Hclim <- terra::rast(lapply(1:12, function(m) terra::app(H[[which(hym$y %in% ref & hym$m == m)]], mean, na.rm = TRUE)))
+  hist_fields <- setNames(lapply(ENV_SCEN_MODELS, function(mod) .scn_get(mod, "historical", v)), ENV_SCEN_MODELS)
+  for (sc in ENV_SCENARIOS) {
+    anoms <- list()
+    for (mod in ENV_SCEN_MODELS) {
+      Gh <- hist_fields[[mod]]; Gs <- .scn_get(mod, sc, v)
+      if (is.null(Gh) || is.null(Gs)) next
+      G <- c(Gh, Gs); g <- .scn_ym(G)
+      Gclim <- lapply(1:12, function(m) terra::app(G[[which(g$y %in% ref & g$m == m)]], mean, na.rm = TRUE))
+      k <- which(g$y %in% yrs_f)
+      A <- terra::rast(lapply(k, function(i) {
+        cl <- Gclim[[g$m[i]]]
+        if (.scn_type[[v]] == "ratio") terra::clamp(G[[i]] / cl, 1 / ENV_SCEN_RATIO_MAX, ENV_SCEN_RATIO_MAX, values = TRUE) else G[[i]] - cl
+      }))
+      names(A) <- names(G)[k]
+      anoms[[mod]] <- .scn_fill(A)
+      scn_used[[length(scn_used) + 1]] <- data.table(scenario = sc, variable = v, model = mod, isimip_files = paste(names(Gh)[1], "...", names(Gs)[terra::nlyr(Gs)]))
+    }
+    if (!length(anoms)) {
+      .scn_msg(v, " ", sc, ": no ISIMIP3b files for any model (", paste(ENV_SCEN_MODELS, collapse = ", "), ") - skipped.")
+      next
+    }
+    A <- if (length(anoms) == 1) anoms[[1]] else Reduce(`+`, anoms) / length(anoms)
+    A <- terra::resample(A, H[[1]], method = "bilinear")
+    mo <- as.integer(substr(names(A), 6, 7))
+    X <- if (.scn_type[[v]] == "ratio") A * Hclim[[mo]] else A + Hclim[[mo]]
+    X <- terra::mask(X, Hclim[[mo]])
+    names(X) <- names(A)
+    d <- file.path(scen_dir, sc); dir.create(d, showWarnings = FALSE)
+    terra::writeRaster(X, file.path(d, paste0(v, "_monthly_native.tif")), overwrite = TRUE, gdal = "COMPRESS=DEFLATE")
+    st <- .env_domain_stats(X)
+    scn_ts[[length(scn_ts) + 1]] <- cbind(data.table(scenario = sc, variable = v, unit = ENV_UNITS_OUT[[v]],
+                                                     year = as.integer(substr(names(X), 1, 4)), month = mo,
+                                                     source = paste0("ISIMIP3b ", paste(names(anoms), collapse = " + "), " change on the ",
+                                                                     min(ref), "-", max(ref), " Copernicus climatology")), st)
+    .scn_msg(v, " ", sc, ": ", terra::nlyr(X), " months (", min(yrs_f), "-", ENV_SCEN_END, "), ", length(anoms), " model(s).")
+  }
+}
+
+## =================================================================
+## Series, Ecosim forcing and plot
+## =================================================================
+if (length(scn_ts)) {
+  S <- rbindlist(scn_ts, fill = TRUE)
+  fwrite(rbindlist(scn_used), file.path(scen_dir, "environment_scenarios_models.csv"))
+  hind <- if (exists("env_ts") && nrow(env_ts)) env_ts else fread(file.path(env_dir, "environment_timeseries_monthly.csv"))
+  base <- hind[year == ENV_BASE_YEAR, .(base = mean(value, na.rm = TRUE)), by = variable]
+  S <- merge(S, base, by = "variable", all.x = TRUE)
+  S[, relative_to_base := value / base][, base := NULL]
+  fwrite(S[order(scenario, variable, year, month)], file.path(scen_dir, "environment_scenarios_monthly.csv"))
+  SA <- S[, .(value = mean(value), p10 = mean(p10), p90 = mean(p90), relative_to_base = mean(relative_to_base), n_months = .N),
+          by = .(scenario, variable, unit, year)]
+  fwrite(SA[order(scenario, variable, year)], file.path(scen_dir, "environment_scenarios_annual.csv"))
+  ## Ecosim forcing: the hindcast months and then the scenario's, relative to the base year
+  for (sc in unique(S$scenario)) for (v in unique(S[scenario == sc, variable])) {
+    h <- hind[variable == v & year %in% sort(unique(c(ENV_BASE_YEAR, ENV_YEARS))), .(year, month, value, relative_to_base, source)]
+    m <- rbind(h, S[scenario == sc & variable == v, .(year, month, value, relative_to_base, source)])[order(year, month)]
+    m[, time_step := (year - min(year)) * 12 + month]
+    fwrite(m[, .(time_step, year, month, forcing = round(relative_to_base, 4), value, source)],
+           file.path(scen_dir, sc, paste0("ecosim_forcing_", v, "_monthly.csv")))
+    a <- m[, .(forcing = round(mean(relative_to_base), 4), value = mean(value), n_months = .N, source = source[.N]), by = year]
+    fwrite(a, file.path(scen_dir, sc, paste0("ecosim_forcing_", v, "_annual.csv")))
+  }
+  .scn_msg("Scenarios ", paste(.scn_label[unique(S$scenario)], collapse = ", "), " to ", ENV_SCEN_END, ": maps, Ecosim forcing (relative to ",
+           ENV_BASE_YEAR, ") and series in ", scen_dir, ". Run 05b for the Ecospace maps of each scenario.")
+  miss <- setdiff(ENV_SCENARIOS, unique(S$scenario))
+  if (length(miss)) .scn_msg("Not made (no ISIMIP3b files): ", paste(.scn_label[miss], collapse = ", "), ".")
+  tryCatch(if (requireNamespace("ggplot2", quietly = TRUE)) {
+    ha <- hind[variable %in% unique(S$variable), .(value = mean(value)), by = .(variable, year)][, scenario := "hindcast"]
+    pd <- rbind(ha, SA[, .(variable, year, value, scenario)])
+    pd[, scenario := factor(scenario, levels = c("hindcast", names(.scn_label)), labels = c("Hindcast (Copernicus)", .scn_label))]
+    pd[, variable := paste0(variable, " (", ENV_UNITS_OUT[variable], ")")]
+    g <- ggplot2::ggplot(pd, ggplot2::aes(year, value, colour = scenario)) + ggplot2::geom_line(linewidth = 0.9) +
+      ggplot2::facet_wrap(~ variable, scales = "free_y", ncol = 2) +
+      ggplot2::scale_colour_manual(values = c("black", "#1a9850", "#fdae61", "#d73027", "#7b3294"), drop = TRUE) +
+      ggplot2::labs(x = NULL, y = "Annual mean over the model area", colour = NULL,
+                    title = "Environmental drivers: hindcast and climate scenarios (ISIMIP3b change on the Copernicus climatology)") +
+      ggplot2::theme_bw(base_size = 14) + ggplot2::theme(legend.position = "top")
+    pdir <- file.path(out_dir, "plots", "environment"); dir.create(pdir, recursive = TRUE, showWarnings = FALSE)
+    ggplot2::ggsave(file.path(pdir, "environment_scenarios.png"), g, width = 13, height = 3.2 * ceiling(uniqueN(pd$variable) / 2) + 1.2, dpi = 150)
+  }, error = function(e) .scn_msg("plot skipped - ", conditionMessage(e)))
+} else if (length(ENV_SCENARIOS)) {
+  .scn_msg("No scenario made (see the lines above).")
+}

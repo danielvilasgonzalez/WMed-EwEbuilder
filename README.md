@@ -91,7 +91,7 @@ Each step reads files the earlier ones wrote. `run_pipeline_demo.R` runs the ste
 | 2 | `02_fisheries.R` | **Catch, landings, discards, effort and F** by country, fleet and FG. Catch from GFCM, STECF FDI, Sea Around Us and ICCAT; effort from FishMIP and FDI, with technology creep. Landings and discards by the model's 30 EwE fleets (country × gear, plus one recreational fleet; `EWE_FLEETS`); catch with no gear is shared among the country's fleets (`fleet_*_REVIEW.csv`). Ecosim effort for the same 30 fleets (`effort_to_ewe_fleet_REVIEW.csv`). F by country, to find where a high F comes from. |
 | 3 | `03_pbqb-traits.R` | **P/B and Q/B** per FG from FishBase/SeaLifeBase traits and empirical equations, plus EcoBase. Multi-stanza groups (hake): P/B = Z of each stanza, Q/B of each stanza from von Bertalanffy growth, and the stanza inputs (age at start, Z, K, Wmat/Winf, BA/B) in `Ecopath_multistanza`. |
 | 4 | `04_diets.R` | **Diet matrix.** Sources in order: dietcalcR (the iMARES diet calculator on the Mediterranean diet database; `DIET_ENGINE = "dietcalc"`, `lib_dietcalc.R`) → MAISHA → FishBase/SeaLifeBase → EcoBase → literature fallback. FG order follows the FG table. |
-| 5 | `05_environment.R` (optional) | **Environmental drivers** from Copernicus Marine (Mediterranean reanalyses; global model scaled to the Med for 1994–98): bottom and surface temperature, surface salinity, NPP. Monthly maps on the native grid, time series with the 10–90 % range over the area, Ecosim forcing series, and phytoplankton B and P/B for Ecopath. |
+| 5 | `05_environment.R` (optional) | **Environmental drivers** from Copernicus Marine (Mediterranean reanalyses; global model scaled to the Med for 1994–98): bottom and surface temperature, surface salinity, NPP. Monthly maps on the native grid, time series with the 10–90 % range over the area, Ecosim forcing series, and phytoplankton B and P/B for Ecopath.. With `ENV_SCENARIOS`, `05s_environment_scenarios.R` continues the drivers to `ENV_SCEN_END` under climate scenarios (ISIMIP3b GFDL-ESM4 and IPSL-CM6A-LR change added to the Copernicus climatology): monthly maps and Ecosim forcing per scenario in `environment/scenarios/`, and 05b makes their Ecospace maps. |
 | 6 | `05b_ecospace_drivers.R` (optional) | **Ecospace driver maps**: the monthly maps of 05 regridded onto your Ecospace depth `.asc` (any resolution or projection), coastal gaps filled, one `.asc` per variable and month plus an index file. No download; rerun alone for a new base map. |
 | 6 | `05c_habitat_responses.R` (optional, with 05b) | **Ecospace response functions** of every FG to depth, bottom and surface temperature, salinity and NPP, as EwE keeps them (1200 values between X min and X max, maximum 1), from **AquaMaps** (species envelopes weighted by their share of the FG biomass), plus the values each driver takes in the Ecospace maps of 05b (`ecospace_driver_distribution.csv`), drawn behind the curves. |
 | 7 | `06_diagnostics.R` | **Validation.** Compares with the 1995 Western Med model and runs the EwE plausibility checks (P/Q, diet sums, cannibalism, PREBAL, F). Writes one summary table and one PDF of all plots. |
@@ -112,6 +112,7 @@ Set these on the page, or at the top of `scripts/run_pipeline_demo.R` (every opt
 | `ECOPATH_B_FILL_MODE`, `ECOPATH_B_FILL_YEARS` | `"window_mean"`, `1995:2000` | FGs with no biomass in the Ecopath years take this mean; "Expanding" FGs get 0.00001. |
 | `HIGH_F_B_FIX` | `"none"` | FGs with F > 1: `"none"` reports them (`high_F_REVIEW.csv`); `"min_from_catch"` raises B to catch / 1; `"ecopath_estimate"` leaves B to Ecopath (EE = 0.95). |
 | `PHYTO_SOURCE` | `"isimip"` | Phytoplankton B and P/B: `"isimip"` (COBALT 1995, EcoBase P/B) or `"copernicus"` (from step 05; run 05 first). |
+| `ENV_SCENARIOS`, `ENV_SCEN_END` | none, `2050` | Climate scenarios of the drivers (05s): any of `"ssp126"`, `"ssp245"`, `"ssp370"`, `"ssp585"` (ISIMIP3b has 126, 370 and 585; a scenario without files is reported and skipped), until that year. Also `ENV_SCEN_MODELS`, `ENV_SCEN_REF_YEARS` (1995–2014). |
 | `STOCK_ASSESSMENT_SOURCE` | `"GFCM"` | `"GFCM"` = the newest GFCM Stock Assessment Forms, downloaded and read automatically (check `biomass/gfcm_saf_parse_REVIEW.csv`); `"RAM"` = RAM Legacy. |
 | `STRATA`, `DROP_OUTLIERS`, `NORMALIZE_TS` | `TRUE` | Strata-weighted density; remove flagged outlier hauls; Ecosim series as a relative index. |
 | `USE_EXTRA_DATA`, `EXTRA_DATA_DIR` | `TRUE`, `data/extra_data` | Add the extra MEDITS hauls, MEDIAS rows and GFCM STAR workbooks in that folder, only where the standard data have nothing (see its README; `biomass/extra_medits_hauls_added.csv`, `star_extra_REVIEW.csv`). |
@@ -170,7 +171,8 @@ ecopath_ecosim_inputs.xlsx      # the EwE workbook: info, FGs, Fleets, FG_spp, E
                                 #   Ecopath_Di, Ecopath_PBQB, Ecopath_multistanza, Ecopath_traits,
                                 #   Ecopath_diet, Ecosim_ts, FG_References, Ecobase, Pedigree
 ewe_import/                     # the same inputs as EwE import files (csv per table, or one xlsx)
-environment/ecospace_drivers/   # Ecospace driver maps (.asc), per base map (05b)
+environment/scenarios/          # climate scenarios of the drivers: maps and Ecosim forcing per scenario (05s)
+environment/ecospace_drivers/   # Ecospace driver maps (.asc), per base map (05b); scenarios in <base map>/scenarios/
 environment/ecospace_responses/ # Ecospace response functions (AquaMaps) and driver values of the maps (05c)
 biomass/ fisheries/ pbqb-traits/ diet/ validation/ environment/
                                 # CSVs of each step; *_REVIEW.csv tables are the ones to check
@@ -214,7 +216,7 @@ scripts/
   wmed_paths.R                     # finds git_dir, pcloud_dir, out_dir on any computer
   install_packages.R  package_versions.csv
   01_biomass.R  01b_biomass_unsurveyed.R  02_fisheries.R  03_pbqb-traits.R  04_diets.R
-  05_environment.R  05b_ecospace_drivers.R  05c_habitat_responses.R  06_diagnostics.R
+  05_environment.R  05s_environment_scenarios.R  05b_ecospace_drivers.R  05c_habitat_responses.R  06_diagnostics.R
   03b_ecobase.R                    # EcoBase fallbacks
   lib_*.R                          # shared functions (survey density, AquaMaps, FishBase diets,
                                    #   plankton, Copernicus, taxonomy, extra data, EwE export, run record)

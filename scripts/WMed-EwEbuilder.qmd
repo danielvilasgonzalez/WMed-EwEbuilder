@@ -2577,6 +2577,33 @@ levels of every file, gap-fill ratios, satellite size classes).
 wm_figure("fig-environment", r"---(Environment of the model area over the run's years: monthly (grey) and annual (red) area-weighted means, with the 10th-90th percentile across grid cells as the band; shaded years are PISCES scaled to MedBFM; dashed line = Ecopath year.)---", "environment_timeseries.png", r"---(05_environment.R)---")
 ```
 
+### Climate scenarios of the drivers (`05s_environment_scenarios.R`)
+
+With `ENV_SCENARIOS` (card 5), the end of 05 continues the drivers
+(surface and bottom temperature, surface salinity, NPP) to
+`ENV_SCEN_END` (default 2050) under the chosen SSP scenarios. The
+source is ISIMIP3b [@frieler2024isimip]: the CMIP6 models GFDL-ESM4 and
+IPSL-CM6A-LR, historical (1850–2014) joined to each SSP (2015–2100),
+monthly at 1°; only the model-area box is downloaded when the ISIMIP
+files service can cut it out. The change of the models is added to the
+hindcast with the delta (change-factor) method [@lange2019basd]: for
+year $y$ and month $m$,
+
+$$X(y,m) = \overline{H}_R(m) + \big(G(y,m) - \overline{G}_R(m)\big)$$
+
+for temperature and salinity, and
+$X(y,m) = \overline{H}_R(m)\,G(y,m)/\overline{G}_R(m)$ (held to
+$[1/4, 4]$) for NPP, where $H$ is the Copernicus hindcast of 05, $G$ the
+mean change of the two models regridded to the 05 grid, and $R$ the
+reference period 1995–2014. The scenarios keep the hindcast's level,
+spatial pattern and seasonal cycle and take the trend and year-to-year
+change of the climate models. ISIMIP3b has SSP1-2.6, SSP3-7.0 and
+SSP5-8.5; a scenario without files (SSP2-4.5 for most models) is
+reported and skipped. Outputs in `environment/scenarios/<scenario>/`:
+monthly maps, the Ecosim forcing series (hindcast + scenario, relative
+to the Ecopath year) and the area means of every scenario; 05b then
+writes their Ecospace maps in `<base map>/scenarios/<scenario>/`.
+
 ### Ecospace driver maps (`05b_ecospace_drivers.R`)
 
 05b turns the monthly maps of 05 into Ecospace input maps on a base

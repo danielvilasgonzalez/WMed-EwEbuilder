@@ -690,3 +690,11 @@ tryCatch(if (nrow(env_ts) && all(c("npp", "phyto_c") %in% env_ts$variable)) {
   .env_msg("[05_environment] NPP or phytoplankton carbon missing - no Ecopath phytoplankton values.")
 }, error = function(e) .env_msg(conditionMessage(e)))
 .env_tick("done")
+
+## =================================================================
+## Climate scenarios of the drivers (05s_environment_scenarios.R):
+## ISIMIP3b change on the hindcast climatology, to ENV_SCEN_END
+## =================================================================
+if (length(get0("ENV_SCENARIOS", envir = .GlobalEnv, ifnotfound = character(0))))
+  tryCatch(source(file.path(git_dir, "scripts", "05s_environment_scenarios.R"), local = globalenv()),
+           error = function(e) .env_msg("[05s] scenarios failed (the hindcast is not affected): ", conditionMessage(e)))

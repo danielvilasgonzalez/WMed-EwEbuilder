@@ -163,9 +163,23 @@ observe({
   updateSelectInput(session, "esp_view_map", choices = if (length(m)) m else c("(no maps yet - run 05b)" = ""),
                     selected = if (!is.null(cur) && cur %in% m) cur else if (length(m)) m[1] else "")
 })
+## folder of a base map's maps: the hindcast, or a climate scenario (05s -> 05b)
+.esp_scen_dir <- function(m, sc) if (is.null(sc) || !nzchar(sc) || sc == "hindcast") file.path(.esp_root(), m) else file.path(.esp_root(), m, "scenarios", sc)
+.esp_scen_label <- c(hindcast = "Hindcast (Copernicus)", ssp126 = "SSP1-2.6", ssp245 = "SSP2-4.5", ssp370 = "SSP3-7.0", ssp585 = "SSP5-8.5")
+.esp_scens <- function(m) {
+  if (is.null(m) || !nzchar(m)) return("hindcast")
+  d <- list.dirs(file.path(.esp_root(), m, "scenarios"), recursive = FALSE, full.names = TRUE)
+  d <- d[file.exists(file.path(d, "ecospace_driver_index.csv"))]
+  c("hindcast", basename(d))
+}
+.esp_scen_choices <- function(m) { s <- .esp_scens(m); setNames(s, ifelse(is.na(.esp_scen_label[s]), s, .esp_scen_label[s])) }
+observe({
+  run_state(); m <- input$esp_view_map; ch <- .esp_scen_choices(m); cur <- isolate(input$esp_view_scen)
+  updateSelectInput(session, "esp_view_scen", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else "hindcast")
+})
 .esp_index <- reactive({
   m <- input$esp_view_map; req(m, nzchar(m))
-  f <- file.path(.esp_root(), m, "ecospace_driver_index.csv"); req(file.exists(f))
+  f <- file.path(.esp_scen_dir(m, input$esp_view_scen), "ecospace_driver_index.csv"); req(file.exists(f))
   fread(f)
 })
 observe({
@@ -217,7 +231,7 @@ output$esp_view_plot_ui <- renderUI({
 .esp_draw <- function() {
   ix <- .esp_index(); v <- input$esp_view_var; m <- input$esp_view_map; req(v, m)
   anom <- identical(input$esp_view_values, "anom") && v != "depth"
-  base <- file.path(.esp_root(), m)
+  base <- .esp_scen_dir(m, input$esp_view_scen)
   dep <- .esp_raster(file.path(base, "depth_used.asc"))
   land <- terra::ifel(is.na(dep) | dep <= 0, 1, NA)
   if (v == "depth") {
@@ -328,14 +342,44 @@ output$dl_esp_fig <- downloadHandler(
   })
 ## all the .asc files of the base map shown (+ depth_used.asc and the index)
 output$dl_esp_zip <- downloadHandler(
-  filename = function() paste0("ecospace_drivers_", input$esp_view_map, ".zip"),
+  filename = function() paste0("ecospace_drivers_", input$esp_view_map, if (!is.null(input$esp_view_scen) && input$esp_view_scen != "hindcast") paste0("_", input$esp_view_scen), ".zip"),
   content = function(file) {
-    d <- file.path(.esp_root(), input$esp_view_map)
+    d <- .esp_scen_dir(input$esp_view_map, input$esp_view_scen)
     if (!dir.exists(d)) stop("No maps for this base map - run 05b first.")
     old <- setwd(d); on.exit(setwd(old))
     f <- list.files(".", recursive = TRUE)
     if (requireNamespace("zip", quietly = TRUE)) zip::zip(file, f) else utils::zip(file, f, flags = "-q")
   })
+## --- Climate scenarios of the drivers (05s): annual area means ------------
+.scn_series <- reactive({
+  run_state()
+  d <- file.path(.inputs_run_dir(), "environment")
+  fs <- file.path(d, "scenarios", "environment_scenarios_annual.csv"); fh <- file.path(d, "environment_timeseries_annual.csv")
+  if (!file.exists(fs)) return(NULL)
+  s <- tryCatch(fread(fs), error = function(e) NULL); if (is.null(s) || !nrow(s)) return(NULL)
+  h <- if (file.exists(fh)) tryCatch(fread(fh), error = function(e) NULL) else NULL
+  hm <- if (file.exists(file.path(d, "environment_timeseries_monthly.csv")))
+    tryCatch(fread(file.path(d, "environment_timeseries_monthly.csv"))[, .(value = mean(value)), by = .(variable, year)], error = function(e) NULL) else NULL
+  rbind(if (!is.null(hm)) hm[variable %in% s$variable, .(scenario = "hindcast", variable, year, value)],
+        s[, .(scenario, variable, year, value)])
+})
+output$esp_scen_ui <- renderUI({
+  if (is.null(.scn_series())) return(tags$div(class = "wm-help mt-2", "Climate scenarios: none yet - tick them in card 5 (05 environment) and run 05, then 05b for their Ecospace maps."))
+  tagList(tags$strong("Hindcast and climate scenarios (annual mean over the model area)"), plotOutput("esp_scen_plot", height = "520px"))
+})
+output$esp_scen_plot <- renderPlot({
+  x <- .scn_series(); req(x)
+  vs <- unique(x$variable); v <- input$esp_view_var; if (!is.null(v) && v %in% vs) vs <- v
+  cols <- c(hindcast = "black", ssp126 = "#1a9850", ssp245 = "#fdae61", ssp370 = "#d73027", ssp585 = "#7b3294")
+  ulab <- c(temp_surf = "SST (deg C)", temp_bot = "SBT (deg C)", sal_surf = "Salinity (PSU)", npp = "NPP (g C m-2 d-1)")
+  op <- par(mfrow = c(ceiling(length(vs) / 2), min(2, length(vs))), mar = c(4, 4.5, 2.5, 1), cex.axis = 1.05, cex.lab = 1.1); on.exit(par(op))
+  for (vv in vs) {
+    z <- x[variable == vv]
+    plot(range(z$year), range(z$value, na.rm = TRUE), type = "n", xlab = "", ylab = ifelse(is.na(ulab[vv]), vv, ulab[vv]), main = vv)
+    for (sc in intersect(names(cols), unique(z$scenario))) { q <- z[scenario == sc][order(year)]; lines(q$year, q$value, col = cols[[sc]], lwd = if (sc == "hindcast") 2 else 1.8) }
+    legend("topleft", legend = .esp_scen_label[intersect(names(cols), unique(z$scenario))], col = cols[intersect(names(cols), unique(z$scenario))], lwd = 2, bty = "n", cex = 0.9)
+  }
+})
 ## --- Ecospace response functions of the FGs (05c) --------------------------
 .resp_dir <- function() file.path(.inputs_run_dir(), "environment", "ecospace_responses")
 .resp_pts <- reactive({
@@ -365,16 +409,21 @@ observe({
   updateSelectInput(session, "resp_view_map", choices = if (length(m)) m else c("(no maps yet - run 05b)" = ""),
                     selected = if (!is.null(cur) && cur %in% m) cur else if (length(m)) m[1] else "")
 })
+observe({
+  run_state(); ch <- .esp_scen_choices(input$resp_view_map); cur <- isolate(input$resp_view_scen)
+  updateSelectInput(session, "resp_view_scen", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else "hindcast")
+})
 .resp_hist_cache <- new.env()
 .resp_hist <- reactive({
-  run_state(); m <- input$resp_view_map; d <- input$resp_view_drv
+  run_state(); m <- input$resp_view_map; d <- input$resp_view_drv; sc <- input$resp_view_scen
   if (!isTRUE(input$resp_view_hist) || is.null(m) || !nzchar(m) || is.null(d)) return(NULL)
-  key <- paste(m, d, file.mtime(file.path(.esp_root(), m, "ecospace_driver_index.csv")), sep = "|")   # new maps: read again
+  if (is.null(sc) || !nzchar(sc)) sc <- "hindcast"
+  ed <- .esp_scen_dir(m, sc)
+  key <- paste(m, sc, d, file.mtime(file.path(ed, "ecospace_driver_index.csv")), sep = "|")   # new maps: read again
   if (!is.null(.resp_hist_cache[[key]])) return(.resp_hist_cache[[key]])
   f <- file.path(.resp_dir(), "ecospace_driver_distribution.csv")
-  h <- if (file.exists(f)) tryCatch(fread(f)[Driver == d & base_map == m], error = function(e) NULL) else NULL
+  h <- if (sc == "hindcast" && file.exists(f)) tryCatch(fread(f)[Driver == d & base_map == m], error = function(e) NULL) else NULL
   if (is.null(h) || !nrow(h)) h <- tryCatch({
-    ed <- file.path(.esp_root(), m)
     x <- if (d == "depth") {
       v <- terra::values(terra::rast(file.path(ed, "depth_used.asc")), mat = FALSE); abs(v[is.finite(v) & v != 0])
     } else {
@@ -384,7 +433,8 @@ observe({
     }
     if (length(x) < 2) NULL else {
       br <- pretty(range(x), 40); hh <- graphics::hist(x, breaks = br, plot = FALSE)
-      data.table::data.table(Driver = d, bin_lo = head(br, -1), bin_hi = br[-1], n = hh$counts, share = hh$counts / sum(hh$counts), base_map = m)
+      data.table::data.table(Driver = d, bin_lo = head(br, -1), bin_hi = br[-1], n = hh$counts, share = hh$counts / sum(hh$counts),
+                             base_map = if (sc == "hindcast") m else paste0(m, ", ", .esp_scen_label[[sc]]))
     }
   }, error = function(e) NULL)
   .resp_hist_cache[[key]] <- h
@@ -883,6 +933,9 @@ config_code <- reactive({
     if (!identical(input$esp_grid_mode, "file") && is.finite(as.numeric(input$esp_cell_arcmin)))
       sprintf("ECOSPACE_CELL_SIZE <- %s/60   # Ecospace base map at %s arc-min, depth from EMODnet (05b)", input$esp_cell_arcmin, input$esp_cell_arcmin),
     if (6 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
+    if (5 %in% steps_sel()) sprintf("ENV_SCENARIOS    <- c(%s)   # climate scenarios of the drivers (05s, ISIMIP3b)",
+                                     paste0("\"", input$env_scen, "\"", collapse = ", ")),
+    if (5 %in% steps_sel() && length(input$env_scen) && !is.null(input$env_scen_end)) sprintf("ENV_SCEN_END     <- %d", as.integer(input$env_scen_end)),
     if (6 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
     if (4 %in% steps_sel()) c(
       sprintf("DIET_ENGINE <- \"%s\"   # diet sources (04)", if ("dietcalc" %in% input$diet_sources) "dietcalc" else "pipeline"),
@@ -2470,6 +2523,8 @@ observeEvent(input$settings_upload, {
   if (!is.null(s$ECOPATH_B_FILL_YEARS)) { updateSliderInput(session, "fill_years", value = rng(s$ECOPATH_B_FILL_YEARS)); u("ECOPATH_B_FILL_YEARS") }
   ## HIGH_F_B_FIX: no longer a choice (high F is reported only)
   if (!is.null(s$PHYTO_SOURCE)) { updateSelectInput(session, "phyto_src", selected = s$PHYTO_SOURCE); u("PHYTO_SOURCE") }
+  if (!is.null(s$ENV_SCENARIOS)) { updateCheckboxGroupInput(session, "env_scen", selected = as.character(s$ENV_SCENARIOS)); u("ENV_SCENARIOS") }
+  if (!is.null(s$ENV_SCEN_END)) { updateNumericInput(session, "env_scen_end", value = as.integer(s$ENV_SCEN_END)); u("ENV_SCEN_END") }
   if (!is.null(s$EWE_MODEL_NAME)) { updateTextInput(session, "ewe_model", value = s$EWE_MODEL_NAME); u("EWE_MODEL_NAME") }
   if (!is.null(s$EWE_DECIMAL))    { updateRadioButtons(session, "ewe_dec", selected = s$EWE_DECIMAL); u("EWE_DECIMAL") }
   if (!is.null(s$EWE_EXPORT_FORMAT)) u("EWE_EXPORT_FORMAT")
