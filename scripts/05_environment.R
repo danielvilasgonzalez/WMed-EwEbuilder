@@ -51,9 +51,12 @@
 ##    climatology cannot blow up a cell. These months are marked
 ##    source = "PISCES scaled to MedBFM" in the tables.
 ##  - Large / Small split: satellite phytoplankton size classes (ocean
-##    colour, chlorophyll of micro-, nano- and picophytoplankton; Med
-##    product first, then the global one), mean of ENV_PFT_YEARS
-##    (1998-2000, the first full years; the record starts Sept 1997):
+##    colour, chlorophyll of micro-, nano- and picophytoplankton) from the
+##    global Copernicus-GlobColour L4 monthly product
+##    (cmems_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M, OCEANCOLOUR_GLO_
+##    BGC_L4_MY_009_104; the Med L4 monthly datasets have chlorophyll only,
+##    CMEMS-OC-PUM), mean of ENV_PFT_YEARS (2002-2004: size classes start in
+##    2002, before that only SeaWiFS flew; earlier years are moved there):
 ##      share_large = MICRO / (MICRO + NANO + PICO), share_small = 1 - share_large
 ##    ASSUMPTION (flagged): the chlorophyll share is used as the carbon
 ##    share, and both groups get the same P/B (no size-resolved NPP in
@@ -110,7 +113,7 @@ source(file.path(git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"))   # c
 .env_default("ENV_BASE_YEAR", ENV_ECOPATH_B_YEAR)                     # Ecosim forcing = value / mean of this year
 .env_default("ENV_OVERLAP_YEARS", 1999:2010)                          # MedBFM vs PISCES, for the gap fill
 .env_default("ENV_GAP_RATIO_MAX", 4)
-.env_default("ENV_PFT_YEARS", 1998:2000)
+.env_default("ENV_PFT_YEARS", 2002:2004)   # size classes exist from 2002
 .env_default("ENV_INTEGRATION_DEPTH", 200)                            # m, deepest level read for NPP and phytoplankton carbon
 .env_default("ENV_INTEGRATION", "euphotic")                           # "euphotic" (depth with 99% of the column NPP) or "fixed" (0-ENV_INTEGRATION_DEPTH m)
 .env_default("ENV_EU_FRACTION", 0.99)                                 # share of the column NPP above the euphotic depth
@@ -160,8 +163,12 @@ ENV_DATASETS <- list(
   phyto_c   = list(ids = c("cmems_mod_med_bgc-plankton_my_4.2km_P1M-m", "cmems_mod_med_bgc-plankton_myint_4.2km_P1M-m"),
                    var = "phyc", depth = c(0, ENV_INTEGRATION_DEPTH), integrate = TRUE))
 ENV_GLOBAL_BGC <- "cmems_mod_glo_bgc_my_0.25deg_P1M-m"   # PISCES, nppv + phyc, from 1993
-ENV_PFT_DATASETS <- c("cmems_obs-oc_med_bgc-plankton_my_l4-multi-1km_P1M",   # Med ocean colour, monthly
-                      "cmems_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M")   # global ocean colour, monthly
+ENV_PFT_DATASETS <- c("cmems_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M")   # global ocean colour, monthly, MICRO/NANO/PICO (Med L4 monthly: CHL only)
+if (any(ENV_PFT_YEARS < 2002)) {
+  .env_msg("[05_environment] ENV_PFT_YEARS ", paste(range(ENV_PFT_YEARS), collapse = "-"), ": satellite size classes start in 2002 - using ",
+           paste(range(2002:(2001 + length(ENV_PFT_YEARS))), collapse = "-"), ".")
+  ENV_PFT_YEARS <- 2002:(2001 + length(ENV_PFT_YEARS))
+}
 ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", npp = "g C m-2 d-1", phyto_c = "g C m-2")
 
 ## =================================================================

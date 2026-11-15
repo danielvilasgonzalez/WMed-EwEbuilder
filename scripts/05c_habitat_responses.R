@@ -105,6 +105,8 @@ if (!exists("git_dir", envir = .GlobalEnv, inherits = FALSE)) git_dir <- dirname
 .hr_default("GLOSSA_MIN_PRESENCES", 30L)                                   # fewer hauls with the FG: no GLOSSA model
 .hr_default("GLOSSA_MODEL_ARGS", list())                                   # passed to dbarts::bart (e.g. list(ntree = 200))
 .hr_default("GLOSSA_SEED", 1L)
+.hr_default("GLOSSA_MAX_HAULS", 3000L)                                     # hauls per FG model (random, same share of presences); NULL = all
+.hr_default("GLOSSA_CORES", NULL)                                          # FGs fitted at the same time; NULL = 2 (Mac/Linux), 1 (Windows)
 .hr_default("ECOSPACE_BATHY_FILE", file.path(pcloud_dir, "data", "Bathymetry", "EMODnet_WMed_1arcmin.tif"))
 .hr_default("ECOSPACE_ENV_DIR", file.path(out_dir, "environment"))
 resp_dir <- file.path(ECOSPACE_ENV_DIR, "ecospace_responses")
@@ -355,9 +357,23 @@ if ("glossa" %in% RESPONSE_SOURCES) tryCatch({
         if (!is.null(GLOSSA_FGS)) todo <- todo[as.integer(sub("^FG", "", todo)) %in% GLOSSA_FGS]
         .hr_msg("GLOSSA (BART): ", length(todo), " FG(s) to fit, ", length(intersect(done, names(gi$pa))), " already done",
                 if (length(todo)) " - several minutes per FG." else ".")
-        for (k in seq_along(todo)) {
+        ## Speed: GLOSSA's functional responses (dbarts::pdbart) predict every
+        ## haul at 20 values of each driver, so time and memory grow with the
+        ## number of hauls (15,600 MEDITS hauls: ~16 min and several GB per
+        ## FG). Each FG model uses at most GLOSSA_MAX_HAULS hauls, a random
+        ## sample with the FG's share of presences kept, and GLOSSA_CORES
+        ## FGs are fitted at the same time (forked R processes; not on Windows).
+        .sub_pa <- function(d, n, seed) {
+          if (is.null(n) || nrow(d) <= n) return(d)
+          set.seed(seed); pres <- which(d$pa == 1); abs <- which(d$pa != 1)
+          np <- max(1L, round(n * length(pres) / nrow(d)))
+          d[sort(c(pres[sample.int(length(pres), min(np, length(pres)))], abs[sample.int(length(abs), min(n - np, length(abs)))])), , drop = FALSE]
+        }
+        .fit_one <- function(k) {
           lab <- todo[k]; t0 <- Sys.time()
-          res <- tryCatch(glossa::glossa_analysis(pa_data = gi$pa[lab], fit_layers = gi$zip, predictor_variables = NULL, scale_layers = TRUE,
+          pa <- gi$pa[lab]; n_all <- nrow(pa[[1]])
+          pa[[1]] <- .sub_pa(pa[[1]], GLOSSA_MAX_HAULS, GLOSSA_SEED + k)
+          res <- tryCatch(glossa::glossa_analysis(pa_data = pa, fit_layers = gi$zip, predictor_variables = NULL, scale_layers = TRUE,
                                                   other_analysis = "functional_responses", model_args = GLOSSA_MODEL_ARGS, seed = GLOSSA_SEED),
                           error = function(e) { .hr_msg("GLOSSA ", lab, " failed: ", conditionMessage(e)); NULL })
           rc <- if (!is.null(res)) res$other_results$response_curve[[lab]] else NULL
@@ -365,8 +381,17 @@ if ("glossa" %in% RESPONSE_SOURCES) tryCatch({
             utils::write.table(rc[[drv]], file.path(GLOSSA_RESULTS_DIR, paste0(lab, "_func_res_", drv, ".tsv")),
                                sep = "\t", dec = ".", quote = FALSE, row.names = FALSE)
           .hr_msg("GLOSSA ", k, "/", length(todo), " ", lab, " ", fgs[FG_num == as.integer(sub("^FG", "", lab)), FG_name], ": ",
-                  if (length(rc)) "done" else "no response curves", " (", round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 1), " min)")
+                  if (length(rc)) "done" else "no response curves", " (", nrow(pa[[1]]), " of ", n_all, " hauls, ",
+                  round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 1), " min)")
+          invisible(length(rc) > 0)
         }
+        nc <- if (!is.null(GLOSSA_CORES)) as.integer(GLOSSA_CORES) else if (.Platform$OS.type == "windows") 1L else 2L
+        nc <- max(1L, min(nc, length(todo), max(1L, parallel::detectCores() - 1L), na.rm = TRUE))
+        if (length(todo)) .hr_msg("GLOSSA: ", if (is.null(GLOSSA_MAX_HAULS)) "all" else paste("at most", GLOSSA_MAX_HAULS), " hauls per FG, ",
+                                  nc, " FG(s) at a time.")
+        if (nc > 1 && .Platform$OS.type != "windows") {
+          invisible(parallel::mclapply(seq_along(todo), .fit_one, mc.cores = nc, mc.preschedule = FALSE))
+        } else for (k in seq_along(todo)) .fit_one(k)
       }
     }
   }
