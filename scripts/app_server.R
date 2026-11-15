@@ -352,38 +352,44 @@ observe({
 .resp_sel <- reactive({
   p <- .resp_pts(); d <- input$resp_view_drv
   if (is.null(p) || is.null(d)) return(NULL)
-  p <- p[Driver == d & Source %in% input$resp_view_src]
+  p <- p[Driver == d & Source == "AquaMaps"]
   p[, lab := paste0(FG_num, " ", FG_name)]
   if (length(input$resp_view_fg)) p <- p[lab %in% input$resp_view_fg]
-  if (isTRUE(input$resp_view_both)) p <- p[FG_num %in% p[, data.table::uniqueN(Source), by = FG_num][V1 > 1, FG_num]]
   p
 })
-## AquaMaps vs GLOSSA per FG: ranges at >= 0.5, peaks, Schoener's D and r on the common range
-output$resp_compare <- renderTable({
-  p <- .resp_pts(); d <- input$resp_view_drv
-  if (is.null(p) || is.null(d)) return(NULL)
-  p <- p[Driver == d]; p[, lab := paste0(FG_num, " ", FG_name)]
-  if (length(input$resp_view_fg)) p <- p[lab %in% input$resp_view_fg]
-  both <- p[, data.table::uniqueN(Source), by = FG_num][V1 > 1, FG_num]
-  if (!length(both)) return(data.frame(Note = "No FG has both an AquaMaps and a GLOSSA function for this driver yet."))
-  rng <- function(z) { k <- z$y >= 0.5; if (!any(k)) "-" else paste0(signif(min(z$x[k]), 3), " - ", signif(max(z$x[k]), 3)) }
-  out <- data.table::rbindlist(lapply(both, function(f) {
-    a <- p[FG_num == f & Source == "AquaMaps"][order(x)]; g <- p[FG_num == f & Source == "GLOSSA"][order(x)]
-    lo <- max(min(a$x), min(g$x)); hi <- min(max(a$x), max(g$x))
-    D <- r <- NA_real_
-    if (hi > lo) {
-      xs <- seq(lo, hi, length.out = 200)
-      ya <- approx(a$x, a$y, xs, rule = 2)$y; yg <- approx(g$x, g$y, xs, rule = 2)$y
-      if (sum(ya) > 0 && sum(yg) > 0) D <- 1 - 0.5 * sum(abs(ya / sum(ya) - yg / sum(yg)))
-      if (sd(ya) > 0 && sd(yg) > 0) r <- stats::cor(ya, yg)
+## Values of the drivers in the Ecospace maps (05b): 05c's
+## ecospace_driver_distribution.csv for that base map, else read from the
+## .asc files (every water cell and month; absolute maps only)
+observe({
+  m <- .esp_maps(); cur <- isolate(input$resp_view_map)
+  updateSelectInput(session, "resp_view_map", choices = if (length(m)) m else c("(no maps yet - run 05b)" = ""),
+                    selected = if (!is.null(cur) && cur %in% m) cur else if (length(m)) m[1] else "")
+})
+.resp_hist_cache <- new.env()
+.resp_hist <- reactive({
+  run_state(); m <- input$resp_view_map; d <- input$resp_view_drv
+  if (!isTRUE(input$resp_view_hist) || is.null(m) || !nzchar(m) || is.null(d)) return(NULL)
+  key <- paste(m, d, file.mtime(file.path(.esp_root(), m, "ecospace_driver_index.csv")), sep = "|")   # new maps: read again
+  if (!is.null(.resp_hist_cache[[key]])) return(.resp_hist_cache[[key]])
+  f <- file.path(.resp_dir(), "ecospace_driver_distribution.csv")
+  h <- if (file.exists(f)) tryCatch(fread(f)[Driver == d & base_map == m], error = function(e) NULL) else NULL
+  if (is.null(h) || !nrow(h)) h <- tryCatch({
+    ed <- file.path(.esp_root(), m)
+    x <- if (d == "depth") {
+      v <- terra::values(terra::rast(file.path(ed, "depth_used.asc")), mat = FALSE); abs(v[is.finite(v) & v != 0])
+    } else {
+      ix <- fread(file.path(ed, "ecospace_driver_index.csv"))[variable == d]
+      if (!nrow(ix) || any(grepl("^relative", ix$unit))) numeric(0) else
+        unlist(lapply(file.path(ed, ix$file), function(ff) if (file.exists(ff)) { v <- terra::values(terra::rast(ff), mat = FALSE); v[is.finite(v)] }))
     }
-    data.table::data.table(FG = a$lab[1], `AquaMaps >= 0.5` = rng(a), `GLOSSA >= 0.5` = rng(g),
-               `AquaMaps peak` = signif(a$x[which.max(a$y)], 3), `GLOSSA peak` = signif(g$x[which.max(g$y)], 3),
-               `Common range` = if (hi > lo) paste0(signif(lo, 3), " - ", signif(hi, 3)) else "none",
-               Overlap = round(D, 2), r = round(r, 2))
-  }))
-  out[order(Overlap)]
-}, striped = TRUE, spacing = "xs", na = "-")
+    if (length(x) < 2) NULL else {
+      br <- pretty(range(x), 40); hh <- graphics::hist(x, breaks = br, plot = FALSE)
+      data.table::data.table(Driver = d, bin_lo = head(br, -1), bin_hi = br[-1], n = hh$counts, share = hh$counts / sum(hh$counts), base_map = m)
+    }
+  }, error = function(e) NULL)
+  .resp_hist_cache[[key]] <- h
+  h
+})
 .resp_ncol <- 4L
 output$resp_view_ui <- renderUI({
   p <- .resp_sel()
@@ -394,30 +400,27 @@ output$resp_view_ui <- renderUI({
   p <- .resp_sel()
   if (is.null(p) || !nrow(p)) {
     plot.new()
-    gl <- if ("GLOSSA" %in% input$resp_view_src && !is.null(.resp_pts()) && !any(.resp_pts()$Source == "GLOSSA"))
-      "\nGLOSSA has no results yet: install the glossa package and run 05c again (GLOSSA: \u201cRun GLOSSA here if installed\u201d)." else ""
     text(0.5, 0.5, if (is.null(.resp_pts())) "No response functions yet: run 05c (tick \u201c05b Ecospace maps + 05c responses\u201d in Run)." else
-      paste0("No response function for this driver, source or FG.", gl), cex = 1.2)
+      "No response function for this driver or FG.", cex = 1.2)
     return(invisible())
   }
+  h <- .resp_hist()
   labs <- unique(p[order(FG_num), lab]); n <- length(labs)
   nc <- min(.resp_ncol, n); nr <- ceiling(n / nc)
   drv_lab <- c(depth = "Depth (m)", temp_surf = "SST (deg C)", temp_bot = "SBT (deg C)", sal_surf = "Salinity (PSU)", npp = "NPP (g C m-2 d-1)")[input$resp_view_drv]
-  cols <- c(AquaMaps = "#1f77b4", GLOSSA = "#d62728")
   op <- par(mfrow = c(nr, nc), mar = c(4, 4, 2.4, 0.8), oma = c(0, 0, 2, 0), cex.axis = 1.05, cex.lab = 1.1, cex.main = 1.05)
   on.exit(par(op))
   for (l in labs) {
-    q <- p[lab == l]
-    plot(range(q$x), c(0, 1.05), type = "n", xlab = drv_lab, ylab = "Relative capacity", main = if (nchar(l) > 34) paste0(substr(l, 1, 33), "\u2026") else l)
-    for (s in intersect(c("GLOSSA", "AquaMaps"), unique(q$Source))) {
-      z <- q[Source == s][order(x)]
-      if (s == "GLOSSA" && any(is.finite(z$y_q2.5)))
-        polygon(c(z$x, rev(z$x)), pmin(c(z$y_q2.5, rev(z$y_q97.5)), 1.05), col = grDevices::adjustcolor(cols[s], 0.2), border = NA)
-      lines(z$x, z$y, col = cols[s], lwd = 2.2)
-    }
+    q <- p[lab == l][order(x)]
+    xr <- range(q$x)
+    plot(xr, c(0, 1.05), type = "n", xlab = drv_lab, ylab = "Relative capacity", main = if (nchar(l) > 34) paste0(substr(l, 1, 33), "\u2026") else l)
+    if (!is.null(h) && nrow(h)) rect(h$bin_lo, 0, h$bin_hi, h$share / max(h$share), col = "grey80", border = NA)
+    lines(q$x, q$y, col = "#1f77b4", lwd = 2.2)
+    box()
   }
-  nog <- "GLOSSA" %in% input$resp_view_src && !any(.resp_pts()$Source == "GLOSSA")
-  mtext(paste0("Ecospace response functions: ", drv_lab, if (nog) "   (AquaMaps only - GLOSSA has no results yet: install the glossa package and run 05c again)" else "   (blue AquaMaps, red GLOSSA)"),
+  mtext(paste0("Ecospace response functions (AquaMaps): ", drv_lab,
+               if (!is.null(h) && nrow(h)) paste0("   grey: values in the Ecospace maps (", h$base_map[1], ")") else
+                 if (isTRUE(input$resp_view_hist)) "   (no Ecospace map values for this driver: run 05b with absolute values)" else ""),
         outer = TRUE, cex = 1.1, font = 2)
 }
 output$resp_view_plot <- renderPlot(.resp_draw())
@@ -892,8 +895,6 @@ config_code <- reactive({
       if (!is.null(input$dietcalc_config) && nzchar(trimws(input$dietcalc_config))) sprintf("DIETCALC_CONFIG_DIR <- \"%s\"", .fwd(path.expand(trimws(input$dietcalc_config)))),
       if (!is.null(input$dietcalc_region)) sprintf("DIETCALC_REGION <- \"%s\"", input$dietcalc_region),
       if (!is.null(input$dietcalc_nobio)) sprintf("DIETCALC_NO_BIOMASS_PREY <- \"%s\"", input$dietcalc_nobio)),
-    if (6 %in% steps_sel()) sprintf("RESPONSE_SOURCES <- c(%s)   # 05c response functions", paste0("\"", if (length(input$resp_src)) input$resp_src else "none", "\"", collapse = ", ")),
-    if (6 %in% steps_sel() && !is.null(input$glossa_mode)) sprintf("GLOSSA_MODE <- \"%s\"", input$glossa_mode),
     if (!is.null(survey_files()$TA)) sprintf("MEDITS_TA_FILE   <- \"%s\"   # own MEDITS hauls", .fwd(survey_files()$TA$path)),
     if (!is.null(survey_files()$TB)) sprintf("MEDITS_TB_FILE   <- \"%s\"   # own MEDITS catch", .fwd(survey_files()$TB$path)),
     if (!is.null(survey_files()$TC)) sprintf("MEDITS_TC_FILE   <- \"%s\"   # own MEDITS length/maturity", .fwd(survey_files()$TC$path)),

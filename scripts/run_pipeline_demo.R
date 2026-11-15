@@ -272,7 +272,7 @@ if (6 %in% RUN_STEPS)
   tryCatch(.run_step(6, "05b_ecospace_drivers.R", "[Ecospace: monthly ASCII driver maps on the Ecospace base map] "),
            error = function(e) message("05b_ecospace_drivers.R failed (the other steps are not affected): ", conditionMessage(e)))
 ## Ecospace response functions of the FGs (05c_habitat_responses.R:
-## AquaMaps envelopes and GLOSSA functional responses), with step 6
+## AquaMaps envelopes over the driver values of the maps), with step 6
 if (6 %in% RUN_STEPS)
   tryCatch(source(file.path(git_dir, "scripts", "05c_habitat_responses.R")),
            error = function(e) message("05c_habitat_responses.R failed (the other steps are not affected): ", conditionMessage(e)))
@@ -288,7 +288,7 @@ if (isTRUE(RUN_VALIDATION) && 7 %in% RUN_STEPS) {
 
 ## Run record: settings, minutes per step, git commit, R and package
 ## versions, input files (out_dir/run_record_<time>.json + the info sheet)
-.rec_names <- c("RUN_STEPS", "NEI_SPLIT_BY_REGION", "USE_EXTRA_DATA", "EXTRA_DATA_DIR", "RESPONSE_SOURCES", "RESPONSE_DRIVERS", "GLOSSA_MODE", "GLOSSA_MONTHS", "DIET_ENGINE", "DIETCALC_DB", "DIETCALC_REGION", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
+.rec_names <- c("RUN_STEPS", "NEI_SPLIT_BY_REGION", "USE_EXTRA_DATA", "EXTRA_DATA_DIR", "RESPONSE_SOURCES", "RESPONSE_DRIVERS", "DIET_ENGINE", "DIETCALC_DB", "DIETCALC_REGION", "MODEL_GSAS", "MODEL_AREA_BASIS", "YEAR_ECOPATH", "TS_YEARS", "START_YEAR", "END_YEAR",
                 "AREA_MODE", "AREA_NAME", "CUSTOM_AREA_TYPE", "CUSTOM_BBOX", "STRATA", "DROP_OUTLIERS", "NORMALIZE_TS",
                 "ECOPATH_B_FILL_MODE", "ECOPATH_B_FILL_YEARS", "APPLY_CATCHABILITY", "BATHY_SOURCE", "PHYTO_SOURCE",
                 "ECOSIM_CATCH_COUNTRIES", "ECOSIM_CATCH_START_YEAR", "ECOSIM_CATCH_SCALING", "MULTISTANZA_B_SOURCE",

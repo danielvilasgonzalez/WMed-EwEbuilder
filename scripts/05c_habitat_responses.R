@@ -8,7 +8,7 @@
 ## the Ecospace habitat capacity model, in the form EwE keeps them: one
 ## function per FG and driver, 1200 values between X min and X max,
 ## scaled so that the highest value is 1 (relative habitat capacity).
-## Two sources, written side by side:
+## Source:
 ##
 ##  1. AquaMaps (aquamaps.org; HSPEN table, R package aquamapsdata) -
 ##     each species' envelope Min / PrefMin / PrefMax / Max is a
@@ -25,58 +25,31 @@
 ##     g C m-2 d-1, the unit of 05). Envelopes flagged as not used by
 ##     AquaMaps (…YN = 0) give no function.
 ##
-##  2. GLOSSA (Mestre-Tomás et al. 2025, github.com/iMARES-group/glossa;
-##     Bayesian Additive Regression Trees) - functional responses
-##     (partial dependence, posterior mean probability of presence and
-##     95% interval) of each FG's presence/absence in the MEDITS hauls
-##     (haul_density.rds, 01) against the environment at the haul,
-##     year by year. FG curve = the GLOSSA posterior mean, rescaled to a
-##     maximum of 1, X range = the range of the driver in the hauls.
-##     GLOSSA_MODE:
-##       "auto"    (default) "run" when the glossa package is installed,
-##                 else "prepare"; FGs that already have results in
-##                 GLOSSA_RESULTS_DIR are not fitted again.
-##       "prepare" (default) writes the GLOSSA inputs: one occurrence
-##                 file per FG (decimalLongitude, decimalLatitude,
-##                 timestamp = year, pa; tab-separated) and
-##                 fit_layers.zip (one folder per driver, one GeoTIFF per
-##                 year: mean of the survey months GLOSSA_MONTHS of the
-##                 monthly maps of 05; depth from ECOSPACE_BATHY_FILE).
-##                 Load them in the GLOSSA app (glossa::run_glossa()),
-##                 tick "Functional responses", export the results (zip)
-##                 into GLOSSA_RESULTS_DIR and rerun 05c with "read".
-##       "run"     the same inputs, then glossa::glossa_analysis() with
-##                 functional responses, here (minutes to hours: one BART
-##                 model per FG), then "read".
-##       "read"    reads GLOSSA's exported functional responses
-##                 (<FG>_func_res_<driver>.tsv: value, mean, q25, q975)
-##                 from GLOSSA_RESULTS_DIR (folders or zip files).
+##  The values each driver takes in the Ecospace driver maps (05b: every
+##  water cell and month of the base map; depth from depth_used.asc) are
+##  written as histograms and drawn behind the curves, so each function
+##  can be read against the conditions of the model area.
 ##
 ## OUTPUT (out_dir/environment/ecospace_responses/)
 ##   ecospace_response_functions.csv   one row per function, as EwE
-##       stores it (EcosimShapeMediation): Title (#AM_<driver>_fg_<n> or
-##       #GL_<driver>_fg_<n>), FunctionType (9 trapezoid, 0 drawn
-##       points), XAxisMin, XAxisMax, FunctionParams, zScale (the 1200
+##       stores it (EcosimShapeMediation): Title (#AM_<driver>_fg_<n>),
+##       FunctionType (9 trapezoid, 0 drawn points), XAxisMin, XAxisMax, FunctionParams, zScale (the 1200
 ##       values, space-separated, "." decimals), plus Source, FG, driver,
 ##       units and what it is based on
 ##   ewe_response_<source>_<driver>.csv  the same functions side by side
 ##       (one column per FG; rows Title, XAxisMin, XAxisMax, then the
 ##       1200 values) to paste into EwE's response function editor
-##   ecospace_response_points.csv      120 points of every curve (and the
-##       GLOSSA 95% interval) for plots and checks
+##   ecospace_response_points.csv      120 points of every curve, for
+##       plots and checks
 ##   ecospace_capacity_drivers.csv     FG x driver: the function to
-##       assign in Ecospace > Habitat capacity (AquaMaps and GLOSSA)
-##   ecospace_response_<driver>.png    curves of every FG, both sources
-##   glossa_inputs/                    occurrences (FG<n>.tsv) and
-##       fit_layers.zip for GLOSSA; glossa_fg_presences.csv (hauls,
-##       presences per FG, used or not)
+##       assign in Ecospace > Habitat capacity
+##   ecospace_driver_distribution.csv  histogram of each driver in the
+##       Ecospace driver maps (bins, cells x months, share)
+##   ecospace_response_<driver>.png    curves of every FG over that histogram
 ##
 ## References
 ##   Kaschner K, Watson R, Trites AW, Pauly D (2006) Mar Ecol Prog Ser
 ##     316: 285-310. Ready J et al. (2010) Ecol Model 221: 467-478.
-##   Mestre-Tomás J, Fuster-Alonso A, Bellido JM, Coll M (2025) GLOSSA: a
-##     user-friendly R Shiny application for Bayesian machine learning
-##     analysis of marine species distribution. arXiv:2505.05862.
 ##   Christensen V et al. (2014) Representing variable habitat quality in
 ##     a spatial food web model. Ecosystems 17: 1397-1412 (habitat
 ##     capacity model, response functions).
@@ -95,22 +68,11 @@ if (!exists("git_dir", envir = .GlobalEnv, inherits = FALSE)) git_dir <- dirname
 
 ## --- Settings (set before sourcing to change) --------------------------
 .hr_default <- function(name, value) if (!exists(name, envir = .GlobalEnv, inherits = FALSE)) assign(name, value, envir = .GlobalEnv)
-.hr_default("RESPONSE_SOURCES", c("aquamaps", "glossa"))                   # one or both
+.hr_default("RESPONSE_SOURCES", "aquamaps")
 .hr_default("RESPONSE_DRIVERS", c("depth", "temp_bot", "temp_surf", "sal_surf", "npp"))
 .hr_default("RESPONSE_N_POINTS", 1200L)                                    # EwE response functions have 1200 values
-.hr_default("GLOSSA_MODE", "auto")                                         # "auto", "prepare", "run" or "read"
-.hr_default("GLOSSA_FGS", NULL)                                            # NULL = every FG with enough hauls; or FG numbers
-.hr_default("GLOSSA_MONTHS", 5:7)                                          # months averaged for the layers (MEDITS: May-July)
-.hr_default("GLOSSA_YEARS", NULL)                                          # NULL = every survey year with environmental maps
-.hr_default("GLOSSA_MIN_PRESENCES", 30L)                                   # fewer hauls with the FG: no GLOSSA model
-.hr_default("GLOSSA_MODEL_ARGS", list())                                   # passed to dbarts::bart (e.g. list(ntree = 200))
-.hr_default("GLOSSA_SEED", 1L)
-.hr_default("GLOSSA_MAX_HAULS", 3000L)                                     # hauls per FG model (random, same share of presences); NULL = all
-.hr_default("GLOSSA_CORES", NULL)                                          # FGs fitted at the same time; NULL = 2 (Mac/Linux), 1 (Windows)
-.hr_default("ECOSPACE_BATHY_FILE", file.path(pcloud_dir, "data", "Bathymetry", "EMODnet_WMed_1arcmin.tif"))
 .hr_default("ECOSPACE_ENV_DIR", file.path(out_dir, "environment"))
 resp_dir <- file.path(ECOSPACE_ENV_DIR, "ecospace_responses")
-.hr_default("GLOSSA_RESULTS_DIR", file.path(resp_dir, "glossa_results"))
 dir.create(resp_dir, recursive = TRUE, showWarnings = FALSE)
 
 .hr_units <- c(depth = "m", temp_bot = "deg C", temp_surf = "deg C", sal_surf = "PSU", npp = "g C m-2 d-1", phyto_c = "g C m-2")
@@ -150,9 +112,8 @@ fgs <- unique(fg_sp[, .(FG_num, FG_name)])[order(FG_num)]
 }
 funs <- list()        # one row per function
 pts <- list()         # 120 points per function (plots)
-.add_fun <- function(source, fg, driver, ftype, xmin, xmax, params, y, basis, lo = NULL, hi = NULL) {
-  tag <- if (source == "AquaMaps") "#AM_" else "#GL_"
-  title <- paste0(tag, driver, "_fg_", fg$FG_num)
+.add_fun <- function(source, fg, driver, ftype, xmin, xmax, params, y, basis) {
+  title <- paste0("#AM_", driver, "_fg_", fg$FG_num)
   funs[[length(funs) + 1]] <<- data.table(Title = title, Source = source, FG_num = fg$FG_num, FG_name = fg$FG_name, Driver = driver,
                                           Units = unname(.hr_units[driver]), FunctionType = ftype, XAxisMin = signif(xmin, 6), XAxisMax = signif(xmax, 6),
                                           FunctionParams = params, Basis = basis,
@@ -160,8 +121,7 @@ pts <- list()         # 120 points per function (plots)
   k <- unique(round(seq(1, NPT, length.out = 120)))
   xs <- seq(xmin, xmax, length.out = NPT)[k]
   pts[[length(pts) + 1]] <<- data.table(Title = title, Source = source, FG_num = fg$FG_num, FG_name = fg$FG_name, Driver = driver,
-                                        x = signif(xs, 6), y = round(y[k], 5),
-                                        y_q2.5 = if (is.null(lo)) NA_real_ else round(lo[k], 5), y_q97.5 = if (is.null(hi)) NA_real_ else round(hi[k], 5))
+                                        x = signif(xs, 6), y = round(y[k], 5))
 }
 
 ## =================================================================
@@ -237,190 +197,42 @@ if ("aquamaps" %in% RESPONSE_SOURCES) tryCatch({
 }, error = function(e) .hr_msg("AquaMaps response functions not made: ", conditionMessage(e)))
 
 ## =================================================================
-## 2. GLOSSA
+## 2. Values of the drivers in the Ecospace maps (05b)
 ## =================================================================
-gl_dir <- file.path(resp_dir, "glossa_inputs")
-.glossa_prepare <- function() {
-  hd_f <- .find_out("biomass", "haul_density.rds")
-  if (is.na(hd_f)) stop("biomass/haul_density.rds not found - run 01 (biomass) first.")
-  hd <- readRDS(hd_f)
-  hauls <- as.data.table(hd$hauls)[is.finite(Lat) & is.finite(Lon)]
-  sp <- as.data.table(hd$sp)
-  ## environmental layers: mean of GLOSSA_MONTHS per year, every driver
-  env_dirs <- unique(c(ECOSPACE_ENV_DIR, if (exists("OUT_BASE_DIR", envir = .GlobalEnv)) file.path(OUT_BASE_DIR, "environment")))
-  native <- function(v) { f <- file.path(env_dirs, paste0(v, "_monthly_native.tif")); f[file.exists(f)][1] }
-  vars <- setdiff(RESPONSE_DRIVERS, "depth"); vars <- vars[!is.na(vapply(vars, native, ""))]
-  if (!length(vars)) stop("no monthly maps of 05 (", paste(setdiff(RESPONSE_DRIVERS, "depth"), collapse = ", "), ") - run 05 (environment) first.")
-  rs <- lapply(setNames(vars, vars), function(v) terra::rast(native(v)))
-  yrs_env <- Reduce(intersect, lapply(rs, function(r) unique(as.integer(substr(names(r), 1, 4)))))
-  yrs <- sort(intersect(unique(hauls$Year), yrs_env))
-  if (!is.null(GLOSSA_YEARS)) yrs <- intersect(yrs, GLOSSA_YEARS)
-  if (!length(yrs)) stop("no survey year with environmental maps.")
-  yrs <- min(yrs):max(yrs)                                    # GLOSSA: one layer per year, consecutive
-  yrs <- yrs[yrs %in% yrs_env]
-  if (length(yrs) != (max(yrs) - min(yrs) + 1)) { yrs <- yrs[seq_len(which(diff(c(yrs, Inf)) != 1)[1])]
-    .hr_msg("GLOSSA needs consecutive years: using ", min(yrs), "-", max(yrs), ".") }
-  lay_dir <- file.path(gl_dir, "fit_layers"); unlink(lay_dir, recursive = TRUE); dir.create(lay_dir, recursive = TRUE)
-  tmpl <- rs[[1]][[1]]
-  for (v in vars) {
-    dir.create(file.path(lay_dir, v), showWarnings = FALSE)
-    for (k in seq_along(yrs)) {
-      nm <- names(rs[[v]]); sel <- which(as.integer(substr(nm, 1, 4)) == yrs[k] & as.integer(substr(nm, 6, 7)) %in% GLOSSA_MONTHS)
-      if (!length(sel)) sel <- which(as.integer(substr(nm, 1, 4)) == yrs[k])
-      m <- terra::mean(rs[[v]][[sel]], na.rm = TRUE)
-      if (!terra::compareGeom(m, tmpl, stopOnError = FALSE)) m <- terra::resample(m, tmpl)
-      names(m) <- v
-      terra::writeRaster(m, file.path(lay_dir, v, sprintf("%s_%02d.tif", v, k)), overwrite = TRUE)
+## Base map: the one 05b made in this run (esp_dir), else the most recent
+## folder of environment/ecospace_drivers. Every water cell of every
+## time step (absolute values only; relative maps are not comparable).
+.drv_dist <- tryCatch({
+  ed <- get0("esp_dir", envir = .GlobalEnv, ifnotfound = NA_character_)
+  if (is.na(ed) || !dir.exists(ed)) {
+    cand <- list.dirs(file.path(ECOSPACE_ENV_DIR, "ecospace_drivers"), recursive = FALSE)
+    cand <- cand[file.exists(file.path(cand, "ecospace_driver_index.csv"))]
+    ed <- if (length(cand)) cand[which.max(file.mtime(cand))] else NA_character_
+  }
+  if (is.na(ed)) { .hr_msg("No Ecospace driver maps (05b) - curves drawn without the map values."); NULL } else {
+    ix <- fread(file.path(ed, "ecospace_driver_index.csv"))
+    vals <- list()
+    for (v in intersect(RESPONSE_DRIVERS, unique(ix$variable))) {
+      if (any(grepl("^relative", ix[variable == v, unit]))) next
+      vals[[v]] <- unlist(lapply(file.path(ed, ix[variable == v, file]), function(f)
+        if (file.exists(f)) { x <- terra::values(terra::rast(f), mat = FALSE); x[is.finite(x)] } else numeric(0)))
     }
-  }
-  if ("depth" %in% RESPONSE_DRIVERS) {
-    if (!file.exists(ECOSPACE_BATHY_FILE)) stop("bathymetry not found: ", ECOSPACE_BATHY_FILE)
-    b <- terra::rast(ECOSPACE_BATHY_FILE); if (is.na(terra::crs(b)) || !nzchar(terra::crs(b))) terra::crs(b) <- "EPSG:4326"
-    b <- terra::ifel(b < 0, -b, NA)                            # depth in m (bathymetry negative below sea level)
-    dpt <- terra::resample(b, tmpl, method = "average"); dpt <- terra::mask(dpt, tmpl); names(dpt) <- "depth"
-    dir.create(file.path(lay_dir, "depth"), showWarnings = FALSE)
-    for (k in seq_along(yrs)) terra::writeRaster(dpt, file.path(lay_dir, "depth", sprintf("depth_%02d.tif", k)), overwrite = TRUE)
-    vars <- c("depth", vars)
-  }
-  zf <- file.path(gl_dir, "fit_layers.zip"); unlink(zf)
-  old <- setwd(lay_dir); on.exit(setwd(old), add = TRUE)
-  if (requireNamespace("zip", quietly = TRUE)) zip::zipr(zf, files = vars) else utils::zip(zf, files = vars, flags = "-r9Xq")
-  setwd(old)
-  unlink(lay_dir, recursive = TRUE)                          # the zip is what GLOSSA reads
-  ## occurrences: every haul of those years; pa = 1 when the FG was caught
-  hauls <- hauls[Year %in% yrs]
-  pres <- unique(sp[SampleID %in% hauls$SampleID & d > 0, .(SampleID, FG_num)])
-  occ_dir <- file.path(gl_dir, "occurrences"); unlink(occ_dir, recursive = TRUE); dir.create(occ_dir, recursive = TRUE)
-  summ <- list(); pa_list <- list()
-  for (i in seq_len(nrow(fgs))) {
-    f <- fgs$FG_num[i]
-    x <- hauls[, .(decimalLongitude = Lon, decimalLatitude = Lat, timestamp = Year, pa = as.integer(SampleID %in% pres[FG_num == f, SampleID]))]
-    np <- sum(x$pa)
-    use <- np >= GLOSSA_MIN_PRESENCES && np < nrow(x)
-    summ[[i]] <- data.table(FG_num = f, FG_name = fgs$FG_name[i], hauls = nrow(x), presences = np, used = use,
-                            why_not = if (use) "" else if (np == nrow(x)) "present in every haul" else paste0("fewer than ", GLOSSA_MIN_PRESENCES, " hauls with the FG"))
-    if (!use) next
-    lab <- paste0("FG", f)
-    fwrite(x, file.path(occ_dir, paste0(lab, ".tsv")), sep = "\t", dec = ".", quote = FALSE, bom = FALSE)
-    pa_list[[lab]] <- as.data.frame(x[, .(decimalLongitude, decimalLatitude, timestamp = timestamp - min(yrs) + 1L, pa, timestamp_original = timestamp)])
-  }
-  summ <- rbindlist(summ)
-  fwrite(summ, file.path(gl_dir, "glossa_fg_presences.csv"))
-  writeLines(c("GLOSSA inputs written by 05c_habitat_responses.R",
-               paste0("Years: ", min(yrs), "-", max(yrs), " (timestamp = year; layer k = year ", min(yrs), " + k - 1)"),
-               paste0("Layers: mean of months ", paste(GLOSSA_MONTHS, collapse = ","), " of the 05 monthly maps; depth from ", basename(ECOSPACE_BATHY_FILE)),
-               paste0("Drivers: ", paste(vars, collapse = ", ")),
-               "In the GLOSSA app (glossa::run_glossa()): occurrences = occurrences/FG<n>.tsv, fit layers = fit_layers.zip;",
-               "tick Functional responses, run, then Exports: functional responses -> save the zip in glossa_results/ and run 05c with GLOSSA_MODE = \"read\"."),
-             file.path(gl_dir, "README.txt"))
-  .hr_msg("GLOSSA inputs: ", summ[used == TRUE, .N], " FG occurrence files (of ", nrow(summ), " FGs; glossa_fg_presences.csv), ",
-          length(yrs), " years x ", length(vars), " drivers in fit_layers.zip -> ", gl_dir)
-  list(pa = pa_list, zip = zf, vars = vars)
-}
-
-## functional responses -> list(FG label -> list(driver -> data.frame(value, mean, q25, q975)))
-.glossa_read <- function(dir) {
-  if (!dir.exists(dir)) return(list())
-  zips <- list.files(dir, pattern = "\\.zip$", recursive = TRUE, full.names = TRUE)
-  ex <- file.path(tempdir(), "glossa_read"); unlink(ex, recursive = TRUE); dir.create(ex)
-  for (z in zips) tryCatch(utils::unzip(z, exdir = file.path(ex, basename(z))), error = function(e) NULL)
-  fs <- c(list.files(dir, pattern = "_func_res_.*\\.tsv$", recursive = TRUE, full.names = TRUE),
-          list.files(ex, pattern = "_func_res_.*\\.tsv$", recursive = TRUE, full.names = TRUE))
-  out <- list()
-  for (f in fs) {
-    b <- sub("\\.tsv$", "", basename(f)); lab <- sub("_func_res_.*$", "", b); drv <- sub("^.*_func_res_", "", b)
-    d <- tryCatch(utils::read.delim(f, dec = "."), error = function(e) NULL)
-    if (is.null(d) || !all(c("value", "mean") %in% names(d))) next
-    out[[lab]][[drv]] <- d
-  }
-  out
-}
-
-fr <- list()
-if ("glossa" %in% RESPONSE_SOURCES) tryCatch({
-  mode <- GLOSSA_MODE
-  if (identical(mode, "auto")) {
-    mode <- if (requireNamespace("glossa", quietly = TRUE)) "run" else "prepare"
-    if (mode == "prepare") .hr_msg("GLOSSA: the glossa package is not installed (install.packages(\"glossa\")) - only its inputs are written.")
-  }
-  if (mode %in% c("prepare", "run")) {
-    gi <- .glossa_prepare()
-    if (mode == "run") {
-      if (!requireNamespace("glossa", quietly = TRUE)) {
-        .hr_msg("GLOSSA_MODE = \"run\" needs the glossa package (install.packages(\"glossa\")) - only the inputs were written.")
-      } else if (length(gi$pa)) {
-        ## one FG at a time, results saved as soon as each is done: a stopped
-        ## run goes on from where it was, and one failing FG does not stop the rest
-        dir.create(GLOSSA_RESULTS_DIR, recursive = TRUE, showWarnings = FALSE)
-        done <- names(.glossa_read(GLOSSA_RESULTS_DIR))
-        todo <- setdiff(names(gi$pa), done)
-        if (!is.null(GLOSSA_FGS)) todo <- todo[as.integer(sub("^FG", "", todo)) %in% GLOSSA_FGS]
-        .hr_msg("GLOSSA (BART): ", length(todo), " FG(s) to fit, ", length(intersect(done, names(gi$pa))), " already done",
-                if (length(todo)) " - several minutes per FG." else ".")
-        ## Speed: GLOSSA's functional responses (dbarts::pdbart) predict every
-        ## haul at 20 values of each driver, so time and memory grow with the
-        ## number of hauls (15,600 MEDITS hauls: ~16 min and several GB per
-        ## FG). Each FG model uses at most GLOSSA_MAX_HAULS hauls, a random
-        ## sample with the FG's share of presences kept, and GLOSSA_CORES
-        ## FGs are fitted at the same time (forked R processes; not on Windows).
-        .sub_pa <- function(d, n, seed) {
-          if (is.null(n) || nrow(d) <= n) return(d)
-          set.seed(seed); pres <- which(d$pa == 1); abs <- which(d$pa != 1)
-          np <- max(1L, round(n * length(pres) / nrow(d)))
-          d[sort(c(pres[sample.int(length(pres), min(np, length(pres)))], abs[sample.int(length(abs), min(n - np, length(abs)))])), , drop = FALSE]
-        }
-        .fit_one <- function(k) {
-          lab <- todo[k]; t0 <- Sys.time()
-          pa <- gi$pa[lab]; n_all <- nrow(pa[[1]])
-          pa[[1]] <- .sub_pa(pa[[1]], GLOSSA_MAX_HAULS, GLOSSA_SEED + k)
-          res <- tryCatch(glossa::glossa_analysis(pa_data = pa, fit_layers = gi$zip, predictor_variables = NULL, scale_layers = TRUE,
-                                                  other_analysis = "functional_responses", model_args = GLOSSA_MODEL_ARGS, seed = GLOSSA_SEED),
-                          error = function(e) { .hr_msg("GLOSSA ", lab, " failed: ", conditionMessage(e)); NULL })
-          rc <- if (!is.null(res)) res$other_results$response_curve[[lab]] else NULL
-          for (drv in names(rc))                                           # same files as GLOSSA's export
-            utils::write.table(rc[[drv]], file.path(GLOSSA_RESULTS_DIR, paste0(lab, "_func_res_", drv, ".tsv")),
-                               sep = "\t", dec = ".", quote = FALSE, row.names = FALSE)
-          .hr_msg("GLOSSA ", k, "/", length(todo), " ", lab, " ", fgs[FG_num == as.integer(sub("^FG", "", lab)), FG_name], ": ",
-                  if (length(rc)) "done" else "no response curves", " (", nrow(pa[[1]]), " of ", n_all, " hauls, ",
-                  round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 1), " min)")
-          invisible(length(rc) > 0)
-        }
-        nc <- if (!is.null(GLOSSA_CORES)) as.integer(GLOSSA_CORES) else if (.Platform$OS.type == "windows") 1L else 2L
-        nc <- max(1L, min(nc, length(todo), max(1L, parallel::detectCores() - 1L), na.rm = TRUE))
-        if (length(todo)) .hr_msg("GLOSSA: ", if (is.null(GLOSSA_MAX_HAULS)) "all" else paste("at most", GLOSSA_MAX_HAULS), " hauls per FG, ",
-                                  nc, " FG(s) at a time.")
-        if (nc > 1 && .Platform$OS.type != "windows") {
-          invisible(parallel::mclapply(seq_along(todo), .fit_one, mc.cores = nc, mc.preschedule = FALSE))
-        } else for (k in seq_along(todo)) .fit_one(k)
-      }
+    if ("depth" %in% RESPONSE_DRIVERS && file.exists(file.path(ed, "depth_used.asc"))) {
+      x <- terra::values(terra::rast(file.path(ed, "depth_used.asc")), mat = FALSE); vals$depth <- abs(x[is.finite(x) & x != 0])
     }
-  }
-  if (!length(fr)) fr <- .glossa_read(GLOSSA_RESULTS_DIR)
-  if (!length(fr)) {
-    .hr_msg("GLOSSA: no functional responses yet in ", GLOSSA_RESULTS_DIR,
-            " - install the glossa package and run 05c again (or run GLOSSA on glossa_inputs/ and export the functional responses there).")
-  } else {
-    n0 <- length(funs)
-    for (lab in names(fr)) {
-      f <- suppressWarnings(as.integer(sub("^FG0*([0-9]+).*$", "\\1", lab)))
-      fg <- fgs[FG_num == f]
-      if (!nrow(fg)) { .hr_msg("GLOSSA result '", lab, "' does not name an FG of the model (FG<number>) - skipped."); next }
-      for (drv in names(fr[[lab]])) {
-        d <- as.data.frame(fr[[lab]][[drv]])
-        v <- suppressWarnings(as.numeric(d$value)); if (sum(is.finite(v)) < 2) next   # categorical drivers: not a curve
-        ok <- is.finite(v) & is.finite(d$mean); v <- v[ok]; d <- d[ok, , drop = FALSE]
-        xmin <- min(v); xmax <- max(v)
-        mx <- max(d$mean)
-        y <- .on_grid(v, d$mean, xmin, xmax)
-        lo <- if ("q25" %in% names(d)) .on_grid(v, d$q25, xmin, xmax) * max(d$q25) / mx else NULL
-        hi <- if ("q975" %in% names(d)) .on_grid(v, d$q975, xmin, xmax) * max(d$q975) / mx else NULL
-        .add_fun("GLOSSA", fg, drv, 0L, xmin, xmax, "-9999", y,
-                 paste0("GLOSSA BART functional response (posterior mean probability of presence, maximum ", signif(mx, 3), " -> 1)"), lo, hi)
-      }
+    out <- rbindlist(lapply(names(vals), function(v) {
+      x <- vals[[v]]; if (length(x) < 2) return(NULL)
+      br <- pretty(range(x), 40); h <- graphics::hist(x, breaks = br, plot = FALSE)
+      data.table(Driver = v, bin_lo = head(br, -1), bin_hi = br[-1], x_mid = h$mids, n = h$counts, share = h$counts / sum(h$counts),
+                 base_map = basename(ed))
+    }))
+    if (nrow(out)) {
+      fwrite(out, file.path(resp_dir, "ecospace_driver_distribution.csv"))
+      .hr_msg("Driver values of the Ecospace maps (", basename(ed), "): ", paste(unique(out$Driver), collapse = ", "), ".")
     }
-    .hr_msg("GLOSSA: ", length(funs) - n0, " response functions from ", length(fr), " FGs.")
+    out
   }
-}, error = function(e) .hr_msg("GLOSSA step failed: ", conditionMessage(e)))
+}, error = function(e) { .hr_msg("driver values of the Ecospace maps skipped - ", conditionMessage(e)); NULL })
 
 ## =================================================================
 ## 3. Write
@@ -433,7 +245,7 @@ if (!length(funs)) {
   fwrite(F, file.path(resp_dir, "ecospace_response_functions.csv"))
   fwrite(P, file.path(resp_dir, "ecospace_response_points.csv"))
   cap <- dcast(F, FG_num + FG_name + Driver ~ Source, value.var = "Title")
-  setnames(cap, intersect(c("AquaMaps", "GLOSSA"), names(cap)), paste0("function_", tolower(intersect(c("AquaMaps", "GLOSSA"), names(cap)))))
+  setnames(cap, intersect("AquaMaps", names(cap)), "function_aquamaps")
   fwrite(cap[order(FG_num, Driver)], file.path(resp_dir, "ecospace_capacity_drivers.csv"))
   ## side by side, per source and driver: rows Title, XAxisMin, XAxisMax, 1200 values
   for (s in unique(F$Source)) for (drv in unique(F[Source == s, Driver])) {
@@ -450,14 +262,17 @@ if (!length(funs)) {
   if (requireNamespace("ggplot2", quietly = TRUE)) for (drv in unique(P$Driver)) tryCatch({
     p <- P[Driver == drv]; p[, lab := paste0(FG_num, " ", FG_name)]
     p[, lab := factor(lab, levels = unique(lab[order(FG_num)]))]
-    g <- ggplot2::ggplot(p, ggplot2::aes(x, y, colour = Source, fill = Source)) +
-      ggplot2::geom_ribbon(data = p[is.finite(y_q2.5)], ggplot2::aes(ymin = pmin(y_q2.5, 1.5), ymax = pmin(y_q97.5, 1.5)), alpha = 0.2, colour = NA) +
-      ggplot2::geom_line(linewidth = 0.8) +
+    hd <- if (!is.null(.drv_dist)) .drv_dist[Driver == drv] else NULL
+    g <- ggplot2::ggplot(p, ggplot2::aes(x, y)) +
+      (if (!is.null(hd) && nrow(hd)) ggplot2::geom_rect(data = hd[, .(xmin = bin_lo, xmax = bin_hi, ymax = share / max(share))],
+                                                       ggplot2::aes(xmin = xmin, xmax = xmax, ymin = 0, ymax = ymax), inherit.aes = FALSE,
+                                                       fill = "grey75", colour = NA)) +
+      ggplot2::geom_line(linewidth = 0.8, colour = "#1f77b4") +
       ggplot2::facet_wrap(~ lab, scales = "free_x", ncol = 6) +
-      ggplot2::scale_colour_manual(values = c(AquaMaps = "#1f77b4", GLOSSA = "#d62728")) +
-      ggplot2::scale_fill_manual(values = c(AquaMaps = "#1f77b4", GLOSSA = "#d62728")) +
       ggplot2::labs(x = paste0(drv, " (", .hr_units[drv], ")"), y = "Relative habitat capacity",
-                    title = paste0("Ecospace response functions: ", drv)) +
+                    title = paste0("Ecospace response functions: ", drv),
+                    subtitle = if (!is.null(hd) && nrow(hd)) paste0("Grey: values of ", drv, " in the Ecospace driver maps (", hd$base_map[1],
+                                                                  "; all water cells and months; tallest bar = 1)") else NULL) +
       ggplot2::theme_bw(base_size = 14) + ggplot2::theme(legend.position = "top", strip.text = ggplot2::element_text(size = 9))
     nr <- ceiling(uniqueN(p$lab) / 6)
     ggplot2::ggsave(file.path(resp_dir, paste0("ecospace_response_", drv, ".png")), g, width = 18, height = 2.4 * nr + 1.5, dpi = 150, limitsize = FALSE)
