@@ -2602,7 +2602,7 @@ SSP5-8.5; a scenario without files (SSP2-4.5 for most models) is
 reported and skipped. Outputs in `environment/scenarios/<scenario>/`:
 monthly maps, the Ecosim forcing series (hindcast + scenario, relative
 to the Ecopath year) and the area means of every scenario; 05b then
-writes their Ecospace maps in `<base map>/scenarios/<scenario>/`.
+writes their Ecospace maps in `<base map>/<scenario>/`, next to `<base map>/historical/`.
 
 ### Ecospace driver maps (`05b_ecospace_drivers.R`)
 
@@ -2640,7 +2640,7 @@ Per variable and month:
    g C m⁻²) or `"relative"` (value / the base-year map mean, as the
    Ecosim forcing). `ECOSPACE_DRIVER_STEP`: `"monthly"` or `"annual"`.
 
-Outputs in `environment/ecospace_drivers/<base map>/` (`grid_<n>arcmin` or the depth file's name): `<var>/<var>_<YYYY>_<MM>.asc`
+Outputs in `environment/ecospace_drivers/<base map>/` (`grid_<n>arcmin` or the depth file's name): `historical/` and one folder per climate scenario (`ssp126/`, `ssp370/`, ...), each with one folder per driver, `sst/`, `sbt/`, `sss/`, `pp/` and `phyc/`, holding `<driver>_<YYYY>_<MM>.asc`
 (same `ncols`, `nrows`, corner and cell size as the depth file),
 `ecospace_driver_index.csv` (time step, year, month, file, cells
 filled, mean, min, max) and `ecospace_driver_mean_maps.png`. Tested

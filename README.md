@@ -172,7 +172,7 @@ ecopath_ecosim_inputs.xlsx      # the EwE workbook: info, FGs, Fleets, FG_spp, E
                                 #   Ecopath_diet, Ecosim_ts, FG_References, Ecobase, Pedigree
 ewe_import/                     # the same inputs as EwE import files (csv per table, or one xlsx)
 environment/scenarios/          # climate scenarios of the drivers: maps and Ecosim forcing per scenario (05s)
-environment/ecospace_drivers/   # Ecospace driver maps (.asc), per base map (05b); scenarios in <base map>/scenarios/
+environment/ecospace_drivers/   # Ecospace driver maps (.asc), per base map (05b): <base map>/historical/ and <base map>/<scenario>/, each with sst/ sbt/ sss/ pp/ phyc/
 environment/ecospace_responses/ # Ecospace response functions (AquaMaps) and driver values of the maps (05c)
 biomass/ fisheries/ pbqb-traits/ diet/ validation/ environment/
                                 # CSVs of each step; *_REVIEW.csv tables are the ones to check

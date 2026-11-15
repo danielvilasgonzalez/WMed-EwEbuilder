@@ -203,12 +203,15 @@ if ("aquamaps" %in% RESPONSE_SOURCES) tryCatch({
 ## folder of environment/ecospace_drivers. Every water cell of every
 ## time step (absolute values only; relative maps are not comparable).
 .drv_dist <- tryCatch({
+  .hist_of <- function(d) if (file.exists(file.path(d, "historical", "ecospace_driver_index.csv"))) file.path(d, "historical") else d
   ed <- get0("esp_dir", envir = .GlobalEnv, ifnotfound = NA_character_)
   if (is.na(ed) || !dir.exists(ed)) {
     cand <- list.dirs(file.path(ECOSPACE_ENV_DIR, "ecospace_drivers"), recursive = FALSE)
-    cand <- cand[file.exists(file.path(cand, "ecospace_driver_index.csv"))]
+    cand <- cand[file.exists(file.path(vapply(cand, .hist_of, ""), "ecospace_driver_index.csv"))]
     ed <- if (length(cand)) cand[which.max(file.mtime(cand))] else NA_character_
   }
+  map_lab <- if (is.na(ed)) NA_character_ else basename(ed)
+  if (!is.na(ed)) ed <- .hist_of(ed)
   if (is.na(ed)) { .hr_msg("No Ecospace driver maps (05b) - curves drawn without the map values."); NULL } else {
     ix <- fread(file.path(ed, "ecospace_driver_index.csv"))
     vals <- list()
@@ -224,11 +227,11 @@ if ("aquamaps" %in% RESPONSE_SOURCES) tryCatch({
       x <- vals[[v]]; if (length(x) < 2) return(NULL)
       br <- pretty(range(x), 40); h <- graphics::hist(x, breaks = br, plot = FALSE)
       data.table(Driver = v, bin_lo = head(br, -1), bin_hi = br[-1], x_mid = h$mids, n = h$counts, share = h$counts / sum(h$counts),
-                 base_map = basename(ed))
+                 base_map = map_lab)
     }))
     if (nrow(out)) {
       fwrite(out, file.path(resp_dir, "ecospace_driver_distribution.csv"))
-      .hr_msg("Driver values of the Ecospace maps (", basename(ed), "): ", paste(unique(out$Driver), collapse = ", "), ".")
+      .hr_msg("Driver values of the Ecospace maps (", map_lab, ", historical): ", paste(unique(out$Driver), collapse = ", "), ".")
     }
     out
   }

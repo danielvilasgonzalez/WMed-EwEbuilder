@@ -136,7 +136,8 @@ output$esp_cell_km <- renderText({
 }
 output$esp_out_where <- renderUI({
   d <- file.path(.inputs_run_dir(), "environment", "ecospace_drivers", .esp_map_name())
-  tags$div(class = "wm-help mt-2", "Written to ", tags$code(.show_path(d)), ": one folder per variable (", tags$code("<var>/<var>_YYYY_MM.asc"),
+  tags$div(class = "wm-help mt-2", "Written to ", tags$code(.show_path(d)), ": ", tags$code("historical/"), " and one folder per climate scenario (",
+           tags$code("ssp126/"), ", ...), each with one folder per driver (", tags$code("sst, sbt, sss, pp, phyc"), "; files ", tags$code("sst_YYYY_MM.asc"),
            "), ", tags$code("depth_used.asc"), " (the Ecospace depth map), ", tags$code("ecospace_driver_index.csv"), " and a check figure.",
            if (dir.exists(d)) tags$span(" Last made ", format(file.mtime(d), "%d %b %Y %H:%M"), ".") else " Not made yet.")
 })
@@ -156,7 +157,7 @@ output$esp_out_where <- renderUI({
   run_state(); input$esp_grid_mode
   d <- .esp_root(); if (!dir.exists(d)) return(character(0))
   m <- list.dirs(d, full.names = FALSE, recursive = FALSE)
-  m[file.exists(file.path(d, m, "ecospace_driver_index.csv"))]
+  m[file.exists(file.path(d, m, "historical", "ecospace_driver_index.csv")) | file.exists(file.path(d, m, "ecospace_driver_index.csv"))]
 })
 observe({
   m <- .esp_maps(); cur <- isolate(input$esp_view_map)
@@ -164,18 +165,27 @@ observe({
                     selected = if (!is.null(cur) && cur %in% m) cur else if (length(m)) m[1] else "")
 })
 ## folder of a base map's maps: the hindcast, or a climate scenario (05s -> 05b)
-.esp_scen_dir <- function(m, sc) if (is.null(sc) || !nzchar(sc) || sc == "hindcast") file.path(.esp_root(), m) else file.path(.esp_root(), m, "scenarios", sc)
-.esp_scen_label <- c(hindcast = "Hindcast (Copernicus)", ssp126 = "SSP1-2.6", ssp245 = "SSP2-4.5", ssp370 = "SSP3-7.0", ssp585 = "SSP5-8.5")
+## layout of 05b: <base map>/historical/ and <base map>/<scenario>/ (older
+## runs: the hindcast in <base map>/ itself, scenarios in <base map>/scenarios/)
+.esp_scen_dir <- function(m, sc) {
+  r <- file.path(.esp_root(), m)
+  if (is.null(sc) || !nzchar(sc) || sc %in% c("historical", "hindcast"))
+    return(if (dir.exists(file.path(r, "historical"))) file.path(r, "historical") else r)
+  if (dir.exists(file.path(r, sc))) file.path(r, sc) else file.path(r, "scenarios", sc)
+}
+.esp_scen_label <- c(historical = "Historical (Copernicus)", hindcast = "Historical (Copernicus)",
+                     ssp126 = "SSP1-2.6", ssp245 = "SSP2-4.5", ssp370 = "SSP3-7.0", ssp585 = "SSP5-8.5")
 .esp_scens <- function(m) {
-  if (is.null(m) || !nzchar(m)) return("hindcast")
-  d <- list.dirs(file.path(.esp_root(), m, "scenarios"), recursive = FALSE, full.names = TRUE)
-  d <- d[file.exists(file.path(d, "ecospace_driver_index.csv"))]
-  c("hindcast", basename(d))
+  if (is.null(m) || !nzchar(m)) return("historical")
+  r <- file.path(.esp_root(), m)
+  d <- c(list.dirs(r, recursive = FALSE, full.names = TRUE), list.dirs(file.path(r, "scenarios"), recursive = FALSE, full.names = TRUE))
+  d <- d[file.exists(file.path(d, "ecospace_driver_index.csv")) & !basename(d) %in% c("historical", "scenarios")]
+  c("historical", unique(basename(d)))
 }
 .esp_scen_choices <- function(m) { s <- .esp_scens(m); setNames(s, ifelse(is.na(.esp_scen_label[s]), s, .esp_scen_label[s])) }
 observe({
   run_state(); m <- input$esp_view_map; ch <- .esp_scen_choices(m); cur <- isolate(input$esp_view_scen)
-  updateSelectInput(session, "esp_view_scen", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else "hindcast")
+  updateSelectInput(session, "esp_view_scen", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else "historical")
 })
 .esp_index <- reactive({
   m <- input$esp_view_map; req(m, nzchar(m))
@@ -342,7 +352,7 @@ output$dl_esp_fig <- downloadHandler(
   })
 ## all the .asc files of the base map shown (+ depth_used.asc and the index)
 output$dl_esp_zip <- downloadHandler(
-  filename = function() paste0("ecospace_drivers_", input$esp_view_map, if (!is.null(input$esp_view_scen) && input$esp_view_scen != "hindcast") paste0("_", input$esp_view_scen), ".zip"),
+  filename = function() paste0("ecospace_drivers_", input$esp_view_map, if (!is.null(input$esp_view_scen) && !input$esp_view_scen %in% c("historical", "hindcast")) paste0("_", input$esp_view_scen), ".zip"),
   content = function(file) {
     d <- .esp_scen_dir(input$esp_view_map, input$esp_view_scen)
     if (!dir.exists(d)) stop("No maps for this base map - run 05b first.")
@@ -360,23 +370,23 @@ output$dl_esp_zip <- downloadHandler(
   h <- if (file.exists(fh)) tryCatch(fread(fh), error = function(e) NULL) else NULL
   hm <- if (file.exists(file.path(d, "environment_timeseries_monthly.csv")))
     tryCatch(fread(file.path(d, "environment_timeseries_monthly.csv"))[, .(value = mean(value)), by = .(variable, year)], error = function(e) NULL) else NULL
-  rbind(if (!is.null(hm)) hm[variable %in% s$variable, .(scenario = "hindcast", variable, year, value)],
+  rbind(if (!is.null(hm)) hm[variable %in% s$variable, .(scenario = "historical", variable, year, value)],
         s[, .(scenario, variable, year, value)])
 })
 output$esp_scen_ui <- renderUI({
   if (is.null(.scn_series())) return(tags$div(class = "wm-help mt-2", "Climate scenarios: none yet - tick them in card 5 (05 environment) and run 05, then 05b for their Ecospace maps."))
-  tagList(tags$strong("Hindcast and climate scenarios (annual mean over the model area)"), plotOutput("esp_scen_plot", height = "520px"))
+  tagList(tags$strong("Historical and climate scenarios (annual mean over the model area)"), plotOutput("esp_scen_plot", height = "520px"))
 })
 output$esp_scen_plot <- renderPlot({
   x <- .scn_series(); req(x)
   vs <- unique(x$variable); v <- input$esp_view_var; if (!is.null(v) && v %in% vs) vs <- v
-  cols <- c(hindcast = "black", ssp126 = "#1a9850", ssp245 = "#fdae61", ssp370 = "#d73027", ssp585 = "#7b3294")
+  cols <- c(historical = "black", ssp126 = "#1a9850", ssp245 = "#fdae61", ssp370 = "#d73027", ssp585 = "#7b3294")
   ulab <- c(temp_surf = "SST (deg C)", temp_bot = "SBT (deg C)", sal_surf = "Salinity (PSU)", npp = "NPP (g C m-2 d-1)")
   op <- par(mfrow = c(ceiling(length(vs) / 2), min(2, length(vs))), mar = c(4, 4.5, 2.5, 1), cex.axis = 1.05, cex.lab = 1.1); on.exit(par(op))
   for (vv in vs) {
     z <- x[variable == vv]
     plot(range(z$year), range(z$value, na.rm = TRUE), type = "n", xlab = "", ylab = ifelse(is.na(ulab[vv]), vv, ulab[vv]), main = vv)
-    for (sc in intersect(names(cols), unique(z$scenario))) { q <- z[scenario == sc][order(year)]; lines(q$year, q$value, col = cols[[sc]], lwd = if (sc == "hindcast") 2 else 1.8) }
+    for (sc in intersect(names(cols), unique(z$scenario))) { q <- z[scenario == sc][order(year)]; lines(q$year, q$value, col = cols[[sc]], lwd = if (sc == "historical") 2 else 1.8) }
     legend("topleft", legend = .esp_scen_label[intersect(names(cols), unique(z$scenario))], col = cols[intersect(names(cols), unique(z$scenario))], lwd = 2, bty = "n", cex = 0.9)
   }
 })
@@ -411,18 +421,18 @@ observe({
 })
 observe({
   run_state(); ch <- .esp_scen_choices(input$resp_view_map); cur <- isolate(input$resp_view_scen)
-  updateSelectInput(session, "resp_view_scen", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else "hindcast")
+  updateSelectInput(session, "resp_view_scen", choices = ch, selected = if (!is.null(cur) && cur %in% ch) cur else "historical")
 })
 .resp_hist_cache <- new.env()
 .resp_hist <- reactive({
   run_state(); m <- input$resp_view_map; d <- input$resp_view_drv; sc <- input$resp_view_scen
   if (!isTRUE(input$resp_view_hist) || is.null(m) || !nzchar(m) || is.null(d)) return(NULL)
-  if (is.null(sc) || !nzchar(sc)) sc <- "hindcast"
+  if (is.null(sc) || !nzchar(sc) || sc == "hindcast") sc <- "historical"
   ed <- .esp_scen_dir(m, sc)
   key <- paste(m, sc, d, file.mtime(file.path(ed, "ecospace_driver_index.csv")), sep = "|")   # new maps: read again
   if (!is.null(.resp_hist_cache[[key]])) return(.resp_hist_cache[[key]])
   f <- file.path(.resp_dir(), "ecospace_driver_distribution.csv")
-  h <- if (sc == "hindcast" && file.exists(f)) tryCatch(fread(f)[Driver == d & base_map == m], error = function(e) NULL) else NULL
+  h <- if (sc == "historical" && file.exists(f)) tryCatch(fread(f)[Driver == d & base_map == m], error = function(e) NULL) else NULL
   if (is.null(h) || !nrow(h)) h <- tryCatch({
     x <- if (d == "depth") {
       v <- terra::values(terra::rast(file.path(ed, "depth_used.asc")), mat = FALSE); abs(v[is.finite(v) & v != 0])
@@ -434,7 +444,7 @@ observe({
     if (length(x) < 2) NULL else {
       br <- pretty(range(x), 40); hh <- graphics::hist(x, breaks = br, plot = FALSE)
       data.table::data.table(Driver = d, bin_lo = head(br, -1), bin_hi = br[-1], n = hh$counts, share = hh$counts / sum(hh$counts),
-                             base_map = if (sc == "hindcast") m else paste0(m, ", ", .esp_scen_label[[sc]]))
+                             base_map = if (sc == "historical") m else paste0(m, ", ", .esp_scen_label[[sc]]))
     }
   }, error = function(e) NULL)
   .resp_hist_cache[[key]] <- h

@@ -50,7 +50,12 @@
 ##      months; NPP mean daily rate).
 ##
 ## OUTPUT (out_dir/environment/ecospace_drivers/<base map name>/)
-##   <var>/<var>_<YYYY>_<MM>.asc   same ncols, nrows, corner and cell size as
+##   historical/                    the Copernicus hindcast of 05, and one
+##   ssp126/, ssp370/, ...          folder per climate scenario of 05s, each with
+##     sst/ sbt/ sss/ pp/ phyc/     one folder per driver (surface and bottom
+##                                  temperature, surface salinity, NPP,
+##                                  phytoplankton carbon):
+##     <drv>/<drv>_<YYYY>_<MM>.asc  same ncols, nrows, corner and cell size as
 ##                                  the depth file, NODATA -9999
 ##   ecospace_driver_index.csv      variable, unit, time_step (1 = first
 ##                                  month), year, month, file, water cells,
@@ -59,9 +64,8 @@
 ##   ecospace_driver_mean_maps.png  mean map of each variable (check)
 ##   depth_used.asc                 the base map (depth > 0 = water; land 0) - the
 ##                                  Ecospace depth map to use with these drivers
-##   scenarios/<scenario>/          the same maps for each climate scenario of
-##                                  05s (environment/scenarios/<scenario>/),
-##                                  every year it covers, with its own index
+##   (each folder also has its ecospace_driver_index.csv, check figure and a
+##    copy of depth_used.asc)
 ## =================================================================
 
 suppressPackageStartupMessages({ library(data.table); library(terra) })
@@ -93,6 +97,9 @@ if (!exists("out_dir", envir = .GlobalEnv, inherits = FALSE) || !exists("pcloud_
 .esp_default("ECOSPACE_ENV_DIR", file.path(out_dir, "environment"))       # where 05 wrote <var>_monthly_native.tif
 
 .esp_units <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", npp = "g C m-2 d-1", phyto_c = "g C m-2")
+## folder and file names of the drivers in the Ecospace maps
+.esp_folder <- c(temp_surf = "sst", temp_bot = "sbt", sal_surf = "sss", npp = "pp", phyto_c = "phyc")
+.esp_folder_of <- function(v) if (v %in% names(.esp_folder)) .esp_folder[[v]] else v
 .esp_msg <- function(...) message(...)
 
 ## --- Native maps from 05 -------------------------------------------------
@@ -218,7 +225,8 @@ for (v in vars) {
   steps <- if (identical(ECOSPACE_DRIVER_STEP, "annual")) {
     lapply(sort(unique(yrs[keep])), function(y) list(y = y, m = NA_integer_, k = which(keep & yrs == y)))
   } else lapply(which(keep), function(k) list(y = yrs[k], m = mos[k], k = k))
-  vdir <- file.path(out_d, v); dir.create(vdir, showWarnings = FALSE)
+  vf <- .esp_folder_of(v)
+  vdir <- file.path(out_d, vf); dir.create(vdir, showWarnings = FALSE)
   acc <- NULL
   for (i in seq_along(steps)) {
     s <- steps[[i]]
@@ -227,11 +235,11 @@ for (v in vars) {
     fl <- .fill_coast(a, ECOSPACE_FILL_PASSES)
     a <- fl$r
     if (is.finite(rel_den) && rel_den != 0) a <- a / rel_den
-    fn <- if (is.na(s$m)) sprintf("%s_%d.asc", v, s$y) else sprintf("%s_%d_%02d.asc", v, s$y, s$m)
+    fn <- if (is.na(s$m)) sprintf("%s_%d.asc", vf, s$y) else sprintf("%s_%d_%02d.asc", vf, s$y, s$m)
     .write_asc(a, file.path(vdir, fn))
     st <- terra::global(a, c("mean", "min", "max"), na.rm = TRUE)
     index[[length(index) + 1]] <- data.table(variable = v, unit = if (is.finite(rel_den)) paste0("relative to ", ENV_BASE_YEAR, " (map mean = 1)") else .esp_units[[v]],
-                                             time_step = i, year = s$y, month = s$m, file = file.path(v, fn), water_cells = n_water,
+                                             time_step = i, year = s$y, month = s$m, file = file.path(vf, fn), water_cells = n_water,
                                              filled_from_neighbours = fl$n_fill, filled_with_map_mean = fl$n_mean,
                                              mean = st$mean, min = st$min, max = st$max)
     acc <- if (is.null(acc)) a else acc + a
@@ -258,18 +266,23 @@ tryCatch({
 invisible(index)
 }
 
-## hindcast (05)
-index <- .esp_make(.native, esp_dir, ECOSPACE_DRIVER_YEARS)
+## Layout: <base map>/historical/ (Copernicus hindcast of 05) and one
+## folder per climate scenario of 05s (<base map>/ssp126/, ...), each with
+## a folder per driver (sst, sbt, sss, pp, phyc), its own index and a copy
+## of depth_used.asc, so each loads on its own in Ecospace.
+unlink(file.path(esp_dir, c(vars, "scenarios")), recursive = TRUE)                  # older layouts
+unlink(file.path(esp_dir, c("ecospace_driver_index.csv", "ecospace_driver_mean_maps.png")))
+index <- .esp_make(.native, file.path(esp_dir, "historical"), ECOSPACE_DRIVER_YEARS, label = "historical ")
+file.copy(file.path(esp_dir, "depth_used.asc"), file.path(esp_dir, "historical", "depth_used.asc"), overwrite = TRUE)
 
 ## climate scenarios (05s): <env>/scenarios/<scenario>/<var>_monthly_native.tif
-## -> <base map>/scenarios/<scenario>/ (same layout and index, every year;
-## depth_used.asc copied so each folder loads on its own in Ecospace)
+## -> <base map>/<scenario>/ (same layout and index, every year it covers)
 .scn_dirs <- list.dirs(file.path(.env_dirs[1], "scenarios"), recursive = FALSE)
 for (sd in .scn_dirs) {
   sc <- basename(sd)
   nat <- function(v) { f <- file.path(sd, paste0(v, "_monthly_native.tif")); if (file.exists(f)) f else NA_character_ }
   if (all(is.na(vapply(vars, nat, "")))) next
-  od <- file.path(esp_dir, "scenarios", sc)
+  od <- file.path(esp_dir, sc)
   tryCatch({
     .esp_make(nat, od, NULL, label = paste0(sc, " "))
     file.copy(file.path(esp_dir, "depth_used.asc"), file.path(od, "depth_used.asc"), overwrite = TRUE)
