@@ -191,7 +191,14 @@ ewe_tables <- function(wb_path, dec = ",", fleet_cost_file = NULL) {
   }
   dd <- data.frame(a = as.character(fg$FG_num), b = fg$FG_name, stringsAsFactors = FALSE)
   for (j in seq_along(pred)) dd[[as.character(pred[j])]] <- ifelse(is.finite(D[, j]) & D[, j] > 0, .ewe_num(D[, j], dec), "")
-  imp <- rep(0, length(pred)); sm <- colSums(D, na.rm = TRUE)
+  imp <- rep(0, length(pred))
+  if (!is.null(dm) && "Prey_FG_num" %in% names(dm) && any(dm$Prey_FG_num %in% "Import")) {   # Import row (dietcalcR)
+    pc <- grep("^Predator_", names(dm), value = TRUE); pnum <- suppressWarnings(as.integer(sub("^Predator_([0-9]+)_.*$", "\\1", pc)))
+    ir <- which(dm$Prey_FG_num %in% "Import")[1]
+    for (j in seq_along(pred)) { k <- which(pnum == pred[j]); if (length(k)) imp[j] <- suppressWarnings(as.numeric(dm[[pc[k[1]]]][ir])) }
+    imp[!is.finite(imp)] <- 0
+  }
+  sm <- colSums(D, na.rm = TRUE) + imp
   tail3 <- data.frame(a = c("", "", ""), b = c("Import", "Sum", "(1 - Sum)"), stringsAsFactors = FALSE)
   for (j in seq_along(pred)) tail3[[as.character(pred[j])]] <- .ewe_fix(round(c(imp[j], sm[j], 1 - sm[j]), 3) + 0, 3, dec)
   dd <- rbind(dd, tail3); names(dd)[1:2] <- c("", "Prey \\ predator")

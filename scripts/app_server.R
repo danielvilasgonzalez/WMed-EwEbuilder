@@ -1594,8 +1594,11 @@ output$diet_view_plot <- renderPlot({
 
 ## --- dietcalcR outputs (Diet explorer, mode "dc"): the tables of diet/dietcalc/
 .dc_files <- c(pedigree = "dietcalc_diet_pedigree.csv", coverage = "dietcalc_coverage_REVIEW.csv", matching = "dietcalc_species_matching.csv",
-               selected = "dietcalc_selected_studies.csv", study_scores = "dietcalc_study_scores.csv", record_scores = "dietcalc_record_scores.csv",
-               merged = "dietcalc_selection_diets_merged.csv", ewe_table = "dietcalc_ewe_diet_table.csv", mismatch = "dietcalc_fg_vs_01_biomass_REVIEW.csv")
+               studies = "01_studies_table.csv", record_scores = "02_diets_table.csv", fgs = "03_functional_groups_table.csv",
+               consumers = "04_consumers_table.csv", ewe_matrix = "05_ewe_diet_matrix.csv", ewe_pedigree = "06_ewe_diet_pedigree.csv",
+               ewe_table = "07_ewe_diet_table.csv", colsums = "08_ewe_matrix_column_sums_verification.csv",
+               selected = "dietcalc_selected_studies.csv", study_scores = "dietcalc_study_scores.csv",
+               merged = "dietcalc_selection_diets_merged.csv", mismatch = "dietcalc_fg_vs_01_biomass_REVIEW.csv")
 .dc_dir <- function() file.path(.out_dir, "diet", "dietcalc")
 .dc_tab <- reactive({
   run_state(); w <- input$diet_dc_what
@@ -1613,7 +1616,7 @@ observe({
 .dc_filtered <- reactive({
   x <- .dc_tab(); g <- input$diet_dc_fg
   if (is.null(x) || is.null(g) || !nzchar(g)) return(x)
-  fgc <- intersect(c("FG_name", "predator_FG", "FG_app", "PredatorFG", "Consumer"), names(x))
+  fgc <- intersect(c("FG_name", "predator_FG", "FG_app", "PredatorFG", "Consumer", "consumer_FG", "functional_group", "Name"), names(x))
   if (!length(fgc)) return(x)
   keep <- Reduce(`|`, lapply(fgc, function(cc) { v <- as.character(x[[cc]]); !is.na(v) & (v == g | grepl(paste0("(^| \\| )", gsub("([][{}()+*^$.|?\\\\])", "\\\\\\1", g), "( \\| |$)"), v)) }))
   x[keep, , drop = FALSE]

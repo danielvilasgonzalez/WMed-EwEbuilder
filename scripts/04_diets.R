@@ -1147,7 +1147,8 @@ export_ewe_matrix_csv <- function(fg_diet, group_table, out_path) {
   }
   
   col_sums <- vapply(predators$group_name, function(pfg) sum(fg_diet[predator_fg == pfg]$weight), numeric(1))
-  lines <- c(lines, paste(c("Import", vapply(rep(0, length(col_sums)), fmt, "")), collapse = ","))
+  imp_vals <- vapply(predators$group_name, function(pfg) sum(fg_diet[predator_fg == pfg & prey_fg == "Import"]$weight), numeric(1))
+  lines <- c(lines, paste(c("Import", vapply(imp_vals, fmt, "")), collapse = ","))
   lines <- c(lines, paste(c("Sum",    vapply(col_sums, fmt, "")), collapse = ","))
   lines <- c(lines, paste(c("1-Sum",  vapply(1 - col_sums, fmt, "")), collapse = ","))
   
@@ -1175,6 +1176,16 @@ build_ecopath_diet_sheet <- function(fg_diet, group_table) {
       if (nrow(hit) == 0) 0 else round(hit$weight[1], 6)
     }, numeric(1))
     out[, (paste0("Predator_", pnum, "_", gsub("[^A-Za-z0-9]+", "", pname))) := vals]
+  }
+  ## EwE Import row (share of prey from outside the model, from dietcalcR)
+  if (nrow(fg_diet[prey_fg == "Import"])) {
+    imp <- data.table(Prey_FG_num = "Import", Prey_FG_name = "Import")
+    for (i in seq_len(nrow(predators))) {
+      pname <- predators$group_name[i]
+      imp[, (paste0("Predator_", predators$group_number[i], "_", gsub("[^A-Za-z0-9]+", "", pname))) :=
+            round(sum(fg_diet[predator_fg == pname & prey_fg == "Import"]$weight), 6)]
+    }
+    out <- rbind(out[, Prey_FG_num := as.character(Prey_FG_num)], imp)
   }
   out[]
 }
@@ -1539,12 +1550,19 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
       ## names added): matching, scores, selection, merged diets, EwE tables
       .dcw <- function(x, f) if (!is.null(x) && NROW(x)) fwrite(x, file.path(.dcd, f))
       .dcw(dc_res$species_match, "dietcalc_species_matching.csv")
-      .dcw(dc_res$records, "dietcalc_record_scores.csv")
+      ## the tables of dietcalcR's workflow (inst/examples/01_full_workflow.R), same numbers and names
+      .dcw(dc_res$studies_prey, "01_studies_table.csv")
+      .dcw(dc_res$records, "02_diets_table.csv")
+      .dcw(dc_res$functional_groups, "03_functional_groups_table.csv")
+      .dcw(dc_res$consumers, "04_consumers_table.csv")
+      .dcw(dc_res$ewe_diet_matrix, "05_ewe_diet_matrix.csv")
+      .dcw(dc_res$ewe_diet_pedigree, "06_ewe_diet_pedigree.csv")
+      .dcw(dc_res$ewe_diet_table, "07_ewe_diet_table.csv")
+      .dcw(dc_res$column_sums, "08_ewe_matrix_column_sums_verification.csv")
+      ## and the other steps: study scores, selected studies, merged diets; pedigree by FG name (06 diagnostics)
       .dcw(dc_res$study_scores, "dietcalc_study_scores.csv")
       .dcw(dc_res$studies, "dietcalc_selected_studies.csv")
       .dcw(dc_res$diets_merged, "dietcalc_selection_diets_merged.csv")
-      .dcw(dc_res$ewe_diet_table, "dietcalc_ewe_diet_table.csv")
-      .dcw(dc_res$ewe_diet_matrix, "dietcalc_ewe_diet_matrix.csv")
       .dcw(dc_res$pedigree, "dietcalc_diet_pedigree.csv")
       tryCatch({
         .pp <- dc_res$project; .dcx <- dc_res$dc; .in <- dc_res$inputs
@@ -1569,7 +1587,6 @@ run_pipeline <- function(metaweb_path = METAWEB_XLSX_PATH,
       fg_diet <- rbind(fg_diet[!predator_fg %in% dietcalc_fgs], dc_res$fg_diet, fill = TRUE)
       predator_fg_still_missing <- setdiff(predator_fg_still_missing, dietcalc_fgs)
       fwrite(dc_res$fg_diet, file.path(.dcd, "dietcalc_fg_diet.csv"))
-      tryCatch(fwrite(build_ecopath_diet_sheet(dc_res$fg_diet, group_table), file.path(.dcd, "diet_matrix_dietcalc.csv")), error = function(e) NULL)
       message("[04_diets.R] dietcalcR diets used for ", length(dietcalc_fgs), " predator FG(s); the pipeline tiers kept for the other ",
               length(setdiff(predator_fg_names_all, dietcalc_fgs)), " (diet/dietcalc/).")
     }
