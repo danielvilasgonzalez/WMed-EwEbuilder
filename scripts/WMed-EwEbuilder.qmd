@@ -2579,30 +2579,110 @@ wm_figure("fig-environment", r"---(Environment of the model area over the run's 
 
 ### Climate scenarios of the drivers (`05s_environment_scenarios.R`)
 
-With `ENV_SCENARIOS` (card 5), the end of 05 continues the drivers
-(surface and bottom temperature, surface salinity, NPP) to
-`ENV_SCEN_END` (default 2050) under the chosen SSP scenarios. The
-source is ISIMIP3b [@frieler2024isimip]: the CMIP6 models GFDL-ESM4 and
-IPSL-CM6A-LR, historical (1850–2014) joined to each SSP (2015–2100),
-monthly at 1°; only the model-area box is downloaded when the ISIMIP
-files service can cut it out. The change of the models is added to the
-hindcast with the delta (change-factor) method [@lange2019basd]: for
-year $y$ and month $m$,
+**What they are for.** The hindcast of 05 describes the environment the
+model was built in (Copernicus, 1995 to the last year available). The
+scenarios continue the same drivers into the future, so the fitted
+Ecosim model can be run forward (forcing functions) and Ecospace can
+redistribute the groups as their habitat changes (driver maps). They
+answer "what if the environment changes like this", not "what will
+happen": each scenario is one plausible path of greenhouse-gas emissions
+and socio-economic development.
+
+**The scenarios.** The Shared Socioeconomic Pathways (SSPs) of CMIP6
+[@oneill2016scenariomip] combine a narrative of development with the
+radiative forcing reached in 2100 (the number after the dot, W m⁻²):
+
+| Scenario | Path | Global warming by 2100 (best estimate) |
+|----------|------|-----------------------------------------|
+| SSP1-2.6 | sustainability, strong mitigation, net-zero CO₂ after 2050 | about 1.8 °C |
+| SSP2-4.5 | middle of the road, current policies roughly | about 2.7 °C |
+| SSP3-7.0 | regional rivalry, high emissions | about 3.6 °C |
+| SSP5-8.5 | fossil-fuelled development, very high emissions | about 4.4 °C |
+
+Warming values are the IPCC AR6 assessed best estimates for 2081–2100
+relative to 1850–1900 [@ipcc2021spm]. Up to 2050 (the default
+`ENV_SCEN_END`) the scenarios differ less than at the end of the
+century: most of the warming until then is already committed, so the
+spread between them grows mainly after 2050.
+
+**The climate models.** The future comes from ISIMIP3b
+[@frieler2024isimip], which provides the CMIP6 Earth system models
+GFDL-ESM4 and IPSL-CM6A-LR on a common 1° grid, monthly, for the
+historical period (1850–2014) and each SSP (2015–2100). Both models
+also simulate primary production (NPP), not only physics. They bracket
+the CMIP6 range: GFDL-ESM4 warms less, IPSL-CM6A-LR more, so their mean
+is a central estimate and their difference a first measure of model
+uncertainty. ISIMIP3b provides SSP1-2.6, SSP3-7.0 and SSP5-8.5; SSP2-4.5
+is made only if its files exist (the 05 log says so).
+
+**Method (delta or change-factor method).** A 1° global model does not
+represent the Mediterranean as well as the Copernicus reanalyses
+(coastline, shelf, bottom temperature, local productivity). So the model
+values are not used directly: only their change is. For year $y$ and
+month $m$,
 
 $$X(y,m) = \overline{H}_R(m) + \big(G(y,m) - \overline{G}_R(m)\big)$$
 
 for temperature and salinity, and
 $X(y,m) = \overline{H}_R(m)\,G(y,m)/\overline{G}_R(m)$ (held to
-$[1/4, 4]$) for NPP, where $H$ is the Copernicus hindcast of 05, $G$ the
-mean change of the two models regridded to the 05 grid, and $R$ the
-reference period 1995–2014. The scenarios keep the hindcast's level,
-spatial pattern and seasonal cycle and take the trend and year-to-year
-change of the climate models. ISIMIP3b has SSP1-2.6, SSP3-7.0 and
-SSP5-8.5; a scenario without files (SSP2-4.5 for most models) is
-reported and skipped. Outputs in `environment/scenarios/<scenario>/`:
-monthly maps, the Ecosim forcing series (hindcast + scenario, relative
-to the Ecopath year) and the area means of every scenario; 05b then
-writes their Ecospace maps in `<base map>/<scenario>/`, next to `<base map>/historical/`.
+$[1/4, 4]$) for NPP [@lange2019basd]. $H$ is the Copernicus hindcast of
+05, $\overline{H}_R(m)$ its mean for month $m$ over the reference period
+$R$ (the last 20 complete years of the hindcast, e.g. 2004–2023;
+`ENV_SCEN_REF_YEARS`), $G$ the climate model field (historical run, then
+the SSP after 2014) and $\overline{G}_R(m)$ its mean over the same
+period; the change is the mean of the two models, smoothed with an
+11-year running mean for each calendar month (`ENV_SCEN_SMOOTH_YEARS`)
+and regridded to the 05 grid. A recent reference period matters: the
+Mediterranean warmed faster than the two models between 1995–2014 and
+the early 2020s, so anchoring on 1995–2014 started the scenarios about
+0.6–1 °C below the last observed years. The running mean removes the
+year-to-year noise of the two model runs (which can otherwise put
+SSP5-8.5 below SSP1-2.6 in a given year), keeping their trend and the
+change of the seasonal cycle. The result keeps the level, spatial pattern
+and seasonal cycle of the recent hindcast and adds the climate models'
+change; the scenarios start the year after the last hindcast year, so
+historical and future join in one series. Up to 2050 the SSPs differ by
+a few tenths of a degree in the Mediterranean surface temperature; the
+difference grows after 2050.
+
+**Limits to keep in mind.**
+
+- The spatial pattern of the change comes from 1° models (about 100 km):
+  coastal and shelf details of the future change are smoothed; the
+  hindcast pattern itself is kept at full resolution.
+- Bias in the models' seasonal cycle is removed with the monthly mean
+  of the reference period, but not changes in variability or extremes
+  (marine heatwaves are not shifted more than the mean).
+- Two models only; the scenario spread is not the full CMIP6 spread.
+- NPP changes are more uncertain than temperature changes (the two
+  models can disagree in sign in the Mediterranean); the ratio is held
+  to $[1/4, 4]$.
+- Salinity in ISIMIP3b is the surface value of the ocean model; the
+  Mediterranean's salinity trend depends on Atlantic inflow and river
+  runoff, which 1° models represent coarsely.
+
+**Outputs.** In `environment/scenarios/<scenario>/`: the monthly maps
+(same grid as 05) and the Ecosim forcing series of every driver
+(`ecosim_forcing_<driver>_monthly.csv` and `_annual.csv`: the hindcast
+months followed by the scenario's, relative to the Ecopath year = 1, as
+the hindcast forcing of 05). In `environment/scenarios/`: the area means
+of every scenario (`environment_scenarios_monthly.csv`, `_annual.csv`)
+and the models used (`environment_scenarios_models.csv`); the figure
+`plots/environment/environment_scenarios.png`. 05b then writes the
+Ecospace maps of each scenario in `<base map>/<scenario>/`, next to
+`<base map>/historical/`, each with the folders `sst`, `sbt`, `sss`, `pp`.
+
+**Using them in EwE.** Ecosim: load the scenario's forcing files as
+forcing functions (Ecosim → Input → Forcing functions) and link them to
+the groups' responses as for the hindcast; the series start at the same
+time step as the hindcast, so a run from the Ecopath year continues into
+the scenario. Ecospace: point the spatial-temporal data framework to the
+scenario's folder (e.g. `ssp585/`) instead of `historical/`; the maps
+have the same grid, so the habitat capacity response functions (05c)
+apply unchanged. In the page, the Ecospace maps explorer shows each
+scenario's maps and the hindcast-to-scenario series, and the Responses
+explorer draws the scenario's values (red) over the historical ones
+(grey) under each response function.
 
 ### Ecospace driver maps (`05b_ecospace_drivers.R`)
 

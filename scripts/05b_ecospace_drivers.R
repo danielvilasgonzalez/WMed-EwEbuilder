@@ -277,7 +277,10 @@ file.copy(file.path(esp_dir, "depth_used.asc"), file.path(esp_dir, "historical",
 
 ## climate scenarios (05s): <env>/scenarios/<scenario>/<var>_monthly_native.tif
 ## -> <base map>/<scenario>/ (same layout and index, every year it covers)
+## Only the scenarios asked for in this run (ENV_SCENARIOS; none = historical only)
+.scn_want <- tolower(gsub("[^a-z0-9]", "", tolower(get0("ENV_SCENARIOS", envir = .GlobalEnv, ifnotfound = character(0)))))
 .scn_dirs <- list.dirs(file.path(.env_dirs[1], "scenarios"), recursive = FALSE)
+.scn_dirs <- .scn_dirs[basename(.scn_dirs) %in% .scn_want]
 for (sd in .scn_dirs) {
   sc <- basename(sd)
   nat <- function(v) { f <- file.path(sd, paste0(v, "_monthly_native.tif")); if (file.exists(f)) f else NA_character_ }

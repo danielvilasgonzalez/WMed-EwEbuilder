@@ -8125,6 +8125,31 @@ tryCatch({
   src <- list()
   if (nrow(effort_by_fleettype_eu3) > 0 && "Effort_days" %in% names(effort_by_fleettype_eu3)) {
     e3 <- copy(effort_by_fleettype_eu3)
+    ## (a) Years whose fleet-type mix is an artefact of the source: the
+    ## first year of the Rousseau et al. series puts 10-50 % of a country's
+    ## effort in "Unclassified" (other years: ~1-10 %) and moves effort
+    ## between fleet types, while the country total stays in line. When the
+    ## Unclassified share u_y > max(3 x median_y u, 0.10), that year keeps
+    ## its country total and takes the fleet-type mix (mean share) of the
+    ## two nearest years without the artefact.
+    e3[, unc := grepl("unclassified", FleetType, ignore.case = TRUE)]
+    .sh <- e3[is.finite(Effort_days), .(u = sum(Effort_days[unc]) / sum(Effort_days), tot = sum(Effort_days)), by = .(Country, Year)]
+    .sh[, bad := u > pmax(3 * median(u, na.rm = TRUE), 0.10), by = Country]
+    .fix <- list()
+    for (k in which(.sh$bad)) {
+      cc <- .sh$Country[k]; yy <- .sh$Year[k]
+      ok <- .sh[Country == cc & !bad]; if (!nrow(ok)) next
+      ny <- ok$Year[order(abs(ok$Year - yy))][1:min(2, nrow(ok))]
+      mix <- e3[Country == cc & Year %in% ny, .(f = sum(Effort_days, na.rm = TRUE)), by = .(Year, FleetType)][, f := f / sum(f), by = Year][, .(f = mean(f)), by = FleetType]
+      old_v <- e3[Country == cc & Year == yy, .(FleetType, before = Effort_days)]
+      e3[Country == cc & Year == yy, Effort_days := .sh$tot[k] * mix$f[match(FleetType, mix$FleetType)]]
+      e3[Country == cc & Year == yy & is.na(Effort_days), Effort_days := 0]
+      .fix[[length(.fix) + 1]] <- merge(old_v, e3[Country == cc & Year == yy, .(FleetType, after = Effort_days)], by = "FleetType")[
+        , `:=`(Country = cc, Year = yy, fix = paste0("fleet-type mix of ", paste(sort(ny), collapse = ", "), " (Unclassified ", round(100 * .sh$u[k]), " % of the effort)"))]
+    }
+    e3[, unc := NULL]
+    if (length(.fix)) message("[Effort] Fleet-type mix replaced in ", length(.fix), " country-year(s) with an Unclassified share far above the usual: ",
+                              paste(unique(rbindlist(.fix)[, paste(Country, Year)]), collapse = ", "), " (effort_cleaning_REVIEW.csv).")
     e3[, E := Effort_days * tech_creep_multiplier(Country, Year, if ("Sector" %in% names(e3)) Sector else NULL)]
     src$eu3 <- e3[, .(Country, src_fleet = FleetType, Sector = if ("Sector" %in% names(e3)) Sector else NA_character_, Year,
                       E, unit = "fishing days x creep", source = paste0("STECF FDI / hindcast (", effort_source, ")"))]
@@ -8157,6 +8182,40 @@ tryCatch({
     rev[is.na(EwE_fleet), EwE_fleet := "shared among the country's commercial fleets by catch"]
   }
   effort_ewe <- ef[, .(E = sum(E, na.rm = TRUE), unit = unit[1], source = paste(unique(source), collapse = " + ")), by = .(Fleet = EwE_fleet, Year)]
+  ## (b) Gaps in a fleet's series: a year with no effort or below
+  ## EFFORT_MIN_SHARE (5 %) of the fleet's median is a gap of the source
+  ## (FDI hides or leaves out small fleets: France purse seiners 0 from
+  ## 2018 while they land ~3 % of the model's catch), not a fleet that
+  ## stopped. Gaps are filled by linear interpolation between the years
+  ## with effort, ends held at the nearest year. A fleet with no Ecopath
+  ## catch keeps a constant effort (its index would only be noise).
+  if (!exists("EFFORT_MIN_SHARE")) EFFORT_MIN_SHARE <- 0.05
+  .has_c <- cw[w > 0, EwE_fleet]
+  .gap <- list()
+  effort_ewe <- rbindlist(lapply(split(effort_ewe, by = "Fleet"), function(z) {
+    z <- z[order(Year)]
+    if (!z$Fleet[1] %in% .has_c) {
+      if (any(z$E != 1)) .gap[[length(.gap) + 1]] <<- data.table(Fleet = z$Fleet[1], Year = NA_integer_, before = NA_real_, after = 1,
+                                                                 fix = "no Ecopath catch: constant effort")
+      return(z[, `:=`(E = 1, source = paste0(source, " (no Ecopath catch: constant)"))])
+    }
+    md <- stats::median(z$E[is.finite(z$E) & z$E > 0])
+    low <- !is.finite(z$E) | z$E < EFFORT_MIN_SHARE * md
+    if (any(low) && sum(!low) >= 2) {
+      new_e <- stats::approx(z$Year[!low], z$E[!low], xout = z$Year[low], rule = 2)$y
+      .gap[[length(.gap) + 1]] <<- data.table(Fleet = z$Fleet[1], Year = z$Year[low], before = z$E[low], after = new_e,
+                                              fix = paste0("gap (< ", 100 * EFFORT_MIN_SHARE, " % of the fleet's median): interpolated / held"))
+      z[low, E := new_e]
+    }
+    z
+  }), use.names = TRUE)
+  .clean <- rbindlist(c(if (exists(".fix")) lapply(.fix, function(f) f[, .(Fleet = paste(Country, FleetType), Year, before, after, fix)]), .gap), fill = TRUE)
+  if (nrow(.clean)) {
+    fwrite(.clean, file.path(csv_out_dir, "effort_cleaning_REVIEW.csv"))
+    message("[Effort] Gaps filled in ", .clean[grepl("^gap", fix), uniqueN(Fleet)], " fleet(s) (",
+            paste(unique(.clean[grepl("^gap", fix), Fleet]), collapse = ", "), "); constant effort for fleets without Ecopath catch: ",
+            paste(unique(.clean[grepl("^no Ecopath", fix), Fleet]), collapse = ", "), " (effort_cleaning_REVIEW.csv).")
+  }
   yrs <- sort(unique(effort_ewe$Year))
   if ("Recreational fisheries" %in% EWE_FLEETS && length(yrs))
     effort_ewe <- rbindlist(list(effort_ewe, data.table(Fleet = "Recreational fisheries", Year = yrs, E = 1, unit = "none",

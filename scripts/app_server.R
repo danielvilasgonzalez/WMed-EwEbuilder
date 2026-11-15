@@ -425,13 +425,14 @@ observe({
 })
 .resp_hist_cache <- new.env()
 ## all the values of a driver in one folder of maps (cached per folder, driver and date of its index)
-.resp_vals <- function(ed, d) {
-  key <- paste(ed, d, file.mtime(file.path(ed, "ecospace_driver_index.csv")), sep = "|")
+.resp_vals <- function(ed, d, last_n = NULL) {
+  key <- paste(ed, d, file.mtime(file.path(ed, "ecospace_driver_index.csv")), if (is.null(last_n)) "all" else last_n, sep = "|")
   if (!is.null(.resp_hist_cache[[key]])) return(.resp_hist_cache[[key]])
   x <- tryCatch(if (d == "depth") {
     v <- terra::values(terra::rast(file.path(ed, "depth_used.asc")), mat = FALSE); abs(v[is.finite(v) & v != 0])
   } else {
     ix <- fread(file.path(ed, "ecospace_driver_index.csv"))[variable == d]
+    if (!is.null(last_n) && nrow(ix)) ix <- ix[year > max(year) - last_n]
     if (!nrow(ix) || any(grepl("^relative", ix$unit))) numeric(0) else
       unlist(lapply(file.path(ed, ix$file), function(ff) if (file.exists(ff)) { v <- terra::values(terra::rast(ff), mat = FALSE); v[is.finite(v)] }))
   }, error = function(e) numeric(0))
@@ -444,14 +445,20 @@ observe({
   run_state(); m <- input$resp_view_map; d <- input$resp_view_drv; sc <- input$resp_view_scen
   if (!isTRUE(input$resp_view_hist) || is.null(m) || !nzchar(m) || is.null(d)) return(NULL)
   if (is.null(sc) || !nzchar(sc) || sc == "hindcast") sc <- "historical"
-  xh <- .resp_vals(.esp_scen_dir(m, "historical"), d)
-  xs <- if (sc != "historical" && d != "depth") .resp_vals(.esp_scen_dir(m, sc), d) else numeric(0)
+  ## with a scenario: the last 10 years of the historical maps against the
+  ## last 10 years of the scenario (the change shows; over all years the
+  ## seasonal range hides a shift of ~1 deg C); alone: every historical year
+  cmp <- sc != "historical" && d != "depth"
+  xh <- .resp_vals(.esp_scen_dir(m, "historical"), d, if (cmp) 10L else NULL)
+  xs <- if (cmp) .resp_vals(.esp_scen_dir(m, sc), d, 10L) else numeric(0)
   if (length(xh) < 2 && length(xs) < 2) return(NULL)
   br <- pretty(range(c(xh, xs)), 40)
   sh <- function(x) if (length(x) < 2) rep(NA_real_, length(br) - 1) else { n <- graphics::hist(x, breaks = br, plot = FALSE)$counts; n / sum(n) }
   h <- data.table::data.table(Driver = d, bin_lo = head(br, -1), bin_hi = br[-1], share = sh(xh), share_scen = sh(xs), base_map = m,
                               scen = if (length(xs) >= 2) sc else NA_character_)
-  if (length(xs) >= 2) attr(h, "years") <- tryCatch(range(fread(file.path(.esp_scen_dir(m, sc), "ecospace_driver_index.csv"))$year), error = function(e) NULL)
+  .yrs10 <- function(dd) tryCatch({ y <- range(fread(file.path(dd, "ecospace_driver_index.csv"))$year); c(max(y[1], y[2] - 9), y[2]) }, error = function(e) NULL)
+  if (length(xs) >= 2) { attr(h, "years") <- .yrs10(.esp_scen_dir(m, sc)); attr(h, "years_hist") <- .yrs10(.esp_scen_dir(m, "historical")) }
+  attr(h, "means") <- c(hist = if (length(xh)) mean(xh) else NA_real_, scen = if (length(xs)) mean(xs) else NA_real_)
   h
 })
 .resp_ncol <- 4L
@@ -482,14 +489,19 @@ output$resp_view_ui <- renderUI({
       mx <- max(c(h$share, h$share_scen), na.rm = TRUE)
       if (any(is.finite(h$share))) rect(h$bin_lo, 0, h$bin_hi, h$share / mx, col = "grey80", border = NA)
       if (any(is.finite(h$share_scen))) rect(h$bin_lo, 0, h$bin_hi, h$share_scen / mx, col = grDevices::adjustcolor("#d73027", 0.35), border = NA)
+      mm <- attr(h, "means")                                          # mean of each, as a dashed line
+      if (!is.null(mm) && is.finite(mm[["scen"]])) { abline(v = mm[["hist"]], col = "grey35", lty = 2, lwd = 1.5); abline(v = mm[["scen"]], col = "#d73027", lty = 2, lwd = 1.5) }
     }
     lines(q$x, q$y, col = "#1f77b4", lwd = 2.2)
     box()
   }
   hl <- if (!is.null(h) && nrow(h)) {
     yy <- attr(h, "years")
-    paste0("   grey: historical values in the Ecospace maps (", h$base_map[1], ")",
-           if (!is.na(h$scen[1])) paste0("; red: ", .esp_scen_label[[h$scen[1]]], if (length(yy)) paste0(" ", yy[1], "-", yy[2])) else "")
+    yh <- attr(h, "years_hist"); mm <- attr(h, "means")
+    if (!is.na(h$scen[1]))
+      paste0("   grey: historical ", if (length(yh)) paste0(yh[1], "-", yh[2]), ", red: ", .esp_scen_label[[h$scen[1]]], if (length(yy)) paste0(" ", yy[1], "-", yy[2]),
+             " (", h$base_map[1], "); dashed = means, change ", sprintf("%+.2f", mm[["scen"]] - mm[["hist"]]))
+    else paste0("   grey: historical values in the Ecospace maps (", h$base_map[1], ")")
   } else if (isTRUE(input$resp_view_hist)) "   (no Ecospace map values for this driver: run 05b with absolute values)" else ""
   mtext(paste0("Ecospace response functions (AquaMaps): ", drv_lab, hl),
         outer = TRUE, cex = 1.1, font = 2)
@@ -954,8 +966,8 @@ config_code <- reactive({
     if (!identical(input$esp_grid_mode, "file") && is.finite(as.numeric(input$esp_cell_arcmin)))
       sprintf("ECOSPACE_CELL_SIZE <- %s/60   # Ecospace base map at %s arc-min, depth from EMODnet (05b)", input$esp_cell_arcmin, input$esp_cell_arcmin),
     if (6 %in% steps_sel() && !is.null(input$esp_step)) sprintf("ECOSPACE_DRIVER_STEP <- \"%s\"", input$esp_step),
-    if (5 %in% steps_sel()) sprintf("ENV_SCENARIOS    <- c(%s)   # climate scenarios of the drivers (05s, ISIMIP3b)",
-                                     paste0("\"", input$env_scen, "\"", collapse = ", ")),
+    if (any(c(5, 6) %in% steps_sel())) sprintf("ENV_SCENARIOS    <- c(%s)   # climate scenarios of the drivers (05s, 05b; optional, none = historical only)",
+                                     if (length(input$env_scen)) paste0("\"", input$env_scen, "\"", collapse = ", ") else ""),
     if (5 %in% steps_sel() && length(input$env_scen) && !is.null(input$env_scen_end)) sprintf("ENV_SCEN_END     <- %d", as.integer(input$env_scen_end)),
     if (6 %in% steps_sel() && !is.null(input$esp_scaling)) sprintf("ECOSPACE_DRIVER_SCALING <- \"%s\"", input$esp_scaling),
     if (4 %in% steps_sel()) c(

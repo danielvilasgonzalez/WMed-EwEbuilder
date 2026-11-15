@@ -25,9 +25,13 @@
 ##   files (e.g. SSP2-4.5 for most models) is reported and skipped.
 ##
 ## METHOD (delta / change-factor method, per model, variable and month)
-##   Reference period R = ENV_SCEN_REF_YEARS that the hindcast covers
-##   (default 1995-2014, the overlap of the hindcast and the ISIMIP3b
-##   historical run).
+##   Reference period R = ENV_SCEN_REF_YEARS (default NULL = the last
+##   ENV_SCEN_REF_N = 20 years of the hindcast, e.g. 2004-2023). A recent
+##   reference makes the scenarios start from today's observed level: with
+##   1995-2014 the hindcast had already warmed ~1 deg C more by 2022-23
+##   than the climate models' change, so the scenarios started below the
+##   last observed years and barely rose above them by 2050. The models'
+##   values for the years after 2014 come from each SSP.
 ##   1. Model anomaly of each future month (year y, month m):
 ##        temperature, salinity: A(y,m) = G(y,m) - mean_R G(., m)
 ##        NPP:                   A(y,m) = G(y,m) / mean_R G(., m),
@@ -35,7 +39,13 @@
 ##      with G the model field (historical + SSP joined at 2014/2015).
 ##      Model cells next to the coast without values are filled from
 ##      their neighbours (3 x 3 mean, up to 5 passes).
-##   2. Ensemble: mean of the models' anomalies (NPP: mean ratio).
+##   2. Ensemble: mean of the models' anomalies (NPP: mean ratio), then
+##      smoothed along the years, each calendar month and cell apart, with
+##      a centred running mean of ENV_SCEN_SMOOTH_YEARS (11) years: two
+##      model runs carry their own year-to-year noise (one run's warm year
+##      can put SSP5-8.5 below SSP1-2.6 in a given year), so the scenario
+##      keeps the models' trend and seasonal change, not their noise.
+##      ENV_SCEN_SMOOTH_YEARS = 0 keeps every model year.
 ##   3. Regrid the anomaly to the 05 map grid (bilinear) and add it to
 ##      the hindcast climatology of that month over R (NPP: multiply):
 ##        X(y,m) = mean_R H(., m) + A(y,m)        (H = Copernicus hindcast)
@@ -71,7 +81,9 @@
 .scn_default("ENV_SCENARIOS", character(0))                       # e.g. c("ssp126", "ssp245", "ssp370", "ssp585")
 .scn_default("ENV_SCEN_END", 2050L)                               # last year of the scenarios
 .scn_default("ENV_SCEN_MODELS", c("GFDL-ESM4", "IPSL-CM6A-LR"))   # ISIMIP3b climate models
-.scn_default("ENV_SCEN_REF_YEARS", 1995:2014)                     # reference period of the delta method
+.scn_default("ENV_SCEN_REF_YEARS", NULL)                          # reference period of the delta method; NULL = the last ENV_SCEN_REF_N years of the hindcast
+.scn_default("ENV_SCEN_REF_N", 20L)
+.scn_default("ENV_SCEN_SMOOTH_YEARS", 11L)                        # running mean of the model change (years); 0 = none
 .scn_default("ENV_SCEN_VARS", c("temp_surf", "temp_bot", "sal_surf", "npp"))
 .scn_default("ENV_SCEN_RATIO_MAX", 4)                             # NPP change factor held to [1/4, 4]
 .scn_default("ISIMIP3B_CACHE_DIR", file.path(out_dir, "isimip3b_cache"))
@@ -188,7 +200,8 @@ if (!length(scn_vars)) {
   .scn_msg("No monthly maps of 05 to continue - scenarios skipped.")
 } else for (v in scn_vars) {
   H <- terra::rast(.scn_native(v)); hym <- .scn_ym(H)
-  ref <- intersect(ENV_SCEN_REF_YEARS, unique(hym$y))
+  full_y <- as.integer(names(which(table(hym$y) == 12)))           # complete hindcast years
+  ref <- if (is.null(ENV_SCEN_REF_YEARS)) utils::tail(sort(full_y), ENV_SCEN_REF_N) else intersect(ENV_SCEN_REF_YEARS, full_y)
   if (length(ref) < 5) { .scn_msg(v, ": the hindcast covers only ", length(ref), " year(s) of the reference period - skipped."); next }
   yrs_f <- (max(hym$y) + 1L):as.integer(ENV_SCEN_END)
   if (max(hym$y) >= ENV_SCEN_END) { .scn_msg(v, ": the hindcast already reaches ", ENV_SCEN_END, " - nothing to add."); next }
@@ -201,7 +214,9 @@ if (!length(scn_vars)) {
       if (is.null(Gh) || is.null(Gs)) next
       G <- c(Gh, Gs); g <- .scn_ym(G)
       Gclim <- lapply(1:12, function(m) terra::app(G[[which(g$y %in% ref & g$m == m)]], mean, na.rm = TRUE))
-      k <- which(g$y %in% yrs_f)
+      nsm <- max(0L, as.integer(ENV_SCEN_SMOOTH_YEARS)); half <- nsm %/% 2L
+      yrs_calc <- if (nsm > 1) (min(yrs_f) - half):(max(yrs_f) + half) else yrs_f   # a margin so the running mean is centred up to the last year
+      k <- which(g$y %in% yrs_calc)
       A <- terra::rast(lapply(k, function(i) {
         cl <- Gclim[[g$m[i]]]
         if (.scn_type[[v]] == "ratio") terra::clamp(G[[i]] / cl, 1 / ENV_SCEN_RATIO_MAX, ENV_SCEN_RATIO_MAX, values = TRUE) else G[[i]] - cl
@@ -215,6 +230,12 @@ if (!length(scn_vars)) {
       next
     }
     A <- if (length(anoms) == 1) anoms[[1]] else Reduce(`+`, anoms) / length(anoms)
+    if (nsm > 1) {                                                     # running mean per calendar month (model noise out, trend kept)
+      am <- as.integer(substr(names(A), 6, 7)); nm <- names(A)
+      for (m in 1:12) { kk <- which(am == m); if (length(kk) > 2) A[[kk]] <- terra::roll(A[[kk]], n = min(nsm, 2L * ((length(kk) - 1L) %/% 2L) + 1L), fun = "mean", type = "around", na.rm = TRUE) }
+      names(A) <- nm
+    }
+    A <- A[[which(as.integer(substr(names(A), 1, 4)) %in% yrs_f)]]
     A <- terra::resample(A, H[[1]], method = "bilinear")
     mo <- as.integer(substr(names(A), 6, 7))
     X <- if (.scn_type[[v]] == "ratio") A * Hclim[[mo]] else A + Hclim[[mo]]
