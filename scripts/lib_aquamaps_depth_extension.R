@@ -199,20 +199,26 @@ split_scientific_name <- function(scientific_name) {
   od <- get0("out_dir", envir = .GlobalEnv, ifnotfound = NA)
   c(if (!is.na(pc)) file.path(pc, "data", "aquamaps_cache"), if (!is.na(od)) file.path(od, "aquamaps_cache"))
 }
+## Read: the union of the cache files of every folder (the data folder is
+## a local copy that "Update local data" refreshes from the shared folder,
+## which would drop the names added on this computer; out_dir keeps them).
+## Write: to every folder that can be written.
 .am_cache_read <- function(name, chr_cols) {
-  for (d in .am_cache_dirs()) {
+  l <- lapply(.am_cache_dirs(), function(d) {
     f <- file.path(d, name)
-    if (file.exists(f)) return(tryCatch(fread(f, colClasses = list(character = chr_cols)), error = function(e) NULL))
-  }
-  NULL
+    if (file.exists(f)) tryCatch(fread(f, colClasses = list(character = chr_cols)), error = function(e) NULL) else NULL
+  })
+  l <- Filter(function(x) !is.null(x) && nrow(x), l)
+  if (!length(l)) return(NULL)
+  x <- rbindlist(l, use.names = TRUE, fill = TRUE)
+  key <- intersect(chr_cols, names(x)); if ("ScientificName" %in% key) key <- "ScientificName"   # one row per name
+  if (length(key)) unique(x, by = key) else unique(x)
 }
 .am_cache_write <- function(dt, name) {
-  for (d in .am_cache_dirs()) {
-    ok <- tryCatch({ dir.create(d, recursive = TRUE, showWarnings = FALSE); fwrite(dt, file.path(d, name)); TRUE },
-                   error = function(e) FALSE)
-    if (ok) return(invisible(TRUE))
-  }
-  invisible(FALSE)
+  ok <- vapply(.am_cache_dirs(), function(d)
+    tryCatch({ dir.create(d, recursive = TRUE, showWarnings = FALSE); fwrite(dt, file.path(d, name)); TRUE },
+             error = function(e) FALSE), logical(1))
+  invisible(any(ok))
 }
 .am_db_ready <- FALSE
 .am_need_db <- function() if (!isTRUE(.am_db_ready)) { ensure_aquamaps_db(); .am_db_ready <<- TRUE }
