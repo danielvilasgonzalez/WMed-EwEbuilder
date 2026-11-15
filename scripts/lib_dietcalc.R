@@ -38,9 +38,10 @@
 ##                        absent, the compatibility tables shipped with
 ##                        dietcalcR (dietcalc_toy) are used
 ##   DIETCALC_REGION      region of the model in the database's Region
-##                        table (default "Western Mediterranean Sea")
+##                        table; "auto" (default) = from the model area
+##                        of the page (MODEL_GSAS, .dietcalc_region_of_gsas())
 ##   DIETCALC_YEARS       model years for the time score (default the
-##                        Ecopath years)
+##                        Ecopath years of the page, YEAR_ECOPATH)
 ##   DIETCALC_NO_BIOMASS_PREY  prey with no FG of the model: "drop"
 ##                        (default; the column is renormalised), "imports"
 ## =================================================================
@@ -112,11 +113,27 @@
        methods = data.frame(method_code = 0:5, method_name = c("Unknown", "Stable isotopes", "Visual observations", "Stomach content", "Others", "Metabarcoding")))
 }
 
+## Region of the model in the diet database, from its GSAs (GFCM GSAs ->
+## the regions of the database's Region table, default_region_lookup()):
+## all GSAs in one sea -> that sea; else the Western Mediterranean (GSAs
+## 1-12), else the Mediterranean Sea. Fallbacks when a name is not in the
+## database's own Region table: the Western Mediterranean, then the
+## Mediterranean Sea.
+.dietcalc_region_of_gsas <- function(gsas) {
+  gsas <- suppressWarnings(as.integer(gsas)); gsas <- gsas[!is.na(gsas)]
+  sea <- c(`5` = "Balearic Sea", `6` = "Catalan Sea", `7` = "Lion Gulf", `9` = "Ligurian Sea", `10` = "Tyrrhenian Sea",
+           `17` = "Adriatic Sea", `18` = "Adriatic Sea", `19` = "Ionian Sea", `20` = "Ionian Sea", `22` = "Aegean Sea", `23` = "Aegean Sea")
+  if (!length(gsas)) return("Western Mediterranean Sea")
+  s <- unname(sea[as.character(gsas)])
+  if (!anyNA(s) && length(unique(s)) == 1) return(s[1])
+  if (all(gsas %in% 1:12)) "Western Mediterranean Sea" else "Mediterranean Sea"
+}
+
 dietcalc_fg_diet <- function(group_table, species_biomass, fg_species = NULL,
                              dietcalc_dir = get0("DIETCALC_DIR", ifnotfound = NULL),
                              db = get0("DIETCALC_DB", ifnotfound = NULL),
                              config_dir = get0("DIETCALC_CONFIG_DIR", ifnotfound = NULL),
-                             region = get0("DIETCALC_REGION", ifnotfound = "Western Mediterranean Sea"),
+                             region = get0("DIETCALC_REGION", ifnotfound = "auto"),
                              years = get0("DIETCALC_YEARS", ifnotfound = get0("YEAR_ECOPATH", ifnotfound = 1995)),
                              no_biomass_prey = get0("DIETCALC_NO_BIOMASS_PREY", ifnotfound = "drop")) {
   dc <- .dietcalc_env(dietcalc_dir)
@@ -144,7 +161,17 @@ dietcalc_fg_diet <- function(group_table, species_biomass, fg_species = NULL,
     region_lookup <- tryCatch(rd(dc$load_region_lookup), error = function(e) dc$default_region_lookup())
   }
   if (!nrow(diets)) stop("the diet database has no diet records yet (", basename(db), ").")
-  region_code <- dc$resolve_region_code(region, region_lookup)
+  if (is.null(region) || !nzchar(region) || identical(tolower(region), "auto")) {
+    region <- .dietcalc_region_of_gsas(get0("MODEL_GSAS", ifnotfound = NULL))
+    message("[dietcalc] Region from the model area (GSAs ", paste(get0("MODEL_GSAS", ifnotfound = "-"), collapse = ", "), "): ", region, ".")
+  }
+  region_code <- NA_integer_
+  for (rg in unique(c(region, "Western Mediterranean Sea", "Mediterranean Sea"))) {
+    region_code <- tryCatch(dc$resolve_region_code(rg, region_lookup), error = function(e) NA_integer_)
+    if (!is.na(region_code)) { if (rg != region) message("[dietcalc] '", region, "' is not in the database's Region table - using '", rg, "'."); region <- rg; break }
+  }
+  if (is.na(region_code)) stop("no region of the model in the database's Region table (", region, ").")
+  message("[dietcalc] Scenario from the page: FGs and species of the FG table, region ", region, ", years ", min(years), "-", max(years), ".")
   comp <- if (!is.null(config_dir) && !is.na(config_dir) && file.exists(file.path(config_dir, "RegionCompatibility.xlsx"))) {
     dc$load_config_xlsx(config_dir)
   } else if (exists("dietcalc_toy", envir = dc)) {
@@ -270,14 +297,18 @@ dietcalc_fg_diet <- function(group_table, species_biomass, fg_species = NULL,
   sm[is.na(n_diet_records), `:=`(n_diet_records = 0L, n_studies = 0L)]
   setcolorder(sm, c("FG_num", "FG_name", "Species", "species_code", "matched_by", "n_diet_records", "n_studies", "biomass", "biomass_from"))
   sm <- sm[order(FG_num, -n_diet_records, Species)]
-  m <- p$outputs$ewe_diet_matrix
-  if (is.null(m) || !ncol(m)) m <- matrix(numeric(0), 0, 0)
+  ## the FG diets as dietcalcR builds them for EwE (build_ewe_diet_matrix():
+  ## p$outputs$ewe_diet_table, columns summing to 1), taken as they are;
+  ## its Imports (and Others) rows are the EwE Import row
   nm <- setNames(gt$group_name, as.character(gt$group_number))
-  long <- if (length(m)) as.data.table(as.table(m))[N > 0] else data.table(V1 = character(0), V2 = character(0), N = numeric(0))
-  setnames(long, c("prey_code", "pred_code", "weight"))
-  long[, `:=`(predator_fg = unname(nm[pred_code]), prey_fg = fifelse(prey_code %in% names(nm), unname(nm[prey_code]), prey_code))]
-  long <- long[!is.na(predator_fg)]
-  long[, weight := weight / sum(weight), by = predator_fg]
+  et <- as.data.table(p$outputs$ewe_diet_table)
+  long <- if (nrow(et)) et[, .(predator_fg = unname(nm[as.character(Predator)]),
+                               prey_fg = fifelse(PreyFG %in% c("Imports", "Others") | !as.character(Prey) %in% names(nm), "Import", unname(nm[as.character(Prey)])),
+                               weight = as.numeric(Diet))][!is.na(predator_fg) & is.finite(weight) & weight > 0] else
+    data.table(predator_fg = character(0), prey_fg = character(0), weight = numeric(0))
+  long <- long[, .(weight = sum(weight)), by = .(predator_fg, prey_fg)]
+  if (long[prey_fg == "Import", .N]) message("[dietcalc] ", long[prey_fg == "Import", uniqueN(predator_fg)],
+                                             " predator FG(s) with an Import share (prey outside the model, DIETCALC_NO_BIOMASS_PREY = \"", no_biomass_prey, "\").")
   ped0 <- as.data.frame(p$outputs$ewe_diet_pedigree)
   ped <- if (!is.null(ped0) && nrow(ped0)) data.table(FG_num = as.integer(ped0[[1]]), FG_name = unname(gnm[as.character(ped0[[1]])]),
                                                     diet_pedigree = suppressWarnings(as.numeric(ped0[[3]])))[!is.na(FG_num)] else
@@ -307,7 +338,12 @@ dietcalc_fg_diet <- function(group_table, species_biomass, fg_species = NULL,
   list(fg_diet = long[, .(predator_fg, prey_fg, weight)], pedigree = ped, project = p, coverage = cov[order(FG_num)],
        records = lab(p$scores$record), studies = lab(p$selection$studies),
        study_scores = lab(p$scores$study), diets_merged = lab(p$selection$diets_merged),
-       ewe_diet_table = as.data.table(p$outputs$ewe_diet_table), ewe_diet_matrix = as.data.table(p$outputs$ewe_diet_matrix_table),
+       ewe_diet_table = as.data.table(p$outputs$ewe_diet_table), ewe_diet_matrix = as.data.frame(p$outputs$ewe_diet_matrix_table, check.names = FALSE),
+       ewe_diet_pedigree = as.data.frame(p$outputs$ewe_diet_pedigree, check.names = FALSE),
+       studies_prey = lab(p$selection$studies_prey), functional_groups = as.data.table(p$outputs$functional_groups_df),
+       consumers = as.data.table(p$outputs$consumers_df),
+       column_sums = if (!is.null(p$outputs$ewe_diet_matrix)) data.table(consumer = colnames(p$outputs$ewe_diet_matrix),
+                       consumer_FG = unname(nm[colnames(p$outputs$ewe_diet_matrix)]), diet_sum = as.numeric(colSums(p$outputs$ewe_diet_matrix, na.rm = TRUE))),
        species_match = sm, fg_mismatch = fg_mismatch, dc = dc,
        inputs = list(region = region, region_code = region_code, years = range(years), db = db, config_dir = config_dir,
                      diets = diets, biomass = bio, group_species = gs, groups = groups))
