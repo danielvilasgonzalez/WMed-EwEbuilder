@@ -2712,21 +2712,30 @@ adjustment follows the spatial pattern and the seasonal cycle:
    (trend-preserving scaling, as in ISIMIP3BASD [@lange2019basd]). With
    the 11-year running mean there is no model noise left to scale.
 3. *Continuity at the join* (`ENV_SCEN_JOIN`). Even after 1 and 2 the
-   last observed years can sit above or below the adjusted model for the
-   same years (a warm spell, or a trend in the hindcast faster than in
-   the models), which shows as a step between the historical series and
-   the scenario. The gap $D(m) = \overline{H} - \overline{X}$ over the last
-   five hindcast years (`ENV_SCEN_JOIN_YEARS`; NPP: the ratio) is added to
-   the scenario and fades linearly to zero over ten years
-   (`ENV_SCEN_BLEND_YEARS`; 0 keeps it for the whole scenario). The
-   scenario then starts where the hindcast ends and converges on the
-   models' change.
+   last observed year can sit above or below the adjusted model for the
+   same year, which shows as a step between the historical series and
+   the scenario. The gap $D(m) = H - X$ in the last hindcast year
+   (`ENV_SCEN_JOIN_YEARS` = 1; NPP: the ratio), per cell and month, is
+   split in two:
+   - a systematic part $D_s$ = hindcast trend line − model trend line
+     over $R$, both at that year (the observations warming faster or
+     slower than the models), kept for the whole scenario;
+   - the rest, $D - D_s$, that year's anomaly (e.g. the 2022–2023 marine
+     heatwaves), added with a weight falling linearly from 1 in the last
+     hindcast year to 0 ten years later (`ENV_SCEN_BLEND_YEARS`; 0 keeps
+     it for the whole scenario).
 
-The step left at the join (mean of the last five hindcast years vs the
-first five scenario years over the model area) is written to
+   The scenario therefore starts from the last hindcast year, keeps the
+   observed level of the trend and takes the models' change from there.
+   After an unusually warm last year the first scenario years can level
+   off or cool slightly while that anomaly fades, before the scenario
+   warming takes over (with the 1995–2023 hindcast: SST 20.28 °C in 2023; SSP5-8.5
+   20.23 in 2024, 20.14 in 2030 and 20.92 in 2050).
+
+The step left at the join (last hindcast year vs first scenario year,
+model-area mean) is written to
 `environment/scenarios/environment_scenarios_continuity.csv` and to the
-log; it should be close to the trend over five years (a few hundredths
-to a few tenths of a degree), not a jump.
+log; it should be a few hundredths of a degree, not a jump.
 
 **Limits to keep in mind.**
 

@@ -208,7 +208,7 @@ observe({
   hl <- if (!is.null(hab) && nrow(hab)) hab$layer else "depth"
   env_ch <- c("All environmental drivers" = "all", setNames(env, ifelse(is.na(.esp_lab[env]), env, .esp_lab[env])))
   hab_ch <- setNames(ifelse(hl == "depth", "depth", paste0("hab:", hl)), ifelse(is.na(.esp_hab_lab[hl]), hl, .esp_hab_lab[hl]))
-  ch <- list("Environmental drivers (spatio-temporal)" = env_ch, "Habitat drivers (static)" = hab_ch)
+  ch <- list("Environmental drivers (spatio-temporal)" = as.list(env_ch), "Habitat drivers (static)" = as.list(hab_ch))   # as.list: a one-item group stays a group
   updateSelectInput(session, "esp_view_var", choices = ch, selected = if (!is.null(cur) && cur %in% c(env_ch, hab_ch)) cur else "all")
 })
 output$esp_view_slider <- renderUI({

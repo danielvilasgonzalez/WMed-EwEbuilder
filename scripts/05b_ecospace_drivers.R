@@ -324,7 +324,7 @@ if (!exists("ECOSPACE_HABITAT_GDB")) ECOSPACE_HABITAT_GDB <- unique(c(   # first
 .hab_class_of <- function(code) {
   cc <- toupper(sub("[^A-Za-z0-9].*$", "", trimws(as.character(code))))
   out <- rep(NA_character_, length(cc))
-  out[grepl("^(MB252|MB5521|MB5534)", cc)] <- "seagrass"
+  out[grepl("^(MB252|MB5521|MB5534)", cc) & !grepl("^MB2523", cc)] <- "seagrass"   # MB2523 = dead Posidonia matte (biogenic, not seagrass)
   out[is.na(out) & grepl("^(MC151|MC251)", cc)] <- "coralligenous"
   dg <- substr(cc, 3, 3)
   lk <- c(`1` = "rock", `2` = "biogenic", `3` = "gravel", `4` = "mixed", `5` = "sand", `6` = "mud")
@@ -349,28 +349,34 @@ if (isTRUE(ECOSPACE_HABITAT)) tryCatch({
     .esp_msg("[05b] Habitat drivers: kept from the previous run (", hd, ").")
   } else {
     old_s2 <- sf::sf_use_s2(); suppressMessages(sf::sf_use_s2(FALSE)); on.exit(suppressMessages(sf::sf_use_s2(old_s2)), add = TRUE)
-    e <- terra::ext(depth)
-    bb <- sf::st_as_text(sf::st_as_sfc(sf::st_bbox(c(xmin = e[1], ymin = e[3], xmax = e[2], ymax = e[4]), crs = sf::st_crs(4326))))
+    e <- as.vector(terra::ext(terra::project(terra::as.polygons(terra::ext(depth), crs = terra::crs(depth)), "EPSG:4326")))   # xmin, xmax, ymin, ymax in lon/lat
+    bb <- sf::st_as_text(sf::st_as_sfc(sf::st_bbox(c(xmin = e[["xmin"]], ymin = e[["ymin"]], xmax = e[["xmax"]], ymax = e[["ymax"]]), crs = sf::st_crs(4326))))
     li <- sf::st_layers(gdb); k <- grep("eusea", li$name, ignore.case = TRUE)
     lay <- if (length(k)) li$name[k][which.max(li$features[k])] else li$name[which.max(li$features)]
-    flds <- names(sf::st_read(gdb, query = sprintf("SELECT * FROM \"%s\" WHERE FID = 1", lay), quiet = TRUE))
-    fld <- c(grep("^EUNIS2019C$", flds, value = TRUE, ignore.case = TRUE), grep("EUNIS2019", flds, value = TRUE, ignore.case = TRUE))[1]
-    if (is.na(fld)) stop("no EUNIS 2019 code field in ", lay, " (fields: ", paste(flds, collapse = ", "), ")")
-    .esp_msg("[05b] Habitat drivers: reading ", basename(gdb), " (layer ", lay, ", field ", fld, ") in the base map's box...")
-    hab <- sf::st_read(gdb, query = sprintf("SELECT %s FROM \"%s\"", fld, lay), wkt_filter = bb, quiet = TRUE)
-    hab <- sf::st_transform(hab[!sf::st_is_empty(hab), ], terra::crs(depth))
-    hab$cls <- .hab_class_of(hab[[fld]])
+    .esp_msg("[05b] Habitat drivers: reading ", basename(gdb), " (layer ", lay, ") in the base map's box...")
+    Sys.setenv(OGR_ORGANIZE_POLYGONS = "SKIP")                        # EUSeaMap polygons have many parts; skip GDAL's slow ring sorting
+    hab <- terra::vect(gdb, layer = lay, extent = terra::ext(e))
+    fld <- c(grep("^EUNIS2019C$", names(hab), value = TRUE, ignore.case = TRUE), grep("EUNIS2019", names(hab), value = TRUE, ignore.case = TRUE))[1]
+    if (is.na(fld)) stop("no EUNIS 2019 code field in ", lay, " (fields: ", paste(names(hab), collapse = ", "), ")")
+    hab$cls_id <- match(.hab_class_of(hab[[fld, drop = TRUE]]), .hab_classes)
+    hab <- hab[!is.na(hab$cls_id), "cls_id"]
+    ## class per fine cell (lon/lat, ~1/10 of the base map cell, at most 1 km), then the share of
+    ## each class in every base-map cell (average of 0/1 = proportion of the cell)
+    rl <- terra::res(terra::project(terra::rast(terra::ext(depth), ncols = terra::ncol(depth), nrows = terra::nrow(depth), crs = terra::crs(depth)), "EPSG:4326"))
+    fine <- terra::rast(terra::ext(e), res = max(1 / 120, min(rl) / 10), crs = "EPSG:4326")
+    fc <- terra::rasterize(hab, fine, field = "cls_id", touches = FALSE)
+    rm(hab); gc()
     cell_km2 <- terra::cellSize(depth, unit = "km")
     rows <- list(data.table(layer = "depth", file = "depth.asc", unit = "m", source = "Ecospace base map", water_cells = n_water,
                             cells_with_habitat = n_water, area_km2 = as.numeric(terra::global(terra::mask(cell_km2, water, maskvalues = c(NA, 0)), "sum", na.rm = TRUE)[1, 1])))
-    for (h in .hab_classes) {
-      sub <- hab[!is.na(hab$cls) & hab$cls == h, ]
-      r <- if (nrow(sub)) terra::rasterize(terra::vect(sf::st_make_valid(sub)), depth, cover = TRUE) else depth * 0
+    for (j in seq_along(.hab_classes)) {
+      h <- .hab_classes[j]
+      r <- terra::project(terra::ifel(is.na(fc), 0, fc == j), depth, method = "average")
       r <- terra::ifel(water, terra::ifel(is.na(r), 0, terra::clamp(r, 0, 1)), NA)
       .write_asc(r, file.path(hd, paste0(h, ".asc")))
       rows[[length(rows) + 1]] <- data.table(layer = h, file = paste0(h, ".asc"), unit = "proportion of the cell (0-1)",
-                                             source = paste0(sub("\\.gdb$", "", basename(gdb)), ", ", fld, " ", switch(h,
-                                               seagrass = "MB252/MB2522/MB5521/MB5534", coralligenous = "MC151/MC251",
+                                             source = paste0(sub("\\.(gdb|gpkg)$", "", basename(gdb)), ", ", fld, " ", switch(h,
+                                               seagrass = "MB252 (not MB2523 dead matte)/MB5521/MB5534", coralligenous = "MC151/MC251",
                                                rock = "M?1", biogenic = "M?2 (not seagrass)", gravel = "M?3 (coarse sediment)",
                                                mixed = "M?4", sand = "M?5", mud = "M?6")),
                                              water_cells = n_water, cells_with_habitat = as.integer(terra::global(r > 0, "sum", na.rm = TRUE)[1, 1]),

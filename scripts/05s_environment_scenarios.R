@@ -57,12 +57,18 @@
 ##         detrended year-to-year spread of A over R is scaled to that of
 ##         H (factor held to [1/ENV_SCEN_VAR_MAX, ENV_SCEN_VAR_MAX]); the
 ##         per-cell linear trend of A is kept (trend-preserving scaling).
-##      c. Continuity (ENV_SCEN_JOIN): D(m) = mean H - mean X over the
-##         last ENV_SCEN_JOIN_YEARS (5) hindcast years (NPP: ratio). D is
-##         added to the scenario and fades linearly to 0 over
-##         ENV_SCEN_BLEND_YEARS (10; 0 = kept throughout), so the scenario
-##         starts where the hindcast ends instead of with a step.
-##      The step left at the join (last 5 hindcast years vs first 5
+##      c. Continuity (ENV_SCEN_JOIN): D(m) = H - X in the last hindcast
+##         year (ENV_SCEN_JOIN_YEARS = 1; more years = their mean; NPP:
+##         ratio), per cell and month, split into a systematic part Ds =
+##         hindcast trend line - model trend line over R, at that year
+##         (the hindcast warming faster or slower than the models; kept
+##         for the whole scenario) and the rest D - Ds (that year's
+##         anomaly, e.g. a marine heatwave), whose weight falls linearly
+##         from 1 in the last hindcast year to 0 ENV_SCEN_BLEND_YEARS (10)
+##         later (0 = kept throughout). The scenario continues from the
+##         last hindcast year, keeps the observed level of the trend and
+##         takes the models' change from there.
+##      The step left at the join (last hindcast year(s) vs as many first
 ##      scenario years, model-area mean) is written to
 ##      environment_scenarios_continuity.csv and to the log.
 ##   Years: from the year after the hindcast to ENV_SCEN_END.
@@ -100,12 +106,12 @@
 .scn_default("ENV_SCEN_REF_N", 20L)
 .scn_default("ENV_SCEN_SMOOTH_YEARS", 11L)                        # running mean of the model change (years); 0 = none
 .scn_default("ENV_SCEN_VARS", c("temp_surf", "temp_bot", "sal_surf", "npp"))
-.scn_default("ENV_SCEN_RATIO_MAX", 4)
+.scn_default("ENV_SCEN_RATIO_MAX", 4)                            # NPP change factor held to [1/4, 4]
 .scn_default("ENV_SCEN_VAR_SCALE", TRUE)                         # scale the model's inter-annual spread to the hindcast (only when ENV_SCEN_SMOOTH_YEARS <= 1)
 .scn_default("ENV_SCEN_VAR_MAX", 2)                               # variance factor held to [1/2, 2]
 .scn_default("ENV_SCEN_JOIN", TRUE)                               # continuity adjustment at the hindcast -> scenario join
-.scn_default("ENV_SCEN_JOIN_YEARS", 5L)                           # last hindcast years the join is matched on
-.scn_default("ENV_SCEN_BLEND_YEARS", 10L)                         # years over which the join offset fades out; 0 = kept throughout                             # NPP change factor held to [1/4, 4]
+.scn_default("ENV_SCEN_JOIN_YEARS", 1L)                           # last hindcast years the join is matched on (1 = the scenario continues from the last hindcast year)
+.scn_default("ENV_SCEN_BLEND_YEARS", 10L)                         # years over which the join offset fades out; 0 = kept throughout
 .scn_default("ISIMIP3B_CACHE_DIR", file.path(out_dir, "isimip3b_cache"))
 .scn_default("ISIMIP_FILES_API", "https://files.isimip.org/api/v2")
 .scn_default("ISIMIP_FILES_URL", "https://files.isimip.org")
@@ -265,12 +271,14 @@ if (!length(scn_vars)) {
     ##                  Copernicus one (delta / mean scaling), so the model's bias cancels;
     ##  2 variability - (only without smoothing) the detrended year-to-year spread of the model over
     ##                  the reference years is scaled to the hindcast's; the per-cell trend is kept;
-    ##  3 continuity  - the gap between the last ENV_SCEN_JOIN_YEARS hindcast years and the adjusted
-    ##                  model over the same years is added to the scenario, fading to 0 over
-    ##                  ENV_SCEN_BLEND_YEARS (0 = kept throughout).
+    ##  3 continuity  - the gap between the last hindcast year (ENV_SCEN_JOIN_YEARS) and the adjusted
+    ##                  model in that year is split into a systematic part (hindcast trend line minus
+    ##                  model trend line over the reference years, at that year: kept) and the rest
+    ##                  (that year's weather: fades to 0 over ENV_SCEN_BLEND_YEARS; 0 = kept throughout).
     .trend <- function(Y, x) {                                         # per-row linear fit on x: list(fit, residual sd)
       xc <- x - mean(x); mu <- rowMeans(Y); b <- as.vector((Y - mu) %*% xc) / sum(xc^2)
-      fit <- mu + outer(b, xc); list(fit = fit, sd = sqrt(rowSums((Y - fit)^2) / max(1, length(x) - 2)))
+      fit <- mu + outer(b, xc)
+      list(fit = fit, sd = sqrt(rowSums((Y - fit)^2) / max(1, length(x) - 2)), at = function(x0) mu + b * (mean(x0) - mean(x)))
     }
     jy <- utils::tail(sort(intersect(full_y, ay)), ENV_SCEN_JOIN_YEARS)
     do_var <- isTRUE(ENV_SCEN_VAR_SCALE) && nsm <= 1 && !ratio
@@ -295,13 +303,20 @@ if (!length(scn_vars)) {
       if (isTRUE(ENV_SCEN_JOIN) && length(jy)) {
         hm <- rowMeans(terra::values(H[[which(hym$m == m & hym$y %in% jy)]], mat = TRUE), na.rm = TRUE)
         xm <- rowMeans(Xm[, xa %in% jy, drop = FALSE], na.rm = TRUE)
-        w <- if (ENV_SCEN_BLEND_YEARS > 0) pmax(0, 1 - (xa[kfm] - min(yrs_f)) / ENV_SCEN_BLEND_YEARS) else rep(1, length(kfm))
+        ## systematic part: hindcast trend line vs adjusted-model trend line over the reference
+        ## years, both at the join (kept); the rest is the last years' weather (fades out)
+        kh <- which(hym$m == m & hym$y %in% ref); kr <- which(xa %in% ref)
+        th <- .trend(terra::values(H[[kh]], mat = TRUE), hym$y[kh])$at(jy)
+        tx <- .trend(Xm[, kr, drop = FALSE], xa[kr])$at(jy)
+        w <- if (ENV_SCEN_BLEND_YEARS > 0) pmax(0, 1 - (xa[kfm] - max(jy)) / ENV_SCEN_BLEND_YEARS) else rep(1, length(kfm))   # 1 at the last hindcast year
         if (ratio) {
-          D <- pmin(pmax(hm / xm, 1 / ENV_SCEN_RATIO_MAX), ENV_SCEN_RATIO_MAX); D[!is.finite(D)] <- 1
-          Xm[, kfm] <- Xm[, kfm, drop = FALSE] * outer(D, w, `^`)
+          .cl <- function(z, d) { z <- pmin(pmax(z, 1 / ENV_SCEN_RATIO_MAX), ENV_SCEN_RATIO_MAX); z[!is.finite(z)] <- d; z }
+          D <- .cl(hm / xm, 1); Ds <- .cl(th / tx, 1)
+          Xm[, kfm] <- Xm[, kfm, drop = FALSE] * Ds * outer(D / Ds, w, `^`)
         } else {
           D <- hm - xm; D[!is.finite(D)] <- 0
-          Xm[, kfm] <- Xm[, kfm, drop = FALSE] + outer(D, w)
+          Ds <- th - tx; Ds[!is.finite(Ds)] <- 0
+          Xm[, kfm] <- Xm[, kfm, drop = FALSE] + Ds + outer(D - Ds, w)
         }
       }
       r <- terra::rast(H[[1]], nlyrs = length(kfm)); terra::values(r) <- Xm[, kfm, drop = FALSE]
