@@ -226,9 +226,16 @@ output$esp_view_slider <- renderUI({
 output$esp_view_plot_ui <- renderUI({
   v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year")
   st <- identical(v, "depth") || identical(v, "hab_all") || startsWith(v, "hab:")
-  h <- if (identical(v, "all")) (if (yr) 12 * 100 + 140 else 760) else if (identical(v, "hab_all")) 900 else if (st) 560 else if (yr) 820 else 820
-  plotOutput("esp_view_plot", height = paste0(h, "px"))
+  plotOutput("esp_view_plot", height = "auto")                       # height follows the width (.esp_hratio)
 })
+## height / width of each view, so the maps fill the width whatever the window size
+.esp_hratio <- function() {
+  v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year"); if (is.null(v)) return(0.6)
+  if (identical(v, "all")) return(if (yr) 0.31 * length(unique(.esp_index()$variable)) + 0.05 else 0.62)
+  if (identical(v, "hab_all")) return(0.98)
+  if (identical(v, "depth") || startsWith(v, "hab:")) return(0.62)
+  if (yr) 0.72 else 0.78
+}
 .esp_raster <- function(f) { r <- terra::rast(f); terra::NAflag(r) <- -9999; r }
 ## Climatology of a variable and month (mean over all years of that month),
 ## cached; used by the "difference from the average year" view.
@@ -276,16 +283,25 @@ output$esp_view_plot_ui <- renderUI({
                    strip.text = ggplot2::element_text(face = "bold", size = base * 0.85, hjust = 0),
                    plot.title = ggplot2::element_text(face = "bold", size = base * 1.1), plot.subtitle = ggplot2::element_text(colour = "grey35", size = base * 0.85),
                    plot.caption = ggplot2::element_text(colour = "grey40", size = base * 0.75, hjust = 0),
-                   legend.position = "bottom", legend.title = ggplot2::element_text(size = base * 0.8),
-                   legend.key.width = grid::unit(3.2, "cm"), legend.key.height = grid::unit(0.32, "cm"))
+                   legend.position = "bottom", legend.title = ggplot2::element_text(size = base * 0.8))
 }
 .esp_df <- function(r, nm = "value") { d <- terra::as.data.frame(r, xy = TRUE, na.rm = TRUE); names(d)[3] <- nm; d$x <- round(d$x, 6); d$y <- round(d$y, 6); d }
-.esp_fill <- function(v, anom = FALSE, lim = NULL, name = NULL, trans = "identity", breaks = ggplot2::waiver()) {
+## colour bar of a given length (cm): ggplot2 >= 3.5 sizes guides through their theme, older versions through barwidth
+.esp_cbar <- function(len = 10, thick = 0.32) {
+  if (utils::packageVersion("ggplot2") >= "3.5.0")
+    ggplot2::guide_colourbar(title.position = "top", nbin = 100,
+                             theme = ggplot2::theme(legend.key.width = grid::unit(len, "cm"), legend.key.height = grid::unit(thick, "cm"),
+                                                    legend.title = ggplot2::element_text(hjust = 0.5), legend.frame = ggplot2::element_rect(colour = "grey30"),
+                                                    legend.ticks = ggplot2::element_line(colour = "grey30")))
+  else ggplot2::guide_colourbar(title.position = "top", title.hjust = 0.5, frame.colour = "grey30", ticks.colour = "grey30", nbin = 100,
+                                barwidth = grid::unit(len, "cm"), barheight = grid::unit(thick, "cm"))
+}
+.esp_fill <- function(v, anom = FALSE, lim = NULL, name = NULL, trans = "identity", breaks = ggplot2::waiver(), bar = 10) {
   pal <- if (isTRUE(anom)) grDevices::hcl.colors(101, "Blue-Red 3") else if (grepl("^temp", v)) rev(grDevices::hcl.colors(100, "RdYlBu")) else
     if (v == "sal_surf") grDevices::hcl.colors(100, "Mako") else if (v == "depth") rev(grDevices::hcl.colors(100, "Blues 3")) else
     if (v == "hab") rev(grDevices::hcl.colors(100, "YlOrBr")) else rev(grDevices::hcl.colors(100, "YlGn"))
   ggplot2::scale_fill_gradientn(colours = pal, limits = lim, oob = scales::squish, name = name, trans = trans, breaks = breaks,
-                                guide = ggplot2::guide_colourbar(title.position = "top", title.hjust = 0.5, frame.colour = "grey30", ticks.colour = "grey30"))
+                                guide = .esp_cbar(bar))
 }
 ## base map: raster cells + coastline, the map's own extent and projection
 .esp_gg <- function(d, dep, fill, facet = NULL, ncol = NULL, base = 12, strip_left = FALSE) {
@@ -367,21 +383,23 @@ output$esp_view_plot_ui <- renderUI({
   }
   if (v == "hab_all") {
     hl <- if (!is.null(hix)) setdiff(hix$layer, "depth") else character(0)
-    side <- ggplot2::theme(legend.position = "right", legend.key.width = grid::unit(0.45, "cm"), legend.key.height = grid::unit(1.6, "cm"))
-    pd <- .esp_gg(.esp_df(terra::ifel(water, dep, NA)), dep, .esp_fill("depth", name = "Depth (m)")) + ggplot2::labs(title = "Depth") + side
+    side <- ggplot2::theme()
+    pd <- .esp_gg(.esp_df(terra::ifel(water, dep, NA)), dep, .esp_fill("depth", name = "Depth (m)", bar = 6)) + ggplot2::labs(title = "Depth") + side
     if (!length(hl)) return(.pr(pd + ggplot2::labs(caption = "No habitat layers for this base map yet: run 05b with the EUSeaMap geodatabase.")))
     hs <- terra::rast(lapply(file.path(hd, paste0(hl, ".asc")), .r)); names(hs) <- hl
     dom <- terra::ifel(max(hs) > 0, terra::which.max(hs), NA)
     dd <- .esp_df(dom); dd$value <- factor(hl[dd$value], levels = hl, labels = .esp_hab_short[hl])
     pdom <- .esp_gg(dd, dep, ggplot2::scale_fill_manual(values = setNames(.esp_hab_col[hl], .esp_hab_short[hl]), name = NULL, drop = FALSE)) +
-      ggplot2::labs(title = "Dominant habitat") + ggplot2::theme(legend.position = "right", legend.key.width = grid::unit(0.5, "cm"), legend.key.height = grid::unit(0.5, "cm"))
+      ggplot2::labs(title = "Dominant habitat") + ggplot2::theme(legend.key.width = grid::unit(0.4, "cm"), legend.key.height = grid::unit(0.4, "cm"), legend.text = ggplot2::element_text(size = 9)) +
+      ggplot2::guides(fill = ggplot2::guide_legend(nrow = 2))
     long <- data.table::rbindlist(lapply(hl, function(h) { z <- .esp_df(terra::ifel(hs[[h]] > 0, hs[[h]], NA)); if (nrow(z)) z$layer <- h; z }))
     long[, layer := factor(.esp_hab_short[layer], levels = .esp_hab_short[hl])]
     a <- if (!is.null(hix)) hix[match(hl, layer), area_km2] else rep(NA, length(hl))
-    levels(long$layer) <- sprintf("%s (%s km\u00b2)", levels(long$layer), trimws(format(round(a), big.mark = ",")))
+    levels(long$layer) <- sprintf("%s\n%s km\u00b2", levels(long$layer), trimws(format(round(a), big.mark = ",")))
     pall <- .esp_gg(long, dep, .esp_fill("hab", lim = c(0, 1), name = "Proportion of the cell (square-root scale: small shares stay visible)",
-                                         trans = "sqrt", breaks = c(0.01, 0.1, 0.25, 0.5, 1)), facet = ~layer, ncol = 4, base = 11) +
-      ggplot2::theme(axis.text = ggplot2::element_blank())
+                                         trans = "sqrt", breaks = c(0.01, 0.1, 0.25, 0.5, 1), bar = 12), facet = ~layer, ncol = 4, base = 11) +
+      ggplot2::theme(axis.text = ggplot2::element_blank(), axis.ticks = ggplot2::element_blank(), panel.grid = ggplot2::element_blank(),
+                     strip.text = ggplot2::element_text(size = 9.5, face = "bold", lineheight = 0.9))
     return(.pr(patchwork::wrap_plots(pd, pdom, ncol = 2) / pall + patchwork::plot_layout(heights = c(1, 1)) +
                    patchwork::plot_annotation(title = "Habitat drivers (static)",
                                               caption = sprintf("Habitat layers: share of each cell covered by the habitat (%s, EUNIS 2019). Dominant habitat = the class with the largest share.", if (!is.null(src)) src else "EUSeaMap"),
@@ -402,13 +420,16 @@ output$esp_view_plot_ui <- renderUI({
         lab <- if (all(is.na(iy$month))) as.character(y) else month.abb[iy$month]
         d <- .stack_df(iy, lab); d$panel <- factor(d$panel, levels = unique(lab))
         rs <- lapply(seq_len(nrow(iy)), function(i) .esp_get(base, ix, iy[i], anom))
-        .esp_gg(d, dep, .esp_fill(vv, anom, .lim(rs, vv, iy), name = ulab(vv, iy$unit[1])), facet = ~panel, ncol = 1, base = 10, strip_left = TRUE) +
-          ggplot2::labs(title = .esp_vlab(vv)) + ggplot2::guides(fill = ggplot2::guide_colourbar(title.position = "left", title.hjust = 0.5, frame.colour = "grey30", ticks.colour = "grey30", nbin = 100)) +
-          ggplot2::theme(axis.text = ggplot2::element_blank(), legend.position = "right", legend.key.width = grid::unit(0.35, "cm"), legend.key.height = grid::unit(5, "cm"),
-                         legend.text = ggplot2::element_text(size = 7.5), legend.title = ggplot2::element_text(size = 8, angle = 90),
-                                                                strip.text.y.left = if (j == 1) ggplot2::element_text(angle = 0, face = "bold") else ggplot2::element_blank())
+        ## one row block per driver: its 12 months in 2 rows of 6, its own colour bar on the right
+        .esp_gg(d, dep, .esp_fill(vv, anom, .lim(rs, vv, iy), name = NULL, bar = 12), facet = ~panel, ncol = 6, base = 10) +
+          ggplot2::labs(title = ulab(vv, iy$unit[1])) +
+          ggplot2::theme(axis.text = ggplot2::element_blank(), axis.ticks = ggplot2::element_blank(), panel.grid = ggplot2::element_blank(),
+                         panel.spacing = grid::unit(0.15, "lines"), strip.text = ggplot2::element_text(size = 8.5, face = "bold", margin = ggplot2::margin(1, 0, 1, 0)),
+                         plot.title = ggplot2::element_text(size = 12, face = "bold", margin = ggplot2::margin(2, 0, 2, 0)),
+                         legend.position = "bottom", legend.justification = "right", legend.margin = ggplot2::margin(0, 0, 0, 0),
+                         legend.text = ggplot2::element_text(size = 8), legend.title = ggplot2::element_text(size = 9))
       })
-      return(.pr(patchwork::wrap_plots(ps, nrow = 1) + patchwork::plot_annotation(title = paste("All environmental drivers,", y, "-", scl),
+      return(.pr(patchwork::wrap_plots(ps, ncol = 1) + patchwork::plot_annotation(title = paste("All environmental drivers,", y, "-", scl),
         caption = if (anom) "Difference from the mean of the same month over all years." else NULL,
         theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15)))))
     }
@@ -417,8 +438,8 @@ output$esp_view_plot_ui <- renderUI({
     ps <- lapply(vars, function(vv) {
       iv2 <- ix[variable == vv]; row <- iv2[year == y & (is.na(month) | month == mo)][1]
       r <- .esp_get(base, ix, row, anom)
-      .esp_gg(.esp_df(r), dep, .esp_fill(vv, anom, .lim(list(r), vv, row), name = ulab(vv, row$unit)), base = 11) +
-        ggplot2::labs(title = .esp_vlab(vv)) + ggplot2::theme(legend.key.width = grid::unit(2, "cm"))
+      .esp_gg(.esp_df(r), dep, .esp_fill(vv, anom, .lim(list(r), vv, row), name = ulab(vv, row$unit), bar = 5), base = 11) +
+        ggplot2::labs(title = .esp_vlab(vv))
     })
     return(.pr(patchwork::wrap_plots(ps, ncol = min(3, length(ps))) + patchwork::plot_annotation(title = paste("All environmental drivers,", .esp_when(y, mo), "-", scl),
       theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15)))))
@@ -445,18 +466,17 @@ output$esp_view_plot_ui <- renderUI({
   .pr(if (is.null(ps)) pm else patchwork::wrap_plots(pm, ps, ncol = 1, heights = c(3, 1.3)) +
           patchwork::plot_annotation(caption = "Lower panel: mean of each monthly map (thin) and annual mean (thick), historical and climate scenarios; red line = the month shown."))
 }
-output$esp_view_plot <- renderPlot({
+output$esp_view_plot <- renderPlot(res = 96, height = function() {
+  w <- session$clientData$output_esp_view_plot_width; if (is.null(w) || w < 100) w <- 1000
+  round(w * .esp_hratio())
+}, {
   tryCatch(.esp_draw(), error = function(e) {
     if (!grepl("margins too large|invalid graphics state|plot region too large", conditionMessage(e))) stop(e)
     graphics::par(mar = c(0, 0, 0, 0)); graphics::plot.new()
     graphics::text(0.5, 0.5, "Too little space for these maps: make the window wider,\nor show one driver or one month.", cex = 1.1)
   })
 })
-.esp_fig_size <- function() {
-  v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year")
-  st <- identical(v, "depth") || identical(v, "hab_all") || startsWith(v, "hab:")
-  if (identical(v, "all")) (if (yr) c(1500, 12 * 105 + 160) else c(1500, 850)) else if (identical(v, "hab_all")) c(1500, 1050) else if (st) c(1200, 700) else c(1300, 950)
-}
+.esp_fig_size <- function() c(1300, round(1300 * .esp_hratio()))   # same proportions as on screen
 output$dl_esp_fig <- downloadHandler(
   filename = function() paste0("ecospace_", gsub("[^A-Za-z0-9_]", "_", input$esp_view_var), "_", if (identical(input$esp_view_mode, "year")) input$esp_view_year else "month",
                                if (identical(input$esp_view_values, "anom")) "_anomaly" else "", ".png"),
