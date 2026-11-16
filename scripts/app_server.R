@@ -192,14 +192,28 @@ observe({
   f <- file.path(.esp_scen_dir(m, input$esp_view_scen), "ecospace_driver_index.csv"); req(file.exists(f))
   fread(f)
 })
+## Variables: environmental drivers (spatio-temporal, per month) and
+## habitat drivers (static: depth and the EUSeaMap habitat layers of 05b)
+.esp_lab <- c(temp_surf = "SST - sea surface temperature", temp_bot = "SBT - sea bottom temperature", sal_surf = "SSS - sea surface salinity",
+              npp = "PP - net primary production", phyto_c = "Phytoplankton carbon")
+.esp_hab_lab <- c(depth = "Depth", seagrass = "Seagrass (Posidonia, Cymodocea)", coralligenous = "Coralligenous", rock = "Rock",
+                  biogenic = "Other biogenic", gravel = "Gravel (coarse sediment)", mixed = "Mixed sediment", sand = "Sand", mud = "Mud")
+.esp_hab <- reactive({
+  run_state(); m <- input$esp_view_map; req(m, nzchar(m))
+  f <- file.path(.esp_root(), m, "habitat", "habitat_index.csv")
+  if (file.exists(f)) tryCatch(fread(f), error = function(e) NULL) else NULL
+})
 observe({
-  ix <- .esp_index(); v <- c("all", unique(ix$variable), "depth"); cur <- isolate(input$esp_view_var)
-  updateSelectInput(session, "esp_view_var", choices = setNames(v, ifelse(v == "depth", "depth (base map)", ifelse(v == "all", "All drivers", v))),
-                    selected = if (!is.null(cur) && cur %in% v) cur else v[1])
+  ix <- .esp_index(); env <- unique(ix$variable); hab <- .esp_hab(); cur <- isolate(input$esp_view_var)
+  hl <- if (!is.null(hab) && nrow(hab)) hab$layer else "depth"
+  env_ch <- c("All environmental drivers" = "all", setNames(env, ifelse(is.na(.esp_lab[env]), env, .esp_lab[env])))
+  hab_ch <- setNames(ifelse(hl == "depth", "depth", paste0("hab:", hl)), ifelse(is.na(.esp_hab_lab[hl]), hl, .esp_hab_lab[hl]))
+  ch <- list("Environmental drivers (spatio-temporal)" = env_ch, "Habitat drivers (static)" = hab_ch)
+  updateSelectInput(session, "esp_view_var", choices = ch, selected = if (!is.null(cur) && cur %in% c(env_ch, hab_ch)) cur else "all")
 })
 output$esp_view_slider <- renderUI({
   ix <- .esp_index(); v <- input$esp_view_var; req(v)
-  if (v == "depth") return(NULL)
+  if (v == "depth" || startsWith(v, "hab:")) return(NULL)
   iv <- if (v == "all") ix[variable == ix$variable[1]] else ix[variable == v]; req(nrow(iv) > 0)
   if (identical(input$esp_view_mode, "year")) {
     yrs <- sort(unique(iv$year))
@@ -210,7 +224,7 @@ output$esp_view_slider <- renderUI({
 })
 output$esp_view_plot_ui <- renderUI({
   v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year")
-  h <- if (identical(v, "all")) (if (yr) 12 * 115 + 110 else 620) else if (yr && !identical(v, "depth")) 760 else 480
+  h <- if (identical(v, "all")) (if (yr) 12 * 115 + 110 else 620) else if (yr && !identical(v, "depth") && !startsWith(v, "hab:")) 760 else 480
   plotOutput("esp_view_plot", height = paste0(h, "px"))
 })
 .esp_raster <- function(f) { r <- terra::rast(f); terra::NAflag(r) <- -9999; r }
@@ -240,13 +254,21 @@ output$esp_view_plot_ui <- renderUI({
 ## Draws the selected view (also used for the PNG download)
 .esp_draw <- function() {
   ix <- .esp_index(); v <- input$esp_view_var; m <- input$esp_view_map; req(v, m)
-  anom <- identical(input$esp_view_values, "anom") && v != "depth"
+  anom <- identical(input$esp_view_values, "anom") && v != "depth" && !startsWith(v, "hab:")
   base <- .esp_scen_dir(m, input$esp_view_scen)
   dep <- .esp_raster(file.path(base, "depth_used.asc"))
   land <- terra::ifel(is.na(dep) | dep <= 0, 1, NA)
   if (v == "depth") {
     r <- terra::ifel(dep > 0, dep, NA)
-    terra::plot(r, col = rev(grDevices::hcl.colors(100, "Blues 3")), colNA = NA, main = paste0("Depth (m) - ", m), mar = c(3, 3, 3, 5), plg = list(box = TRUE))
+    terra::plot(r, col = rev(grDevices::hcl.colors(100, "Blues 3")), colNA = NA, main = "Depth (m)", mar = c(3, 3, 3, 5), plg = list(box = TRUE))
+    terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
+    return(invisible())
+  }
+  if (startsWith(v, "hab:")) {                                          # static habitat layer: proportion of each cell
+    h <- sub("^hab:", "", v); f <- file.path(.esp_root(), m, "habitat", paste0(h, ".asc")); req(file.exists(f))
+    r <- .esp_raster(f)
+    terra::plot(terra::ifel(r > 0, r, NA), col = grDevices::hcl.colors(100, "YlOrBr", rev = TRUE), range = c(0, 1), colNA = NA,
+                main = paste0(if (is.na(.esp_hab_lab[h])) h else .esp_hab_lab[[h]], " (proportion of the cell)"), mar = c(3, 3, 3, 5), plg = list(box = TRUE))
     terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
     return(invisible())
   }
@@ -353,10 +375,10 @@ output$esp_view_plot <- renderPlot({
 })
 .esp_fig_size <- function() {
   v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year")
-  if (identical(v, "all")) (if (yr) c(1300, 12 * 125 + 120) else c(1300, 700)) else if (yr && !identical(v, "depth")) c(1300, 860) else c(1100, 640)
+  if (identical(v, "all")) (if (yr) c(1300, 12 * 125 + 120) else c(1300, 700)) else if (yr && !identical(v, "depth") && !startsWith(v, "hab:")) c(1300, 860) else c(1100, 640)
 }
 output$dl_esp_fig <- downloadHandler(
-  filename = function() paste0("ecospace_", input$esp_view_var, "_", if (identical(input$esp_view_mode, "year")) input$esp_view_year else "month",
+  filename = function() paste0("ecospace_", gsub("[^A-Za-z0-9_]", "_", input$esp_view_var), "_", if (identical(input$esp_view_mode, "year")) input$esp_view_year else "month",
                                if (identical(input$esp_view_values, "anom")) "_anomaly" else "", ".png"),
   content = function(file) {
     sz <- .esp_fig_size()
@@ -479,8 +501,10 @@ observe({
 output$resp_view_ui <- renderUI({
   p <- .resp_sel()
   n <- if (is.null(p) || !nrow(p)) 1L else data.table::uniqueN(p$FG_num)
-  plotOutput("resp_view_plot", height = paste0(max(260, ceiling(n / .resp_ncol) * 210 + 40), "px"))
+  tagList(plotOutput("resp_view_plot", height = paste0(max(260, ceiling(n / .resp_ncol) * 210 + 40), "px")),
+          tags$div(class = "wm-help mt-1", tags$em("Figure. "), textOutput("resp_view_caption", inline = TRUE)))
 })
+output$resp_view_caption <- renderText(.resp_caption())
 .resp_draw <- function() {
   p <- .resp_sel()
   if (is.null(p) || !nrow(p)) {
@@ -509,17 +533,24 @@ output$resp_view_ui <- renderUI({
     lines(q$x, q$y, col = "#1f77b4", lwd = 2.2)
     box()
   }
-  hl <- if (!is.null(h) && nrow(h)) {
-    yy <- attr(h, "years")
-    yh <- attr(h, "years_hist"); mm <- attr(h, "means")
-    if (!is.na(h$scen[1]))
-      paste0("   grey: historical ", if (length(yh)) paste0(yh[1], "-", yh[2]), ", red: ", .esp_scen_label[[h$scen[1]]], if (length(yy)) paste0(" ", yy[1], "-", yy[2]),
-             " (", h$base_map[1], "); dashed = means, change ", sprintf("%+.2f", mm[["scen"]] - mm[["hist"]]))
-    else paste0("   grey: historical values in the Ecospace maps (", h$base_map[1], ")")
-  } else if (isTRUE(input$resp_view_hist)) "   (no Ecospace map values for this driver: run 05b with absolute values)" else ""
-  mtext(paste0("Ecospace response functions (AquaMaps): ", drv_lab, hl),
-        outer = TRUE, cex = 1.1, font = 2)
+  mtext(paste0("Response functions: ", drv_lab), outer = TRUE, cex = 1.15, font = 2)
 }
+## caption under the figure (what the curves and bars are)
+.resp_caption <- reactive({
+  h <- .resp_hist(); d <- input$resp_view_drv
+  drv_lab <- c(depth = "depth", temp_surf = "SST", temp_bot = "SBT", sal_surf = "salinity", npp = "NPP")[d]
+  base <- paste0("Blue: AquaMaps response function of each FG (relative habitat capacity, maximum 1) to ", drv_lab, ".")
+  hl <- if (!is.null(h) && nrow(h)) {
+    yy <- attr(h, "years"); yh <- attr(h, "years_hist"); mm <- attr(h, "means")
+    if (!is.na(h$scen[1]))
+      paste0(" Grey: monthly means of the historical maps ", if (length(yh)) paste0(yh[1], "-", yh[2]), "; red: ", .esp_scen_label[[h$scen[1]]],
+             if (length(yy)) paste0(" ", yy[1], "-", yy[2]), " (base map ", h$base_map[1], "); dashed lines: their means (change ",
+             sprintf("%+.2f", mm[["scen"]] - mm[["hist"]]), "). Bars scaled so the tallest is 1.")
+    else if (d == "depth") paste0(" Grey: depth of the water cells of the base map ", h$base_map[1], " (tallest bar = 1).")
+    else paste0(" Grey: monthly means of the historical Ecospace maps (base map ", h$base_map[1], "; tallest bar = 1).")
+  } else if (isTRUE(input$resp_view_hist)) " No Ecospace map values for this driver: run 05b with absolute values." else ""
+  paste0(base, hl)
+})
 output$resp_view_plot <- renderPlot(.resp_draw())
 output$dl_resp_fig <- downloadHandler(
   filename = function() paste0("ecospace_responses_", input$resp_view_drv, ".png"),

@@ -274,10 +274,10 @@ if (!length(funs)) {
       ggplot2::geom_line(linewidth = 0.8, colour = "#1f77b4") +
       ggplot2::facet_wrap(~ lab, scales = "free_x", ncol = 6) +
       ggplot2::labs(x = paste0(drv, " (", .hr_units[drv], ")"), y = "Relative habitat capacity",
-                    title = paste0("Ecospace response functions: ", drv),
-                    subtitle = if (!is.null(hd) && nrow(hd)) paste0("Grey: ", if (drv == "depth") "depth of the water cells of the Ecospace base map (" else "mean of each monthly Ecospace driver map (",
-                                                                  hd$base_map[1], "; tallest bar = 1)") else NULL) +
-      ggplot2::theme_bw(base_size = 14) + ggplot2::theme(legend.position = "top", strip.text = ggplot2::element_text(size = 9))
+                    title = paste0("Response functions: ", drv),
+                    caption = if (!is.null(hd) && nrow(hd)) paste0("Blue: AquaMaps response function per FG. Grey: ", if (drv == "depth") "depth of the water cells of the Ecospace base map (" else "mean of each monthly Ecospace driver map (",
+                                                                  hd$base_map[1], "; tallest bar = 1).") else "Blue: AquaMaps response function per FG.") +
+      ggplot2::theme_bw(base_size = 14) + ggplot2::theme(legend.position = "top", plot.caption = ggplot2::element_text(hjust = 0, size = 11), strip.text = ggplot2::element_text(size = 9))
     nr <- ceiling(uniqueN(p$lab) / 6)
     ggplot2::ggsave(file.path(resp_dir, paste0("ecospace_response_", drv, ".png")), g, width = 18, height = 2.4 * nr + 1.5, dpi = 150, limitsize = FALSE)
   }, error = function(e) .hr_msg("plot ", drv, ": ", conditionMessage(e)))

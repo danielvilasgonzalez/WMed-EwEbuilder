@@ -46,16 +46,31 @@
 ##      can put SSP5-8.5 below SSP1-2.6 in a given year), so the scenario
 ##      keeps the models' trend and seasonal change, not their noise.
 ##      ENV_SCEN_SMOOTH_YEARS = 0 keeps every model year.
-##   3. Regrid the anomaly to the 05 map grid (bilinear) and add it to
-##      the hindcast climatology of that month over R (NPP: multiply):
-##        X(y,m) = mean_R H(., m) + A(y,m)        (H = Copernicus hindcast)
-##      so the future keeps the hindcast's level, spatial pattern and
-##      seasonal cycle and takes the change of the climate models.
+##   3. Bias adjustment, per map cell and calendar month (spatial and
+##      seasonal), with the Copernicus hindcast H as the reference:
+##      a. Mean: regrid the anomaly to the 05 map grid (bilinear) and add
+##         it to the hindcast climatology of that month over R (NPP:
+##         multiply): X(y,m) = mean_R H(., m) + A(y,m). The model's own
+##         bias cancels (its change is taken on its own climatology), so
+##         X keeps the hindcast's level, spatial pattern and seasonal cycle.
+##      b. Variability (ENV_SCEN_VAR_SCALE, only when not smoothed): the
+##         detrended year-to-year spread of A over R is scaled to that of
+##         H (factor held to [1/ENV_SCEN_VAR_MAX, ENV_SCEN_VAR_MAX]); the
+##         per-cell linear trend of A is kept (trend-preserving scaling).
+##      c. Continuity (ENV_SCEN_JOIN): D(m) = mean H - mean X over the
+##         last ENV_SCEN_JOIN_YEARS (5) hindcast years (NPP: ratio). D is
+##         added to the scenario and fades linearly to 0 over
+##         ENV_SCEN_BLEND_YEARS (10; 0 = kept throughout), so the scenario
+##         starts where the hindcast ends instead of with a step.
+##      The step left at the join (last 5 hindcast years vs first 5
+##      scenario years, model-area mean) is written to
+##      environment_scenarios_continuity.csv and to the log.
 ##   Years: from the year after the hindcast to ENV_SCEN_END.
 ##   ASSUMPTION (flagged): the hindcast pattern is kept; interannual
 ##   variability comes from the models only.
 ##
 ## OUTPUT (out_dir/environment/scenarios/<scenario>/)
+##   environment_scenarios_continuity.csv  step at the hindcast -> scenario join
 ##   <var>_monthly_native.tif     monthly maps (same grid as 05), read by
 ##                                05b for the Ecospace maps of the scenario
 ##   ecosim_forcing_<var>_monthly.csv / _annual.csv
@@ -85,7 +100,12 @@
 .scn_default("ENV_SCEN_REF_N", 20L)
 .scn_default("ENV_SCEN_SMOOTH_YEARS", 11L)                        # running mean of the model change (years); 0 = none
 .scn_default("ENV_SCEN_VARS", c("temp_surf", "temp_bot", "sal_surf", "npp"))
-.scn_default("ENV_SCEN_RATIO_MAX", 4)                             # NPP change factor held to [1/4, 4]
+.scn_default("ENV_SCEN_RATIO_MAX", 4)
+.scn_default("ENV_SCEN_VAR_SCALE", TRUE)                         # scale the model's inter-annual spread to the hindcast (only when ENV_SCEN_SMOOTH_YEARS <= 1)
+.scn_default("ENV_SCEN_VAR_MAX", 2)                               # variance factor held to [1/2, 2]
+.scn_default("ENV_SCEN_JOIN", TRUE)                               # continuity adjustment at the hindcast -> scenario join
+.scn_default("ENV_SCEN_JOIN_YEARS", 5L)                           # last hindcast years the join is matched on
+.scn_default("ENV_SCEN_BLEND_YEARS", 10L)                         # years over which the join offset fades out; 0 = kept throughout                             # NPP change factor held to [1/4, 4]
 .scn_default("ISIMIP3B_CACHE_DIR", file.path(out_dir, "isimip3b_cache"))
 .scn_default("ISIMIP_FILES_API", "https://files.isimip.org/api/v2")
 .scn_default("ISIMIP_FILES_URL", "https://files.isimip.org")
@@ -195,7 +215,7 @@ dir.create(ISIMIP3B_CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
 ## =================================================================
 .scn_native <- function(v) { f <- file.path(env_dir, paste0(v, "_monthly_native.tif")); if (file.exists(f)) f else NA_character_ }
 scn_vars <- ENV_SCEN_VARS[!is.na(vapply(ENV_SCEN_VARS, .scn_native, ""))]
-scn_used <- list(); scn_ts <- list()
+scn_used <- list(); scn_ts <- list(); scn_join <- list()
 if (!length(scn_vars)) {
   .scn_msg("No monthly maps of 05 to continue - scenarios skipped.")
 } else for (v in scn_vars) {
@@ -209,13 +229,14 @@ if (!length(scn_vars)) {
   hist_fields <- setNames(lapply(ENV_SCEN_MODELS, function(mod) .scn_get(mod, "historical", v)), ENV_SCEN_MODELS)
   for (sc in ENV_SCENARIOS) {
     anoms <- list()
+    nsm <- max(0L, as.integer(ENV_SCEN_SMOOTH_YEARS)); half <- nsm %/% 2L
+    yrs_out <- sort(unique(c(ref, yrs_f)))                             # reference years (bias check) + scenario years
+    yrs_calc <- if (nsm > 1) (min(yrs_out) - half):(max(yrs_out) + half) else yrs_out   # margin so the running mean is centred
     for (mod in ENV_SCEN_MODELS) {
       Gh <- hist_fields[[mod]]; Gs <- .scn_get(mod, sc, v)
       if (is.null(Gh) || is.null(Gs)) next
       G <- c(Gh, Gs); g <- .scn_ym(G)
       Gclim <- lapply(1:12, function(m) terra::app(G[[which(g$y %in% ref & g$m == m)]], mean, na.rm = TRUE))
-      nsm <- max(0L, as.integer(ENV_SCEN_SMOOTH_YEARS)); half <- nsm %/% 2L
-      yrs_calc <- if (nsm > 1) (min(yrs_f) - half):(max(yrs_f) + half) else yrs_f   # a margin so the running mean is centred up to the last year
       k <- which(g$y %in% yrs_calc)
       A <- terra::rast(lapply(k, function(i) {
         cl <- Gclim[[g$m[i]]]
@@ -235,20 +256,77 @@ if (!length(scn_vars)) {
       for (m in 1:12) { kk <- which(am == m); if (length(kk) > 2) A[[kk]] <- terra::roll(A[[kk]], n = min(nsm, 2L * ((length(kk) - 1L) %/% 2L) + 1L), fun = "mean", type = "around", na.rm = TRUE) }
       names(A) <- nm
     }
-    A <- A[[which(as.integer(substr(names(A), 1, 4)) %in% yrs_f)]]
-    A <- terra::resample(A, H[[1]], method = "bilinear")
-    mo <- as.integer(substr(names(A), 6, 7))
-    X <- if (.scn_type[[v]] == "ratio") A * Hclim[[mo]] else A + Hclim[[mo]]
+    A <- A[[which(as.integer(substr(names(A), 1, 4)) %in% yrs_out)]]
+    A <- terra::resample(A, H[[1]], method = "bilinear")              # model change on the hindcast grid
+    ay <- as.integer(substr(names(A), 1, 4)); mo <- as.integer(substr(names(A), 6, 7)); nm <- names(A)
+    ratio <- .scn_type[[v]] == "ratio"
+    ## Bias adjustment, per cell and calendar month (cells x years matrices, one month at a time):
+    ##  1 mean        - the change is taken on the model's own reference climatology and put on the
+    ##                  Copernicus one (delta / mean scaling), so the model's bias cancels;
+    ##  2 variability - (only without smoothing) the detrended year-to-year spread of the model over
+    ##                  the reference years is scaled to the hindcast's; the per-cell trend is kept;
+    ##  3 continuity  - the gap between the last ENV_SCEN_JOIN_YEARS hindcast years and the adjusted
+    ##                  model over the same years is added to the scenario, fading to 0 over
+    ##                  ENV_SCEN_BLEND_YEARS (0 = kept throughout).
+    .trend <- function(Y, x) {                                         # per-row linear fit on x: list(fit, residual sd)
+      xc <- x - mean(x); mu <- rowMeans(Y); b <- as.vector((Y - mu) %*% xc) / sum(xc^2)
+      fit <- mu + outer(b, xc); list(fit = fit, sd = sqrt(rowSums((Y - fit)^2) / max(1, length(x) - 2)))
+    }
+    jy <- utils::tail(sort(intersect(full_y, ay)), ENV_SCEN_JOIN_YEARS)
+    do_var <- isTRUE(ENV_SCEN_VAR_SCALE) && nsm <= 1 && !ratio
+    var_note <- if (do_var) ", variance scaled" else ""
+    kf <- which(ay %in% yrs_f); out <- vector("list", 12)
+    for (m in 1:12) {
+      ka <- which(mo == m); xa <- ay[ka]
+      Am <- terra::values(A[[ka]], mat = TRUE)
+      if (do_var) {
+        kh <- which(hym$m == m & hym$y %in% ref); kr <- which(xa %in% ref)
+        if (length(kh) >= 5 && length(kr) >= 5) {
+          sH <- .trend(terra::values(H[[kh]], mat = TRUE), hym$y[kh])$sd
+          sA <- .trend(Am[, kr, drop = FALSE], xa[kr])$sd
+          sf <- pmin(pmax(sH / sA, 1 / ENV_SCEN_VAR_MAX), ENV_SCEN_VAR_MAX); sf[!is.finite(sf)] <- 1
+          tr <- .trend(Am, xa)$fit
+          Am <- tr + sf * (Am - tr)
+        }
+      }
+      hc <- terra::values(Hclim[[m]], mat = FALSE)
+      Xm <- if (ratio) Am * hc else Am + hc
+      kfm <- which(xa %in% yrs_f)
+      if (isTRUE(ENV_SCEN_JOIN) && length(jy)) {
+        hm <- rowMeans(terra::values(H[[which(hym$m == m & hym$y %in% jy)]], mat = TRUE), na.rm = TRUE)
+        xm <- rowMeans(Xm[, xa %in% jy, drop = FALSE], na.rm = TRUE)
+        w <- if (ENV_SCEN_BLEND_YEARS > 0) pmax(0, 1 - (xa[kfm] - min(yrs_f)) / ENV_SCEN_BLEND_YEARS) else rep(1, length(kfm))
+        if (ratio) {
+          D <- pmin(pmax(hm / xm, 1 / ENV_SCEN_RATIO_MAX), ENV_SCEN_RATIO_MAX); D[!is.finite(D)] <- 1
+          Xm[, kfm] <- Xm[, kfm, drop = FALSE] * outer(D, w, `^`)
+        } else {
+          D <- hm - xm; D[!is.finite(D)] <- 0
+          Xm[, kfm] <- Xm[, kfm, drop = FALSE] + outer(D, w)
+        }
+      }
+      r <- terra::rast(H[[1]], nlyrs = length(kfm)); terra::values(r) <- Xm[, kfm, drop = FALSE]
+      names(r) <- nm[ka][kfm]; out[[m]] <- r
+    }
+    X <- terra::rast(out); X <- X[[match(nm[kf], names(X))]]
+    mo <- mo[kf]
     X <- terra::mask(X, Hclim[[mo]])
-    names(X) <- names(A)
+    names(X) <- nm[kf]
+    ## Continuity check over the model area
+    hl <- terra::global(H[[which(hym$y %in% jy)]], "mean", na.rm = TRUE)$mean
+    fy <- utils::head(yrs_f, length(jy))
+    sl <- terra::global(X[[which(as.integer(substr(names(X), 1, 4)) %in% fy)]], "mean", na.rm = TRUE)$mean
+    scn_join[[length(scn_join) + 1]] <- data.table(scenario = sc, variable = v, unit = ENV_UNITS_OUT[[v]],
+      hindcast_years = paste(range(jy), collapse = "-"), hindcast_mean = mean(hl), scenario_years = paste(range(fy), collapse = "-"),
+      scenario_mean = mean(sl), step = mean(sl) - mean(hl))
     d <- file.path(scen_dir, sc); dir.create(d, showWarnings = FALSE)
     terra::writeRaster(X, file.path(d, paste0(v, "_monthly_native.tif")), overwrite = TRUE, gdal = "COMPRESS=DEFLATE")
     st <- .env_domain_stats(X)
     scn_ts[[length(scn_ts) + 1]] <- cbind(data.table(scenario = sc, variable = v, unit = ENV_UNITS_OUT[[v]],
                                                      year = as.integer(substr(names(X), 1, 4)), month = mo,
-                                                     source = paste0("ISIMIP3b ", paste(names(anoms), collapse = " + "), " change on the ",
-                                                                     min(ref), "-", max(ref), " Copernicus climatology")), st)
-    .scn_msg(v, " ", sc, ": ", terra::nlyr(X), " months (", min(yrs_f), "-", ENV_SCEN_END, "), ", length(anoms), " model(s).")
+                                                     source = paste0("ISIMIP3b ", paste(names(anoms), collapse = " + "), " change, bias-adjusted to the ",
+                                                                     min(ref), "-", max(ref), " Copernicus hindcast per cell and month")), st)
+    .scn_msg(v, " ", sc, ": ", terra::nlyr(X), " months (", min(yrs_f), "-", ENV_SCEN_END, "), ", length(anoms), " model(s)", var_note,
+             "; step ", paste(range(jy), collapse = "-"), " -> ", paste(range(fy), collapse = "-"), ": ", signif(mean(sl) - mean(hl), 2), " ", ENV_UNITS_OUT[[v]], ".")
   }
 }
 
@@ -258,6 +336,7 @@ if (!length(scn_vars)) {
 if (length(scn_ts)) {
   S <- rbindlist(scn_ts, fill = TRUE)
   fwrite(rbindlist(scn_used), file.path(scen_dir, "environment_scenarios_models.csv"))
+  if (length(scn_join)) fwrite(rbindlist(scn_join), file.path(scen_dir, "environment_scenarios_continuity.csv"), sep = ";", dec = ",")
   hind <- if (exists("env_ts") && nrow(env_ts)) env_ts else fread(file.path(env_dir, "environment_timeseries_monthly.csv"))
   base <- hind[year == ENV_BASE_YEAR, .(base = mean(value, na.rm = TRUE)), by = variable]
   S <- merge(S, base, by = "variable", all.x = TRUE)
@@ -289,7 +368,8 @@ if (length(scn_ts)) {
       ggplot2::facet_wrap(~ variable, scales = "free_y", ncol = 2) +
       ggplot2::scale_colour_manual(values = c("black", "#1a9850", "#fdae61", "#d73027", "#7b3294"), drop = TRUE) +
       ggplot2::labs(x = NULL, y = "Annual mean over the model area", colour = NULL,
-                    title = "Environmental drivers: hindcast and climate scenarios (ISIMIP3b change on the Copernicus climatology)") +
+                    title = "Environmental drivers: hindcast and scenarios",
+                    caption = "ISIMIP3b change, bias-adjusted to the Copernicus hindcast per cell and calendar month (mean, variability, continuity at the join).") +
       ggplot2::theme_bw(base_size = 14) + ggplot2::theme(legend.position = "top")
     pdir <- file.path(out_dir, "plots", "environment"); dir.create(pdir, recursive = TRUE, showWarnings = FALSE)
     ggplot2::ggsave(file.path(pdir, "environment_scenarios.png"), g, width = 13, height = 3.2 * ceiling(uniqueN(pd$variable) / 2) + 1.2, dpi = 150)

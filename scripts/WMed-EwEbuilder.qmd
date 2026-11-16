@@ -2648,14 +2648,45 @@ historical and future join in one series. Up to 2050 the SSPs differ by
 a few tenths of a degree in the Mediterranean surface temperature; the
 difference grows after 2050.
 
+**Bias adjustment (spatial and temporal).** Each map cell and calendar
+month is adjusted separately against the Copernicus hindcast, so the
+adjustment follows the spatial pattern and the seasonal cycle:
+
+1. *Mean.* The equation above is a mean (delta) adjustment: the model's
+   own climatology over $R$ is removed, so its bias in level, pattern and
+   seasonal cycle cancels and $X$ takes the hindcast's.
+2. *Variability* (only with `ENV_SCEN_SMOOTH_YEARS = 0`;
+   `ENV_SCEN_VAR_SCALE`). The year-to-year spread of the change over $R$,
+   after removing its linear trend, is scaled to that of the hindcast
+   (factor held to $[1/2, 2]$); the trend of each cell is kept
+   (trend-preserving scaling, as in ISIMIP3BASD [@lange2019basd]). With
+   the 11-year running mean there is no model noise left to scale.
+3. *Continuity at the join* (`ENV_SCEN_JOIN`). Even after 1 and 2 the
+   last observed years can sit above or below the adjusted model for the
+   same years (a warm spell, or a trend in the hindcast faster than in
+   the models), which shows as a step between the historical series and
+   the scenario. The gap $D(m) = \overline{H} - \overline{X}$ over the last
+   five hindcast years (`ENV_SCEN_JOIN_YEARS`; NPP: the ratio) is added to
+   the scenario and fades linearly to zero over ten years
+   (`ENV_SCEN_BLEND_YEARS`; 0 keeps it for the whole scenario). The
+   scenario then starts where the hindcast ends and converges on the
+   models' change.
+
+The step left at the join (mean of the last five hindcast years vs the
+first five scenario years over the model area) is written to
+`environment/scenarios/environment_scenarios_continuity.csv` and to the
+log; it should be close to the trend over five years (a few hundredths
+to a few tenths of a degree), not a jump.
+
 **Limits to keep in mind.**
 
 - The spatial pattern of the change comes from 1° models (about 100 km):
   coastal and shelf details of the future change are smoothed; the
   hindcast pattern itself is kept at full resolution.
-- Bias in the models' seasonal cycle is removed with the monthly mean
-  of the reference period, but not changes in variability or extremes
-  (marine heatwaves are not shifted more than the mean).
+- Bias in the models' level, pattern and seasonal cycle is removed per
+  cell and month; their variability is scaled only without smoothing,
+  and changes in extremes are not adjusted beyond that (marine heatwaves
+  are not shifted more than the mean).
 - Two models only; the scenario spread is not the full CMIP6 spread.
 - NPP changes are more uncertain than temperature changes (the two
   models can disagree in sign in the Mediterranean); the ratio is held

@@ -291,3 +291,83 @@ for (sd in .scn_dirs) {
     file.copy(file.path(esp_dir, "depth_used.asc"), file.path(od, "depth_used.asc"), overwrite = TRUE)
   }, error = function(e) .esp_msg("[05b] scenario ", sc, " failed: ", conditionMessage(e)))
 }
+
+## =================================================================
+## Habitat drivers (static): <base map>/habitat/
+## =================================================================
+## Depth (the base map) and the seabed habitats of EMODnet Seabed Habitats
+## EUSeaMap 2025 (broad-scale habitat map, EUNIS 2019 classification;
+## Vasquez et al. 2021, EMODnet Seabed Habitats), as the proportion of each
+## water cell covered by the habitat (0-1; terra::rasterize(cover = TRUE)),
+## the form of an Ecospace habitat layer:
+##   seagrass       Posidonia oceanica MB252 / MB2522, Cymodocea nodosa
+##                  MB5521 / MB5534 (the codes used in 01b)
+##   coralligenous  MC151, MC251 (01b)
+##   and by the substrate digit of the EUNIS 2019 code (third character:
+##   M + zone letter + substrate; EUNIS marine habitat classification 2019):
+##   rock (1), biogenic (2, other than seagrass), gravel (3, coarse
+##   sediment), mixed (4, mixed sediment), sand (5), mud (6).
+## Source file: EUSEAMAP_2025_GDB (the same as 01b; downloaded once from
+## emodnet.ec.europa.eu/en/seabed-habitats, ~1 GB). Only the base map's box
+## is read. The layers are written once per base map and reused while the
+## depth file and the geodatabase do not change. Without the geodatabase
+## only depth is written (the log says where to put it).
+if (!exists("ECOSPACE_HABITAT")) ECOSPACE_HABITAT <- TRUE
+if (!exists("EUSEAMAP_2025_GDB")) EUSEAMAP_2025_GDB <- c(
+  file.path(pcloud_dir, "data", "Complementary data", "EUSeaMap_2025", "EUSeaMap_2025.gdb"),
+  path.expand("~/Downloads/EUSeaMap_2025/EUSeaMap_2025.gdb"))
+.hab_classes <- c("seagrass", "coralligenous", "rock", "biogenic", "gravel", "mixed", "sand", "mud")
+.hab_class_of <- function(code) {
+  cc <- toupper(sub("[^A-Za-z0-9].*$", "", trimws(as.character(code))))
+  out <- rep(NA_character_, length(cc))
+  out[grepl("^(MB252|MB5521|MB5534)", cc)] <- "seagrass"
+  out[is.na(out) & grepl("^(MC151|MC251)", cc)] <- "coralligenous"
+  dg <- substr(cc, 3, 3)
+  lk <- c(`1` = "rock", `2` = "biogenic", `3` = "gravel", `4` = "mixed", `5` = "sand", `6` = "mud")
+  i <- is.na(out) & grepl("^M[A-H]", cc) & dg %in% names(lk)
+  out[i] <- lk[dg[i]]
+  out
+}
+if (isTRUE(ECOSPACE_HABITAT)) tryCatch({
+  hd <- file.path(esp_dir, "habitat"); dir.create(hd, showWarnings = FALSE)
+  file.copy(file.path(esp_dir, "depth_used.asc"), file.path(hd, "depth.asc"), overwrite = TRUE)
+  gdb <- EUSEAMAP_2025_GDB[file.exists(EUSEAMAP_2025_GDB)][1]
+  hix <- file.path(hd, "habitat_index.csv")
+  fresh <- !is.na(gdb) && file.exists(hix) && file.mtime(hix) > max(file.mtime(c(ECOSPACE_DEPTH_FILE, gdb))) &&
+    all(file.exists(file.path(hd, paste0(.hab_classes, ".asc"))))
+  if (is.na(gdb)) {
+    .esp_msg("[05b] Habitat drivers: depth only - EUSeaMap 2025 not found (", paste(EUSEAMAP_2025_GDB, collapse = " or "),
+             "; EMODnet Seabed Habitats, emodnet.ec.europa.eu/en/seabed-habitats).")
+    fwrite(data.table(layer = "depth", file = "depth.asc", unit = "m", source = "Ecospace base map", water_cells = n_water,
+                      cells_with_habitat = n_water, area_km2 = NA_real_), hix)
+  } else if (fresh) {
+    .esp_msg("[05b] Habitat drivers: kept from the previous run (", hd, ").")
+  } else {
+    old_s2 <- sf::sf_use_s2(); suppressMessages(sf::sf_use_s2(FALSE)); on.exit(suppressMessages(sf::sf_use_s2(old_s2)), add = TRUE)
+    e <- terra::ext(depth)
+    bb <- sf::st_as_text(sf::st_as_sfc(sf::st_bbox(c(xmin = e[1], ymin = e[3], xmax = e[2], ymax = e[4]), crs = sf::st_crs(4326))))
+    lay <- sf::st_layers(gdb)$name; lay <- if ("EUSeaMap_2025" %in% lay) "EUSeaMap_2025" else lay[1]
+    .esp_msg("[05b] Habitat drivers: reading EUSeaMap 2025 (", lay, ") in the base map's box...")
+    hab <- sf::st_read(gdb, query = sprintf("SELECT EUNIS2019C FROM \"%s\"", lay), wkt_filter = bb, quiet = TRUE)
+    hab <- sf::st_transform(hab[!sf::st_is_empty(hab), ], terra::crs(depth))
+    hab$cls <- .hab_class_of(hab$EUNIS2019C)
+    cell_km2 <- terra::cellSize(depth, unit = "km")
+    rows <- list(data.table(layer = "depth", file = "depth.asc", unit = "m", source = "Ecospace base map", water_cells = n_water,
+                            cells_with_habitat = n_water, area_km2 = as.numeric(terra::global(terra::mask(cell_km2, water, maskvalues = c(NA, 0)), "sum", na.rm = TRUE)[1, 1])))
+    for (h in .hab_classes) {
+      sub <- hab[!is.na(hab$cls) & hab$cls == h, ]
+      r <- if (nrow(sub)) terra::rasterize(terra::vect(sf::st_make_valid(sub)), depth, cover = TRUE) else depth * 0
+      r <- terra::ifel(water, terra::ifel(is.na(r), 0, terra::clamp(r, 0, 1)), NA)
+      .write_asc(r, file.path(hd, paste0(h, ".asc")))
+      rows[[length(rows) + 1]] <- data.table(layer = h, file = paste0(h, ".asc"), unit = "proportion of the cell (0-1)",
+                                             source = paste0("EUSeaMap 2025, EUNIS2019C ", switch(h,
+                                               seagrass = "MB252/MB2522/MB5521/MB5534", coralligenous = "MC151/MC251",
+                                               rock = "M?1", biogenic = "M?2 (not seagrass)", gravel = "M?3 (coarse sediment)",
+                                               mixed = "M?4", sand = "M?5", mud = "M?6")),
+                                             water_cells = n_water, cells_with_habitat = as.integer(terra::global(r > 0, "sum", na.rm = TRUE)[1, 1]),
+                                             area_km2 = as.numeric(terra::global(r * cell_km2, "sum", na.rm = TRUE)[1, 1]))
+    }
+    hi <- rbindlist(rows); fwrite(hi, hix)
+    .esp_msg("[05b] Habitat drivers (static) in ", hd, ": ", paste(sprintf("%s %.0f km2", hi$layer[-1], hi$area_km2[-1]), collapse = ", "), ".")
+  }
+}, error = function(e) .esp_msg("[05b] Habitat drivers not made: ", conditionMessage(e)))
