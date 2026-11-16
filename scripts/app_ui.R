@@ -144,7 +144,7 @@ tagList(
           add(sub, '#run_summary', 'Run summary');
           var ex = add(sub, '#wm-results-explorers', 'Results explorers'), exl = $('<ul></ul>');
           [['#wm-haul-map-box', 'Survey hauls map'], ['#wm-fg-explorer', 'FG explorer'], ['#wm-fleet-explorer', 'Fleet explorer'],
-           ['#wm-diet-explorer', 'Diet explorer'], ['#wm-resp-explorer', 'Responses explorer'], ['#wm-esp-explorer', 'Ecospace maps explorer']
+           ['#wm-diet-explorer', 'Diet explorer'], ['#wm-esp-explorer', 'Ecospace maps explorer'], ['#wm-resp-explorer', 'Responses explorer']
           ].forEach(function (e) { if ($(e[0]).length) add(exl, e[0], e[1], null, true); });
           ex.append(exl);
           add(sub, '#results', 'Key plots', '#wm-view-key');
@@ -416,7 +416,7 @@ tagList(
     uiOutput("run_summary"),
     tags$div(class = "wm-help mb-2", tags$strong("FGs with high F"), " are only reported, never changed: F above 1, or above the highest F in the stock assessments of the FG's species. Each one gets a recommendation in high_F_REVIEW.csv (e.g. a trawl survey that hardly samples the group, missing catchability (card 4), or catch to check)."),
     tags$h4(id = "wm-results-explorers", class = "mt-3 mb-2", "Results explorers"),
-    tags$div(class = "wm-help mb-2", "Each explorer opens on click and closes on its own: survey hauls, FG series, fleets, diets, Ecospace response functions and driver maps of the run shown above."),
+    tags$div(class = "wm-help mb-2", "Each explorer opens on click and closes on its own: survey hauls, FG series, fleets, diets, Ecospace driver maps and response functions of the run shown above."),
     tags$details(class = "card mb-3", id = "wm-haul-map-box",
       tags$summary(class = "card-header py-2", tags$strong("Survey hauls map"), " - MEDITS density in each haul, by year: zoom, move and filter"),
       tags$div(class = "card-body py-2",
@@ -488,22 +488,6 @@ tagList(
           uiOutput("diet_dc_ui")),
         conditionalPanel("input.diet_view_mode != 'dc'", uiOutput("diet_view_ui")),
         tags$div(class = "wm-help", "One predator: the share of each prey FG in its diet according to each source (prey with at least 1% in any source); \u201cModel\u201d is the matrix that goes to Ecopath, with the source it was taken from in the title. Whole matrix: predators in columns, prey in rows, darker = larger share. dietcalcR outputs: the tables dietcalcR writes in diet/dietcalc/ (its 01-08 workflow tables: studies, diets, functional groups, consumers, EwE diet matrix, pedigree, diet table and column sums; plus the run summary, scores, selected studies and merged diets), with the FG of each species from the app\u2019s FG table; pick an FG to see only its species."))),
-    tags$details(class = "card mb-3", id = "wm-resp-explorer",
-      tags$summary(class = "card-header py-2", tags$strong("Responses explorer"), " - Ecospace response functions of the FGs (AquaMaps) by driver, over the driver values of the Ecospace maps"),
-      tags$div(class = "card-body py-2",
-    fluidRow(column(3, selectInput("resp_view_drv", "Driver", width = "100%",
-                                   c("Depth" = "depth", "SST (surface temperature)" = "temp_surf", "SBT (bottom temperature)" = "temp_bot",
-                                     "Salinity (surface)" = "sal_surf", "NPP" = "npp"))),
-             column(5, selectizeInput("resp_view_fg", "Functional groups", choices = NULL, multiple = TRUE, width = "100%",
-                                      options = list(placeholder = "all FGs with a function"))),
-             column(4, checkboxInput("resp_view_hist", "Show the driver values of the Ecospace maps (grey histogram)", TRUE),
-                       fluidRow(column(6, selectInput("resp_view_map", "Ecospace base map", choices = NULL, width = "100%")),
-                                column(6, selectInput("resp_view_scen", "Historical or scenario", choices = c("Historical (Copernicus)" = "historical"), width = "100%"))))),
-    uiOutput("resp_view_ui"),
-    tags$div(class = "mt-2 mb-1",
-      downloadButton("dl_resp_fig", "Download this figure (.png)", class = "btn-sm btn-outline-secondary"),
-      downloadButton("dl_resp_zip", "Download the response functions (.zip of csv)", class = "btn-sm btn-outline-secondary ms-2")),
-    tags$div(class = "wm-help", "Blue: AquaMaps response function (species envelopes weighted by biomass in the FG), relative habitat capacity (maximum 1) over the range EwE uses for that function (X min to X max). Grey: how often each value of the driver occurs in the Ecospace driver maps of 05b (every water cell and month of the base map, depth from the base map), scaled so the tallest bar is 1 - where the curve is high but there is no grey, that habitat is not in the model area. Choosing a scenario compares the last 10 years of the historical maps (grey) with the last 10 years of the scenario (red, e.g. 2041-2050), on the same bins, with their means as dashed lines and the change in the title: over all months the seasonal range (about 13-28 \u00b0C at the surface) hides a shift of about 1 \u00b0C, so the decades are compared."))),
     tags$details(class = "card mb-3", id = "wm-esp-explorer",
       tags$summary(class = "card-header py-2", tags$strong("Ecospace maps explorer"), " - the monthly driver maps of 05b on the Ecospace base map"),
       tags$div(class = "card-body py-2",
@@ -525,6 +509,22 @@ tagList(
           downloadButton("dl_esp_zip", "Download all the maps of this base map and scenario (.zip of .asc)", class = "btn-sm btn-outline-secondary ms-2")),
         uiOutput("esp_scen_ui"),
         tags$div(class = "wm-help", "Press \u25B6 under the slider to play the years (or months). Grey = land (NODATA). One colour scale for all panels. The changes between years are small next to the seasonal cycle, so with \u201cValues\u201d the years look alike: \u201cDifference from the average year\u201d shows each map minus the mean of that month over all years (red = warmer / higher, blue = colder / lower). The line under the single-month map is the mean over the water cells, with the month shown marked."))),
+    tags$details(class = "card mb-3", id = "wm-resp-explorer",
+      tags$summary(class = "card-header py-2", tags$strong("Responses explorer"), " - Ecospace response functions of the FGs (AquaMaps) by driver, over the driver values of the Ecospace maps"),
+      tags$div(class = "card-body py-2",
+    fluidRow(column(3, selectInput("resp_view_drv", "Driver", width = "100%",
+                                   c("Depth" = "depth", "SST (surface temperature)" = "temp_surf", "SBT (bottom temperature)" = "temp_bot",
+                                     "Salinity (surface)" = "sal_surf", "NPP" = "npp"))),
+             column(5, selectizeInput("resp_view_fg", "Functional groups", choices = NULL, multiple = TRUE, width = "100%",
+                                      options = list(placeholder = "all FGs with a function"))),
+             column(4, checkboxInput("resp_view_hist", "Show the driver values of the Ecospace maps (grey histogram)", TRUE),
+                       fluidRow(column(6, selectInput("resp_view_map", "Ecospace base map", choices = NULL, width = "100%")),
+                                column(6, selectInput("resp_view_scen", "Historical or scenario", choices = c("Historical (Copernicus)" = "historical"), width = "100%"))))),
+    uiOutput("resp_view_ui"),
+    tags$div(class = "mt-2 mb-1",
+      downloadButton("dl_resp_fig", "Download this figure (.png)", class = "btn-sm btn-outline-secondary"),
+      downloadButton("dl_resp_zip", "Download the response functions (.zip of csv)", class = "btn-sm btn-outline-secondary ms-2")),
+    tags$div(class = "wm-help", "Blue: AquaMaps response function (species envelopes weighted by biomass in the FG), relative habitat capacity (maximum 1) over the range EwE uses for that function (X min to X max). Grey: how often each value of the driver occurs in the Ecospace driver maps of 05b (every water cell and month of the base map, depth from the base map), scaled so the tallest bar is 1 - where the curve is high but there is no grey, that habitat is not in the model area. Choosing a scenario compares the last 10 years of the historical maps (grey) with the last 10 years of the scenario (red, e.g. 2041-2050), on the same bins, with their means as dashed lines and the change in the title: over all months the seasonal range (about 13-28 \u00b0C at the surface) hides a shift of about 1 \u00b0C, so the decades are compared."))),
     tags$div(class = "wm-results", uiOutput("results"))),
 
   ## Survey hauls map (Results): Leaflet, drawn from the server's
