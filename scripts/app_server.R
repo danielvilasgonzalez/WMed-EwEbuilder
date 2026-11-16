@@ -208,12 +208,13 @@ observe({
   hl <- if (!is.null(hab) && nrow(hab)) hab$layer else "depth"
   env_ch <- c("All environmental drivers" = "all", setNames(env, ifelse(is.na(.esp_lab[env]), env, .esp_lab[env])))
   hab_ch <- setNames(ifelse(hl == "depth", "depth", paste0("hab:", hl)), ifelse(is.na(.esp_hab_lab[hl]), hl, .esp_hab_lab[hl]))
+  if (length(hl) > 1) hab_ch <- c("All habitat drivers" = "hab_all", hab_ch)
   ch <- list("Environmental drivers (spatio-temporal)" = as.list(env_ch), "Habitat drivers (static)" = as.list(hab_ch))   # as.list: a one-item group stays a group
   updateSelectInput(session, "esp_view_var", choices = ch, selected = if (!is.null(cur) && cur %in% c(env_ch, hab_ch)) cur else "all")
 })
 output$esp_view_slider <- renderUI({
   ix <- .esp_index(); v <- input$esp_view_var; req(v)
-  if (v == "depth" || startsWith(v, "hab:")) return(NULL)
+  if (v %in% c("depth", "hab_all") || startsWith(v, "hab:")) return(NULL)
   iv <- if (v == "all") ix[variable == ix$variable[1]] else ix[variable == v]; req(nrow(iv) > 0)
   if (identical(input$esp_view_mode, "year")) {
     yrs <- sort(unique(iv$year))
@@ -224,7 +225,8 @@ output$esp_view_slider <- renderUI({
 })
 output$esp_view_plot_ui <- renderUI({
   v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year")
-  h <- if (identical(v, "all")) (if (yr) 12 * 115 + 110 else 620) else if (yr && !identical(v, "depth") && !startsWith(v, "hab:")) 760 else 480
+  st <- identical(v, "depth") || identical(v, "hab_all") || startsWith(v, "hab:")
+  h <- if (identical(v, "all")) (if (yr) 12 * 100 + 140 else 760) else if (identical(v, "hab_all")) 900 else if (st) 560 else if (yr) 820 else 820
   plotOutput("esp_view_plot", height = paste0(h, "px"))
 })
 .esp_raster <- function(f) { r <- terra::rast(f); terra::NAflag(r) <- -9999; r }
@@ -251,120 +253,197 @@ output$esp_view_plot_ui <- renderUI({
 .esp_sym <- function(rs) { m <- max(abs(unlist(lapply(rs, function(r) terra::global(r, "range", na.rm = TRUE)))), na.rm = TRUE); if (!is.finite(m) || m == 0) m <- 1; c(-m, m) }
 .esp_ulab <- function(u, anom) if (isTRUE(anom)) paste0("difference from the mean year, ", u) else u
 
-## Draws the selected view (also used for the PNG download)
+## --- Drawing (ggplot2 + patchwork; also used for the PNG download) ---------
+.esp_scol <- c(historical = "grey25", ssp119 = "#00ADCF", ssp126 = "#173C66", ssp245 = "#F79420", ssp370 = "#E71D25", ssp585 = "#951B1E")  # IPCC AR6 scenario colours
+.esp_hab_short <- c(seagrass = "Seagrass", coralligenous = "Coralligenous", rock = "Rock", biogenic = "Other biogenic", gravel = "Gravel",
+                    mixed = "Mixed sediment", sand = "Sand", mud = "Mud")
+.esp_hab_col <- c(seagrass = "#2E8B57", coralligenous = "#E07A5F", rock = "#6D6875", biogenic = "#B5838D", gravel = "#C9A66B",
+                  mixed = "#A3B18A", sand = "#F2D492", mud = "#7F5539")
+.esp_land_memo <- new.env()
+.esp_land <- function(crs) {
+  key <- as.character(crs)
+  if (!is.null(.esp_land_memo[[key]])) return(.esp_land_memo[[key]])
+  f <- file.path(.git_dir, "scripts", "land_westmed.geojson")
+  g <- if (file.exists(f)) tryCatch(sf::st_transform(sf::st_read(f, quiet = TRUE), sf::st_crs(crs)), error = function(e) NULL) else NULL
+  assign(key, g, envir = .esp_land_memo); g
+}
+.esp_theme <- function(base = 12) {
+  ggplot2::theme_minimal(base_size = base) +
+    ggplot2::theme(panel.background = ggplot2::element_rect(fill = "#EEF3F7", colour = NA),
+                   panel.grid = ggplot2::element_line(colour = "white", linewidth = 0.3),
+                   panel.border = ggplot2::element_rect(colour = "grey60", fill = NA, linewidth = 0.4),
+                   axis.text = ggplot2::element_text(size = base * 0.7, colour = "grey35"), axis.title = ggplot2::element_blank(),
+                   strip.text = ggplot2::element_text(face = "bold", size = base * 0.85, hjust = 0),
+                   plot.title = ggplot2::element_text(face = "bold", size = base * 1.1), plot.subtitle = ggplot2::element_text(colour = "grey35", size = base * 0.85),
+                   plot.caption = ggplot2::element_text(colour = "grey40", size = base * 0.75, hjust = 0),
+                   legend.position = "bottom", legend.title = ggplot2::element_text(size = base * 0.8),
+                   legend.key.width = grid::unit(3.2, "cm"), legend.key.height = grid::unit(0.32, "cm"))
+}
+.esp_df <- function(r, nm = "value") { d <- terra::as.data.frame(r, xy = TRUE, na.rm = TRUE); names(d)[3] <- nm; d$x <- round(d$x, 6); d$y <- round(d$y, 6); d }
+.esp_fill <- function(v, anom = FALSE, lim = NULL, name = NULL, trans = "identity", breaks = ggplot2::waiver()) {
+  pal <- if (isTRUE(anom)) grDevices::hcl.colors(101, "Blue-Red 3") else if (grepl("^temp", v)) rev(grDevices::hcl.colors(100, "RdYlBu")) else
+    if (v == "sal_surf") grDevices::hcl.colors(100, "Mako") else if (v == "depth") rev(grDevices::hcl.colors(100, "Blues 3")) else
+    if (v == "hab") rev(grDevices::hcl.colors(100, "YlOrBr")) else rev(grDevices::hcl.colors(100, "YlGn"))
+  ggplot2::scale_fill_gradientn(colours = pal, limits = lim, oob = scales::squish, name = name, trans = trans, breaks = breaks,
+                                guide = ggplot2::guide_colourbar(title.position = "top", title.hjust = 0.5, frame.colour = "grey30", ticks.colour = "grey30"))
+}
+## base map: raster cells + coastline, the map's own extent and projection
+.esp_gg <- function(d, dep, fill, facet = NULL, ncol = NULL, base = 12, strip_left = FALSE) {
+  cr <- terra::crs(dep); e <- as.vector(terra::ext(dep)); land <- .esp_land(cr)
+  p <- ggplot2::ggplot(d) + ggplot2::geom_raster(ggplot2::aes(x, y, fill = value)) + fill
+  if (!is.null(land)) p <- p + ggplot2::geom_sf(data = land, fill = "grey88", colour = "grey55", linewidth = 0.2, inherit.aes = FALSE)
+  p <- p + ggplot2::coord_sf(crs = sf::st_crs(cr), default_crs = sf::st_crs(cr), xlim = e[1:2], ylim = e[3:4], expand = FALSE) + .esp_theme(base)
+  if (!is.null(facet)) p <- p + ggplot2::facet_wrap(facet, ncol = ncol, strip.position = if (strip_left) "left" else "top")
+  p
+}
+## robust colour limits (1st-99th percentile of the cell values, so a few extreme coastal
+## cells do not flatten the map): over a sample of all the maps ("same for all years",
+## cached) or over the maps shown
+.esp_qlim_memo <- new.env()
+.esp_q <- function(rs) { z <- unlist(lapply(rs, function(r) terra::values(r, mat = FALSE)), use.names = FALSE); z <- z[is.finite(z)]
+  if (!length(z)) return(c(0, 1)); q <- stats::quantile(z, c(0.01, 0.99), names = FALSE); if (q[1] == q[2]) q + c(-1, 1) * max(abs(q[1]) * 0.01, 1e-6) else q }
+.esp_qlim_all <- function(base, ix, vv) {
+  key <- paste(base, vv, sep = "|"); if (!is.null(.esp_qlim_memo[[key]])) return(.esp_qlim_memo[[key]])
+  iv <- ix[variable == vv]; k <- unique(round(seq(1, nrow(iv), length.out = min(36, nrow(iv)))))
+  q <- .esp_q(lapply(file.path(base, iv$file[k]), .esp_raster)); assign(key, q, envir = .esp_qlim_memo); q
+}
+.esp_vlab <- function(v) if (v %in% names(.esp_lab)) sub(" - .*$", "", .esp_lab[[v]]) else v
+.pr <- function(p) suppressWarnings(print(p))   # geom_raster: tiny float spacing differences of the grid
+.esp_when <- function(y, mo) if (is.na(mo)) as.character(y) else paste(month.abb[mo], y)
+
+## map mean through time: historical and every scenario of this base map
+.esp_series_plot <- function(m, v, mark = NULL, base = 12) {
+  .tt <- function(z) if (all(is.na(z$month))) z$year + 0.5 else z$year + (z$month - 0.5) / 12
+  ser <- rbindlist(lapply(.esp_scens(m), function(sc) {
+    f <- file.path(.esp_scen_dir(m, sc), "ecospace_driver_index.csv")
+    z <- if (file.exists(f)) tryCatch(fread(f)[variable == v][order(time_step)], error = function(e) NULL) else NULL
+    if (is.null(z) || !nrow(z)) NULL else data.table(scenario = sc, t = .tt(z), year = z$year, value = as.numeric(gsub(",", ".", z$mean)))
+  }))
+  if (!nrow(ser)) return(NULL)
+  ann <- ser[, .(t = year[1] + 0.5, value = mean(value)), by = .(scenario, year)]
+  hy <- ser[scenario == "historical", max(year)]
+  ## the annual lines meet: each scenario starts from the last historical year
+  if (is.finite(hy)) ann <- rbind(ann, ann[scenario == "historical" & year == hy][, .(scenario = setdiff(unique(ann$scenario), "historical"), year, t, value)], fill = TRUE)
+  lev <- intersect(names(.esp_scol), unique(ser$scenario)); lev <- c(lev, setdiff(unique(ser$scenario), lev))
+  lab <- ifelse(is.na(.esp_scen_label[lev]), lev, .esp_scen_label[lev])
+  ser[, scenario := factor(scenario, lev)]; ann[, scenario := factor(scenario, lev)]
+  cols <- setNames(ifelse(is.na(.esp_scol[lev]), "grey50", .esp_scol[lev]), lev)
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_line(data = ser, ggplot2::aes(t, value, colour = scenario), linewidth = 0.25, alpha = 0.35) +
+    ggplot2::geom_line(data = ann[order(scenario, t)], ggplot2::aes(t, value, colour = scenario), linewidth = 1.1) +
+    ggplot2::scale_colour_manual(values = cols, labels = setNames(lab, lev), name = NULL) +
+    ggplot2::labs(y = "map mean", x = NULL) + ggplot2::theme_minimal(base_size = base) +
+    ggplot2::theme(legend.position = "top", panel.grid.minor = ggplot2::element_blank(), axis.title.y = ggplot2::element_text(size = base * 0.8))
+  if (length(lev) > 1 && is.finite(hy)) p <- p + ggplot2::geom_vline(xintercept = hy + 1, linetype = "dotted", colour = "grey40")
+  if (!is.null(mark)) p <- p + ggplot2::geom_vline(xintercept = mark, colour = "firebrick", linewidth = 0.8)
+  p
+}
+
 .esp_draw <- function() {
   ix <- .esp_index(); v <- input$esp_view_var; m <- input$esp_view_map; req(v, m)
-  anom <- identical(input$esp_view_values, "anom") && v != "depth" && !startsWith(v, "hab:")
+  static <- v %in% c("depth", "hab_all") || startsWith(v, "hab:")
+  anom <- identical(input$esp_view_values, "anom") && !static
   base <- .esp_scen_dir(m, input$esp_view_scen)
   dep <- .esp_raster(file.path(base, "depth_used.asc"))
-  land <- terra::ifel(is.na(dep) | dep <= 0, 1, NA)
+  if (is.na(terra::crs(dep)) || !nzchar(terra::crs(dep))) terra::crs(dep) <- "EPSG:4326"
+  water <- dep > 0
+  .r <- function(f) { r <- .esp_raster(f); terra::crs(r) <- terra::crs(dep); r }
+  hd <- file.path(.esp_root(), m, "habitat")
+  hix <- if (file.exists(file.path(hd, "habitat_index.csv"))) fread(file.path(hd, "habitat_index.csv")) else NULL
+  if (!is.null(hix)) hix[, area_km2 := as.numeric(gsub(",", ".", area_km2))]
+  src <- if (!is.null(hix) && nrow(hix) > 1) sub(",.*$", "", hix$source[2]) else NULL
+  ## --- static habitat drivers ---------------------------------------------
   if (v == "depth") {
-    r <- terra::ifel(dep > 0, dep, NA)
-    terra::plot(r, col = rev(grDevices::hcl.colors(100, "Blues 3")), colNA = NA, main = "Depth (m)", mar = c(3, 3, 3, 5), plg = list(box = TRUE))
-    terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
-    return(invisible())
+    d <- .esp_df(terra::ifel(water, dep, NA))
+    return(.pr(.esp_gg(d, dep, .esp_fill("depth", name = "Depth (m)")) + ggplot2::labs(title = "Depth", caption = "Ecospace base map (water depth, m).")))
   }
-  if (startsWith(v, "hab:")) {                                          # static habitat layer: proportion of each cell
-    h <- sub("^hab:", "", v); f <- file.path(.esp_root(), m, "habitat", paste0(h, ".asc")); req(file.exists(f))
-    r <- .esp_raster(f)
-    terra::plot(terra::ifel(r > 0, r, NA), col = grDevices::hcl.colors(100, "YlOrBr", rev = TRUE), range = c(0, 1), colNA = NA,
-                main = paste0(if (is.na(.esp_hab_lab[h])) h else .esp_hab_lab[[h]], " (proportion of the cell)"), mar = c(3, 3, 3, 5), plg = list(box = TRUE))
-    terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
-    return(invisible())
+  if (startsWith(v, "hab:")) {
+    h <- sub("^hab:", "", v); r <- .r(file.path(hd, paste0(h, ".asc")))
+    d <- .esp_df(terra::ifel(r > 0, r, NA))
+    a <- if (!is.null(hix)) hix[layer == h, area_km2][1] else NA
+    return(.pr(.esp_gg(d, dep, .esp_fill("hab", lim = c(0, 1), name = "Proportion of the cell (square-root scale)", trans = "sqrt", breaks = c(0.01, 0.1, 0.25, 0.5, 1))) +
+                   ggplot2::labs(title = .esp_hab_lab[[h]], caption = sprintf("Share of each cell covered by the habitat (%s%s). Blank water = none.",
+                                                                              if (!is.null(src)) src else "EUSeaMap", if (is.finite(a)) sprintf("; %s km2 in total", format(round(a), big.mark = ",")) else ""))))
   }
+  if (v == "hab_all") {
+    hl <- if (!is.null(hix)) setdiff(hix$layer, "depth") else character(0)
+    side <- ggplot2::theme(legend.position = "right", legend.key.width = grid::unit(0.45, "cm"), legend.key.height = grid::unit(1.6, "cm"))
+    pd <- .esp_gg(.esp_df(terra::ifel(water, dep, NA)), dep, .esp_fill("depth", name = "Depth (m)")) + ggplot2::labs(title = "Depth") + side
+    if (!length(hl)) return(.pr(pd + ggplot2::labs(caption = "No habitat layers for this base map yet: run 05b with the EUSeaMap geodatabase.")))
+    hs <- terra::rast(lapply(file.path(hd, paste0(hl, ".asc")), .r)); names(hs) <- hl
+    dom <- terra::ifel(max(hs) > 0, terra::which.max(hs), NA)
+    dd <- .esp_df(dom); dd$value <- factor(hl[dd$value], levels = hl, labels = .esp_hab_short[hl])
+    pdom <- .esp_gg(dd, dep, ggplot2::scale_fill_manual(values = setNames(.esp_hab_col[hl], .esp_hab_short[hl]), name = NULL, drop = FALSE)) +
+      ggplot2::labs(title = "Dominant habitat") + ggplot2::theme(legend.position = "right", legend.key.width = grid::unit(0.5, "cm"), legend.key.height = grid::unit(0.5, "cm"))
+    long <- rbindlist(lapply(hl, function(h) { z <- .esp_df(terra::ifel(hs[[h]] > 0, hs[[h]], NA)); if (nrow(z)) z$layer <- h; z }))
+    long[, layer := factor(.esp_hab_short[layer], levels = .esp_hab_short[hl])]
+    a <- if (!is.null(hix)) hix[match(hl, layer), area_km2] else rep(NA, length(hl))
+    levels(long$layer) <- sprintf("%s (%s km\u00b2)", levels(long$layer), trimws(format(round(a), big.mark = ",")))
+    pall <- .esp_gg(long, dep, .esp_fill("hab", lim = c(0, 1), name = "Proportion of the cell (square-root scale: small shares stay visible)",
+                                         trans = "sqrt", breaks = c(0.01, 0.1, 0.25, 0.5, 1)), facet = ~layer, ncol = 4, base = 11) +
+      ggplot2::theme(axis.text = ggplot2::element_blank())
+    return(.pr(patchwork::wrap_plots(pd, pdom, ncol = 2) / pall + patchwork::plot_layout(heights = c(1, 1)) +
+                   patchwork::plot_annotation(title = "Habitat drivers (static)",
+                                              caption = sprintf("Habitat layers: share of each cell covered by the habitat (%s, EUNIS 2019). Dominant habitat = the class with the largest share.", if (!is.null(src)) src else "EUSeaMap"),
+                                              theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15), plot.caption = ggplot2::element_text(colour = "grey40", hjust = 0)))))
+  }
+  ## --- environmental drivers ------------------------------------------------
   fixed <- identical(input$esp_view_scale, "fixed") && !anom
-  if (v == "all") {   # every driver: a year = months as rows x drivers as columns; a month = one map per driver
+  ulab <- function(vv, u) paste0(.esp_vlab(vv), " (", .esp_ulab(u, anom), ")")
+  scl <- if (!is.null(input$esp_view_scen) && !input$esp_view_scen %in% c("historical", "hindcast")) .esp_scen_label[[input$esp_view_scen]] else "Historical"
+  .lim <- function(rs, vv, iy) if (anom) .esp_sym(rs) else if (fixed) .esp_qlim_all(base, ix, vv) else .esp_q(rs)
+  .stack_df <- function(rows, lab) rbindlist(lapply(seq_len(nrow(rows)), function(i) { z <- .esp_df(.esp_get(base, ix, rows[i], anom)); z$panel <- lab[i]; z }))
+  if (v == "all") {
     vars <- unique(ix$variable); i1 <- ix[variable == vars[1]][order(time_step)]
     if (identical(input$esp_view_mode, "year")) {
       y <- input$esp_view_year; if (is.null(y) || !y %in% i1$year) y <- min(i1$year)
-      nm <- max(ix[year == y, .N, by = variable]$N); nv <- length(vars)
-      mat <- rbind(c(0, seq_len(nv)), cbind(nv + seq_len(nm), matrix(nv + nm + seq_len(nm * nv), nm, nv)), c(0, nv + nm + nm * nv + seq_len(nv)))
-      layout(mat, widths = c(0.25, rep(1, nv)), heights = c(0.25, rep(1, nm), 0.42))
-      par(mar = c(0, 0, 0, 0))
-      for (vv in vars) { plot.new(); text(0.5, 0.4, paste0(vv, " (", .esp_ulab(ix[variable == vv, unit][1], anom), ")"), font = 2, cex = if (anom) 0.95 else 1.15) }
-      mlab <- ix[variable == vars[1] & year == y][order(time_step)]
-      for (i in seq_len(nm)) { plot.new(); text(0.6, 0.5, if (i <= nrow(mlab)) (if (is.na(mlab$month[i])) y else paste(month.abb[mlab$month[i]], y)) else "", srt = 90, font = 2, cex = 1.05) }
-      rngs <- list()
-      for (vv in vars) {
-        iy <- ix[variable == vv & year == y][order(time_step)]; iall <- ix[variable == vv]
+      ps <- lapply(seq_along(vars), function(j) {
+        vv <- vars[j]; iy <- ix[variable == vv & year == y][order(time_step)]
+        lab <- if (all(is.na(iy$month))) as.character(y) else month.abb[iy$month]
+        d <- .stack_df(iy, lab); d$panel <- factor(d$panel, levels = unique(lab))
         rs <- lapply(seq_len(nrow(iy)), function(i) .esp_get(base, ix, iy[i], anom))
-        rngs[[vv]] <- if (anom) .esp_sym(rs) else if (fixed) range(c(iall$min, iall$max), na.rm = TRUE) else range(c(iy$min, iy$max), na.rm = TRUE)
-        for (i in seq_len(nm)) {
-          if (i > length(rs)) { plot.new(); next }
-          terra::plot(rs[[i]], col = .esp_pal(vv, anom), range = rngs[[vv]], colNA = NA, legend = FALSE, axes = FALSE, mar = c(0.15, 0.15, 0.15, 0.15))
-          terra::plot(land, col = "grey80", legend = FALSE, add = TRUE, axes = FALSE)
-        }
-      }
-      for (vv in vars) {
-        par(mar = c(2.4, 1.2, 0.8, 1.2)); z <- seq(rngs[[vv]][1], rngs[[vv]][2], length.out = 101)
-        image(x = z, y = 0:1, z = matrix(z[-1], ncol = 1), col = .esp_pal(vv, anom), axes = FALSE, xlab = "", ylab = "")
-        .esp_bar_axis(rngs[[vv]])
-      }
-      return(invisible())
+        .esp_gg(d, dep, .esp_fill(vv, anom, .lim(rs, vv, iy), name = ulab(vv, iy$unit[1])), facet = ~panel, ncol = 1, base = 10, strip_left = TRUE) +
+          ggplot2::labs(title = .esp_vlab(vv)) + ggplot2::guides(fill = ggplot2::guide_colourbar(title.position = "left", title.hjust = 0.5, frame.colour = "grey30", ticks.colour = "grey30", nbin = 100)) +
+          ggplot2::theme(axis.text = ggplot2::element_blank(), legend.position = "right", legend.key.width = grid::unit(0.35, "cm"), legend.key.height = grid::unit(5, "cm"),
+                         legend.text = ggplot2::element_text(size = 7.5), legend.title = ggplot2::element_text(size = 8, angle = 90),
+                                                                strip.text.y.left = if (j == 1) ggplot2::element_text(angle = 0, face = "bold") else ggplot2::element_blank())
+      })
+      return(.pr(patchwork::wrap_plots(ps, nrow = 1) + patchwork::plot_annotation(title = paste("All environmental drivers,", y, "-", scl),
+        caption = if (anom) "Difference from the mean of the same month over all years." else NULL,
+        theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15)))))
     }
     k <- input$esp_view_step; if (is.null(k) || k > nrow(i1)) k <- 1
     y <- i1$year[k]; mo <- i1$month[k]
-    op <- par(mfrow = c(ceiling(length(vars) / 3), min(3, length(vars))))
-    for (vv in vars) {
+    ps <- lapply(vars, function(vv) {
       iv2 <- ix[variable == vv]; row <- iv2[year == y & (is.na(month) | month == mo)][1]
       r <- .esp_get(base, ix, row, anom)
-      rng <- if (anom) .esp_sym(list(r)) else if (fixed) range(c(iv2$min, iv2$max), na.rm = TRUE) else c(row$min, row$max)
-      terra::plot(r, col = .esp_pal(vv, anom), range = rng, colNA = NA, mar = c(1.5, 1.5, 2.5, 4.5), plg = list(box = TRUE),
-                  main = sprintf("%s (%s) %s", vv, .esp_ulab(row$unit, anom), if (is.na(mo)) y else sprintf("%d-%02d", y, mo)), cex.main = 0.95)
-      terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
-    }
-    par(op); return(invisible())
+      .esp_gg(.esp_df(r), dep, .esp_fill(vv, anom, .lim(list(r), vv, row), name = ulab(vv, row$unit)), base = 11) +
+        ggplot2::labs(title = .esp_vlab(vv)) + ggplot2::theme(legend.key.width = grid::unit(2, "cm"))
+    })
+    return(.pr(patchwork::wrap_plots(ps, ncol = min(3, length(ps))) + patchwork::plot_annotation(title = paste("All environmental drivers,", .esp_when(y, mo), "-", scl),
+      theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15)))))
   }
   iv <- ix[variable == v][order(time_step)]
-  pal <- .esp_pal(v, anom)
   if (identical(input$esp_view_mode, "year")) {   # the 12 months of one year, one colour scale
     y <- input$esp_view_year; if (is.null(y) || !y %in% iv$year) y <- min(iv$year)
     iy <- iv[year == y]
+    mu <- vapply(seq_len(nrow(iy)), function(i) terra::global(.esp_get(base, ix, iy[i], anom), "mean", na.rm = TRUE)[1, 1], 0)
+    lab <- sprintf("%s  (mean %s%.3g)", if (all(is.na(iy$month))) as.character(y) else month.abb[iy$month], ifelse(anom & mu > 0, "+", ""), mu)
+    d <- .stack_df(iy, lab); d$panel <- factor(d$panel, levels = lab)
     rs <- lapply(seq_len(nrow(iy)), function(i) .esp_get(base, ix, iy[i], anom))
-    labs <- if (all(is.na(iy$month))) as.character(y) else month.abb[iy$month]
-    rng <- if (anom) .esp_sym(rs) else if (fixed) range(c(iv$min, iv$max), na.rm = TRUE) else range(c(iy$min, iy$max), na.rm = TRUE)
-    nc <- if (length(rs) > 6) 4 else min(3, length(rs)); nr <- ceiling(length(rs) / nc)
-    layout(rbind(matrix(seq_len(nr * nc), nr, nc, byrow = TRUE), nr * nc + 1), heights = c(rep(1, nr), 0.3))
-    for (i in seq_len(nr * nc)) {
-      if (i > length(rs)) { plot.new(); next }
-      mu <- terra::global(rs[[i]], "mean", na.rm = TRUE)[1, 1]
-      terra::plot(rs[[i]], col = pal, range = rng, colNA = NA, legend = FALSE, axes = FALSE, mar = c(0.3, 0.3, 1.6, 0.3),
-                  main = sprintf("%s %d  (mean %s%.3g)", labs[i], y, if (anom && mu > 0) "+" else "", mu), cex.main = 1)
-      terra::plot(land, col = "grey80", legend = FALSE, add = TRUE, axes = FALSE)
-    }
-    par(mar = c(2.2, 6, 0.6, 6))
-    z <- seq(rng[1], rng[2], length.out = 101)
-    image(x = z, y = 0:1, z = matrix(z[-1], ncol = 1), col = pal, axes = FALSE, xlab = "", ylab = "")
-    .esp_bar_axis(rng, 0.9); mtext(sprintf("%s (%s) - %d", v, .esp_ulab(iv$unit[1], anom), y), side = 3, line = 0.2, cex = 0.85, font = 2)
-    return(invisible())
+    return(.pr(.esp_gg(d, dep, .esp_fill(v, anom, .lim(rs, v, iy), name = ulab(v, iv$unit[1])), facet = ~panel, ncol = 4, base = 11) +
+                   ggplot2::labs(title = paste0(.esp_vlab(v), ", ", y, " - ", scl),
+                                 caption = if (anom) "Difference from the mean of the same month over all years (red = warmer / higher)." else "Monthly maps; one colour scale for all panels.")))
   }
   k <- input$esp_view_step; if (is.null(k) || k > nrow(iv)) k <- 1
   r <- .esp_get(base, ix, iv[k], anom)
-  rng <- if (anom) .esp_sym(list(r)) else if (fixed) range(c(iv$min, iv$max), na.rm = TRUE) else range(terra::values(r), na.rm = TRUE)
-  when <- if (is.na(iv$month[k])) iv$year[k] else sprintf("%d-%02d", iv$year[k], iv$month[k])
-  layout(matrix(1:2, ncol = 1), heights = c(4, 1.3))
-  terra::plot(r, col = pal, range = rng, colNA = NA, mar = c(2, 3, 3, 5), plg = list(box = TRUE),
-              main = sprintf("%s (%s) - %s   mean %.3g, range %.3g to %.3g", v, .esp_ulab(iv$unit[k], anom), when,
-                             terra::global(r, "mean", na.rm = TRUE)[1, 1], rng[1], rng[2]))
-  terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
-  tt <- if (all(is.na(iv$month))) iv$year else iv$year + (iv$month - 0.5) / 12
-  ## map mean through time: the historical maps and every climate scenario
-  ## of this base map (05s -> 05b), joined at the last historical year
-  .tt <- function(z) if (all(is.na(z$month))) z$year else z$year + (z$month - 0.5) / 12
-  scol <- c(historical = "grey20", ssp126 = "#1a9850", ssp245 = "#fdae61", ssp370 = "#d73027", ssp585 = "#7b3294")
-  ser <- Filter(Negate(is.null), lapply(.esp_scens(input$esp_view_map), function(sc) {
-    f <- file.path(.esp_scen_dir(input$esp_view_map, sc), "ecospace_driver_index.csv")
-    z <- if (file.exists(f)) tryCatch(fread(f)[variable == v][order(time_step)], error = function(e) NULL) else NULL
-    if (is.null(z) || !nrow(z)) NULL else list(sc = sc, t = .tt(z), y = z$mean)
-  }))
-  if (!length(ser)) ser <- list(list(sc = "historical", t = tt, y = iv$mean))
-  par(mar = c(3, 4, 0.5, 5.5))
-  plot(range(unlist(lapply(ser, `[[`, "t"))), range(unlist(lapply(ser, `[[`, "y")), na.rm = TRUE), type = "n",
-       xlab = "", ylab = "map mean", las = 1, cex.axis = 0.8)
-  for (q in ser) lines(q$t, q$y, col = if (is.na(scol[q$sc])) "grey50" else scol[[q$sc]], lwd = if (q$sc == "historical") 1.2 else 1)
-  abline(v = tt[k], col = "firebrick", lwd = 2)
-  if (length(ser) > 1) legend("topleft", legend = .esp_scen_label[vapply(ser, `[[`, "", "sc")], col = scol[vapply(ser, `[[`, "", "sc")],
-                              lwd = 2, bty = "n", horiz = TRUE, cex = 0.8)
+  rng <- .lim(list(r), v, iv[k])
+  pm <- .esp_gg(.esp_df(r), dep, .esp_fill(v, anom, rng, name = ulab(v, iv$unit[k]))) +
+    ggplot2::labs(title = paste0(.esp_vlab(v), ", ", .esp_when(iv$year[k], iv$month[k]), " - ", scl),
+                  subtitle = sprintf("map mean %.3g, range %.3g to %.3g", terra::global(r, "mean", na.rm = TRUE)[1, 1], terra::global(r, "min", na.rm = TRUE)[1, 1], terra::global(r, "max", na.rm = TRUE)[1, 1]))
+  ps <- .esp_series_plot(m, v, mark = if (is.na(iv$month[k])) iv$year[k] + 0.5 else iv$year[k] + (iv$month[k] - 0.5) / 12)
+  .pr(if (is.null(ps)) pm else patchwork::wrap_plots(pm, ps, ncol = 1, heights = c(3, 1.3)) +
+          patchwork::plot_annotation(caption = "Lower panel: mean of each monthly map (thin) and annual mean (thick), historical and climate scenarios; red line = the month shown."))
 }
 output$esp_view_plot <- renderPlot({
   tryCatch(.esp_draw(), error = function(e) {
@@ -375,7 +454,8 @@ output$esp_view_plot <- renderPlot({
 })
 .esp_fig_size <- function() {
   v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year")
-  if (identical(v, "all")) (if (yr) c(1300, 12 * 125 + 120) else c(1300, 700)) else if (yr && !identical(v, "depth") && !startsWith(v, "hab:")) c(1300, 860) else c(1100, 640)
+  st <- identical(v, "depth") || identical(v, "hab_all") || startsWith(v, "hab:")
+  if (identical(v, "all")) (if (yr) c(1500, 12 * 105 + 160) else c(1500, 850)) else if (identical(v, "hab_all")) c(1500, 1050) else if (st) c(1200, 700) else c(1300, 950)
 }
 output$dl_esp_fig <- downloadHandler(
   filename = function() paste0("ecospace_", gsub("[^A-Za-z0-9_]", "_", input$esp_view_var), "_", if (identical(input$esp_view_mode, "year")) input$esp_view_year else "month",
@@ -409,22 +489,44 @@ output$dl_esp_zip <- downloadHandler(
   rbind(if (!is.null(hm)) hm[variable %in% s$variable, .(scenario = "historical", variable, year, value)],
         s[, .(scenario, variable, year, value)])
 })
+## scenarios made before the bias adjustment (no continuity file) or older than the hindcast
+.scn_stale <- reactive({
+  run_state(); d <- file.path(.inputs_run_dir(), "environment")
+  fs <- file.path(d, "scenarios", "environment_scenarios_annual.csv"); if (!file.exists(fs)) return(NULL)
+  if (!file.exists(file.path(d, "scenarios", "environment_scenarios_continuity.csv")))
+    return("These scenarios were made before the bias adjustment, so they still jump from the historical series. Tick the scenarios in card 5 and run step 5 again.")
+  fh <- file.path(d, "environment_timeseries_annual.csv")
+  if (file.exists(fh) && file.mtime(fh) > file.mtime(fs) + 60)
+    return(paste0("These scenarios (", format(file.mtime(fs), "%d %b %H:%M"), ") are older than the historical series (", format(file.mtime(fh), "%d %b %H:%M"),
+                  "). Tick the scenarios in card 5 and run step 5 again."))
+  NULL
+})
 output$esp_scen_ui <- renderUI({
   if (is.null(.scn_series())) return(tags$div(class = "wm-help mt-2", "Climate scenarios: none yet - tick them in card 5 (05 environment) and run 05, then 05b for their Ecospace maps."))
-  tagList(tags$strong("Historical and climate scenarios (annual mean over the model area)"), plotOutput("esp_scen_plot", height = "520px"))
+  tagList(tags$h6(class = "mt-3 mb-1", tags$strong("Historical and climate scenarios")),
+          if (!is.null(.scn_stale())) tags$div(class = "alert alert-warning py-2 my-1", .scn_stale()),
+          plotOutput("esp_scen_plot", height = "560px"),
+          tags$div(class = "wm-help", "Figure. Annual mean over the model area: historical (Copernicus) and ISIMIP3b scenarios bias-adjusted to it; each scenario starts from the last historical year."))
 })
 output$esp_scen_plot <- renderPlot({
   x <- .scn_series(); req(x)
   vs <- unique(x$variable); v <- input$esp_view_var; if (!is.null(v) && v %in% vs) vs <- v
-  cols <- c(historical = "black", ssp126 = "#1a9850", ssp245 = "#fdae61", ssp370 = "#d73027", ssp585 = "#7b3294")
-  ulab <- c(temp_surf = "SST (deg C)", temp_bot = "SBT (deg C)", sal_surf = "Salinity (PSU)", npp = "NPP (g C m-2 d-1)")
-  op <- par(mfrow = c(ceiling(length(vs) / 2), min(2, length(vs))), mar = c(4, 4.5, 2.5, 1), cex.axis = 1.05, cex.lab = 1.1); on.exit(par(op))
-  for (vv in vs) {
-    z <- x[variable == vv]
-    plot(range(z$year), range(z$value, na.rm = TRUE), type = "n", xlab = "", ylab = ifelse(is.na(ulab[vv]), vv, ulab[vv]), main = vv)
-    for (sc in intersect(names(cols), unique(z$scenario))) { q <- z[scenario == sc][order(year)]; lines(q$year, q$value, col = cols[[sc]], lwd = if (sc == "historical") 2 else 1.8) }
-    legend("topleft", legend = .esp_scen_label[intersect(names(cols), unique(z$scenario))], col = cols[intersect(names(cols), unique(z$scenario))], lwd = 2, bty = "n", cex = 0.9)
-  }
+  ulab <- c(temp_surf = "SST (\u00b0C)", temp_bot = "SBT (\u00b0C)", sal_surf = "Salinity (PSU)", npp = "NPP (g C m\u207b\u00b2 d\u207b\u00b9)")
+  x <- x[variable %in% vs]
+  hy <- x[scenario == "historical", max(year)]
+  if (is.finite(hy)) { j <- x[scenario == "historical" & year == hy]                       # each scenario line starts at the last historical year
+    x <- rbind(x, rbindlist(lapply(setdiff(unique(x$scenario), "historical"), function(sc) copy(j)[, scenario := sc]))) }
+  lev <- intersect(names(.esp_scol), unique(x$scenario))
+  x[, scenario := factor(scenario, lev)]
+  x[, vlab := factor(ifelse(is.na(ulab[variable]), variable, ulab[variable]), levels = unique(ifelse(is.na(ulab[vs]), vs, ulab[vs])))]
+  ggplot2::ggplot(x[order(scenario, year)], ggplot2::aes(year, value, colour = scenario)) +
+    { if (is.finite(hy)) ggplot2::annotate("rect", xmin = -Inf, xmax = hy, ymin = -Inf, ymax = Inf, fill = "grey93") } +
+    ggplot2::geom_line(linewidth = 1) +
+    ggplot2::facet_wrap(~vlab, scales = "free_y", ncol = min(2, length(vs))) +
+    ggplot2::scale_colour_manual(values = .esp_scol[lev], labels = .esp_scen_label[lev], name = NULL) +
+    ggplot2::labs(x = NULL, y = NULL) + ggplot2::theme_minimal(base_size = 14) +
+    ggplot2::theme(legend.position = "top", panel.grid.minor = ggplot2::element_blank(), strip.text = ggplot2::element_text(face = "bold", hjust = 0),
+                   panel.border = ggplot2::element_rect(colour = "grey70", fill = NA))
 })
 ## --- Ecospace response functions of the FGs (05c) --------------------------
 .resp_dir <- function() file.path(.inputs_run_dir(), "environment", "ecospace_responses")
