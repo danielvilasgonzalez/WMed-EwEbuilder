@@ -314,10 +314,10 @@ output$esp_view_plot_ui <- renderUI({
 ## map mean through time: historical and every scenario of this base map
 .esp_series_plot <- function(m, v, mark = NULL, base = 12) {
   .tt <- function(z) if (all(is.na(z$month))) z$year + 0.5 else z$year + (z$month - 0.5) / 12
-  ser <- rbindlist(lapply(.esp_scens(m), function(sc) {
+  ser <- data.table::rbindlist(lapply(.esp_scens(m), function(sc) {
     f <- file.path(.esp_scen_dir(m, sc), "ecospace_driver_index.csv")
     z <- if (file.exists(f)) tryCatch(fread(f)[variable == v][order(time_step)], error = function(e) NULL) else NULL
-    if (is.null(z) || !nrow(z)) NULL else data.table(scenario = sc, t = .tt(z), year = z$year, value = as.numeric(gsub(",", ".", z$mean)))
+    if (is.null(z) || !nrow(z)) NULL else data.table::data.table(scenario = sc, t = .tt(z), year = z$year, value = as.numeric(gsub(",", ".", z$mean)))
   }))
   if (!nrow(ser)) return(NULL)
   ann <- ser[, .(t = year[1] + 0.5, value = mean(value)), by = .(scenario, year)]
@@ -375,7 +375,7 @@ output$esp_view_plot_ui <- renderUI({
     dd <- .esp_df(dom); dd$value <- factor(hl[dd$value], levels = hl, labels = .esp_hab_short[hl])
     pdom <- .esp_gg(dd, dep, ggplot2::scale_fill_manual(values = setNames(.esp_hab_col[hl], .esp_hab_short[hl]), name = NULL, drop = FALSE)) +
       ggplot2::labs(title = "Dominant habitat") + ggplot2::theme(legend.position = "right", legend.key.width = grid::unit(0.5, "cm"), legend.key.height = grid::unit(0.5, "cm"))
-    long <- rbindlist(lapply(hl, function(h) { z <- .esp_df(terra::ifel(hs[[h]] > 0, hs[[h]], NA)); if (nrow(z)) z$layer <- h; z }))
+    long <- data.table::rbindlist(lapply(hl, function(h) { z <- .esp_df(terra::ifel(hs[[h]] > 0, hs[[h]], NA)); if (nrow(z)) z$layer <- h; z }))
     long[, layer := factor(.esp_hab_short[layer], levels = .esp_hab_short[hl])]
     a <- if (!is.null(hix)) hix[match(hl, layer), area_km2] else rep(NA, length(hl))
     levels(long$layer) <- sprintf("%s (%s km\u00b2)", levels(long$layer), trimws(format(round(a), big.mark = ",")))
@@ -392,7 +392,7 @@ output$esp_view_plot_ui <- renderUI({
   ulab <- function(vv, u) paste0(.esp_vlab(vv), " (", .esp_ulab(u, anom), ")")
   scl <- if (!is.null(input$esp_view_scen) && !input$esp_view_scen %in% c("historical", "hindcast")) .esp_scen_label[[input$esp_view_scen]] else "Historical"
   .lim <- function(rs, vv, iy) if (anom) .esp_sym(rs) else if (fixed) .esp_qlim_all(base, ix, vv) else .esp_q(rs)
-  .stack_df <- function(rows, lab) rbindlist(lapply(seq_len(nrow(rows)), function(i) { z <- .esp_df(.esp_get(base, ix, rows[i], anom)); z$panel <- lab[i]; z }))
+  .stack_df <- function(rows, lab) data.table::rbindlist(lapply(seq_len(nrow(rows)), function(i) { z <- .esp_df(.esp_get(base, ix, rows[i], anom)); z$panel <- lab[i]; z }))
   if (v == "all") {
     vars <- unique(ix$variable); i1 <- ix[variable == vars[1]][order(time_step)]
     if (identical(input$esp_view_mode, "year")) {
@@ -515,7 +515,7 @@ output$esp_scen_plot <- renderPlot({
   x <- x[variable %in% vs]
   hy <- x[scenario == "historical", max(year)]
   if (is.finite(hy)) { j <- x[scenario == "historical" & year == hy]                       # each scenario line starts at the last historical year
-    x <- rbind(x, rbindlist(lapply(setdiff(unique(x$scenario), "historical"), function(sc) copy(j)[, scenario := sc]))) }
+    x <- rbind(x, data.table::rbindlist(lapply(setdiff(unique(x$scenario), "historical"), function(sc) data.table::copy(j)[, scenario := sc]))) }
   lev <- intersect(names(.esp_scol), unique(x$scenario))
   x[, scenario := factor(scenario, lev)]
   x[, vlab := factor(ifelse(is.na(ulab[variable]), variable, ulab[variable]), levels = unique(ifelse(is.na(ulab[vs]), vs, ulab[vs])))]
