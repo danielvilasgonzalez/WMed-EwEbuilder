@@ -326,9 +326,23 @@ output$esp_view_plot_ui <- renderUI({
                              terra::global(r, "mean", na.rm = TRUE)[1, 1], rng[1], rng[2]))
   terra::plot(land, col = "grey80", legend = FALSE, add = TRUE)
   tt <- if (all(is.na(iv$month))) iv$year else iv$year + (iv$month - 0.5) / 12
+  ## map mean through time: the historical maps and every climate scenario
+  ## of this base map (05s -> 05b), joined at the last historical year
+  .tt <- function(z) if (all(is.na(z$month))) z$year else z$year + (z$month - 0.5) / 12
+  scol <- c(historical = "grey20", ssp126 = "#1a9850", ssp245 = "#fdae61", ssp370 = "#d73027", ssp585 = "#7b3294")
+  ser <- Filter(Negate(is.null), lapply(.esp_scens(input$esp_view_map), function(sc) {
+    f <- file.path(.esp_scen_dir(input$esp_view_map, sc), "ecospace_driver_index.csv")
+    z <- if (file.exists(f)) tryCatch(fread(f)[variable == v][order(time_step)], error = function(e) NULL) else NULL
+    if (is.null(z) || !nrow(z)) NULL else list(sc = sc, t = .tt(z), y = z$mean)
+  }))
+  if (!length(ser)) ser <- list(list(sc = "historical", t = tt, y = iv$mean))
   par(mar = c(3, 4, 0.5, 5.5))
-  plot(tt, iv$mean, type = "l", col = "grey30", xlab = "", ylab = "map mean", las = 1, cex.axis = 0.8)
+  plot(range(unlist(lapply(ser, `[[`, "t"))), range(unlist(lapply(ser, `[[`, "y")), na.rm = TRUE), type = "n",
+       xlab = "", ylab = "map mean", las = 1, cex.axis = 0.8)
+  for (q in ser) lines(q$t, q$y, col = if (is.na(scol[q$sc])) "grey50" else scol[[q$sc]], lwd = if (q$sc == "historical") 1.2 else 1)
   abline(v = tt[k], col = "firebrick", lwd = 2)
+  if (length(ser) > 1) legend("topleft", legend = .esp_scen_label[vapply(ser, `[[`, "", "sc")], col = scol[vapply(ser, `[[`, "", "sc")],
+                              lwd = 2, bty = "n", horiz = TRUE, cex = 0.8)
 }
 output$esp_view_plot <- renderPlot({
   tryCatch(.esp_draw(), error = function(e) {
@@ -433,8 +447,8 @@ observe({
   } else {
     ix <- fread(file.path(ed, "ecospace_driver_index.csv"))[variable == d]
     if (!is.null(last_n) && nrow(ix)) ix <- ix[year > max(year) - last_n]
-    if (!nrow(ix) || any(grepl("^relative", ix$unit))) numeric(0) else
-      unlist(lapply(file.path(ed, ix$file), function(ff) if (file.exists(ff)) { v <- terra::values(terra::rast(ff), mat = FALSE); v[is.finite(v)] }))
+    ## one value per monthly map: its mean over the water cells (05b index)
+    if (!nrow(ix) || any(grepl("^relative", ix$unit))) numeric(0) else as.numeric(ix$mean[is.finite(ix$mean)])
   }, error = function(e) numeric(0))
   .resp_hist_cache[[key]] <- x
   x

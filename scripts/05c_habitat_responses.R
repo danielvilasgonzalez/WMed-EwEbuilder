@@ -200,8 +200,10 @@ if ("aquamaps" %in% RESPONSE_SOURCES) tryCatch({
 ## 2. Values of the drivers in the Ecospace maps (05b)
 ## =================================================================
 ## Base map: the one 05b made in this run (esp_dir), else the most recent
-## folder of environment/ecospace_drivers. Every water cell of every
-## time step (absolute values only; relative maps are not comparable).
+## folder of environment/ecospace_drivers. One value per time step: the
+## mean of that monthly map over its water cells (05b index); depth: every
+## water cell of the base map. Absolute values only (relative maps are not
+## comparable).
 .drv_dist <- tryCatch({
   .hist_of <- function(d) if (file.exists(file.path(d, "historical", "ecospace_driver_index.csv"))) file.path(d, "historical") else d
   ed <- get0("esp_dir", envir = .GlobalEnv, ifnotfound = NA_character_)
@@ -217,8 +219,7 @@ if ("aquamaps" %in% RESPONSE_SOURCES) tryCatch({
     vals <- list()
     for (v in intersect(RESPONSE_DRIVERS, unique(ix$variable))) {
       if (any(grepl("^relative", ix[variable == v, unit]))) next
-      vals[[v]] <- unlist(lapply(file.path(ed, ix[variable == v, file]), function(f)
-        if (file.exists(f)) { x <- terra::values(terra::rast(f), mat = FALSE); x[is.finite(x)] } else numeric(0)))
+      vals[[v]] <- as.numeric(ix[variable == v & is.finite(mean), mean])        # mean of each monthly map (water cells)
     }
     if ("depth" %in% RESPONSE_DRIVERS && file.exists(file.path(ed, "depth_used.asc"))) {
       x <- terra::values(terra::rast(file.path(ed, "depth_used.asc")), mat = FALSE); vals$depth <- abs(x[is.finite(x) & x != 0])
@@ -274,8 +275,8 @@ if (!length(funs)) {
       ggplot2::facet_wrap(~ lab, scales = "free_x", ncol = 6) +
       ggplot2::labs(x = paste0(drv, " (", .hr_units[drv], ")"), y = "Relative habitat capacity",
                     title = paste0("Ecospace response functions: ", drv),
-                    subtitle = if (!is.null(hd) && nrow(hd)) paste0("Grey: values of ", drv, " in the Ecospace driver maps (", hd$base_map[1],
-                                                                  "; all water cells and months; tallest bar = 1)") else NULL) +
+                    subtitle = if (!is.null(hd) && nrow(hd)) paste0("Grey: ", if (drv == "depth") "depth of the water cells of the Ecospace base map (" else "mean of each monthly Ecospace driver map (",
+                                                                  hd$base_map[1], "; tallest bar = 1)") else NULL) +
       ggplot2::theme_bw(base_size = 14) + ggplot2::theme(legend.position = "top", strip.text = ggplot2::element_text(size = 9))
     nr <- ceiling(uniqueN(p$lab) / 6)
     ggplot2::ggsave(file.path(resp_dir, paste0("ecospace_response_", drv, ".png")), g, width = 18, height = 2.4 * nr + 1.5, dpi = 150, limitsize = FALSE)
