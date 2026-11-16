@@ -1953,6 +1953,56 @@ year.
     $F \le 1$ cap.
 12. Ecosim: catch series $C_{f,y}/A_{model}$; effort series relative to
     1995.
+13. **Recreational fleets** (one per country, `<code> recreational`;
+    `INCLUDE_RECREATIONAL_FLEET`). No source of the pipeline measures
+    recreational catch, so (ASSUMPTION)
+    $C^{rec}_{c,g,y} = C^{com}_{c,g,y}\, r_{c,g}$, with $r_{c,g}$ = Sea
+    Around Us reconstructed recreational : commercial catch of country $c$
+    and FG $g$ over the Ecopath years (all SAU years if none). Countries
+    without an SAU sector split (Tunisia) take the median $r$ of the same
+    FG in the other southern countries. `RECREATIONAL_RATIO_MANUAL`
+    replaces $r$ with a survey figure where one exists; $r \le$
+    `RECREATIONAL_RATIO_MAX`. Landings = catch (released fish not
+    estimated). The recreational catch is added on top of the commercial
+    total (it is not part of the GFCM/FDI catch). Check
+    `recreational_share_by_country_REVIEW.csv` against the
+    Mediterranean-wide order of magnitude (recreational catch about 10 %
+    of commercial landings; FAO-GFCM SoMFi). Effort (ASSUMPTION): index
+    of SAU's reconstructed recreational catch of the country (built from
+    participation estimates), 1 = Ecopath years, held outside SAU's
+    years; constant where SAU has none; `RECREATIONAL_EFFORT_MANUAL`
+    replaces it.
+14. **Off-vessel prices** (sheet `Ecopath_price`, EUR/t; EwE
+    *Off-vessel price*): STECF FDI landing value / landed weight (all FDI
+    years, nominal EUR) of the fleet and FG, else of the country and FG,
+    else of the FG over Spain, France and Italy. Morocco, Algeria and
+    Tunisia: FDI price of the same gear and FG
+    $\times$ `PRICE_COUNTRY_FACTOR` (default 1 = EU prices,
+    ASSUMPTION). Recreational fleets: FDI price of the FG
+    $\times$ `RECREATIONAL_PRICE_FACTOR` (catch valued at first-sale
+    prices, ASSUMPTION). Basis per cell: `offvessel_price_REVIEW.csv`.
+15. **Fleet costs** (EwE *Definition of fleets*, % of the value of the
+    landings): fixed = capital costs (gross − net profit); effort-related
+    = intermediate consumption (revenue − GVA: energy, repair, other
+    costs); sailing-related = labour (GVA − gross profit); profit = net
+    profit; from the STECF Annual Economic Reports for the
+    Mediterranean [@stecf2023aer; @stecf2024aer]:
+
+    | Fleet | Fixed | Effort | Sailing | Profit | Basis |
+    |---|---|---|---|---|---|
+    | artisanal | 13.4 | 36.9 | 44.5 | 5.2 | small-scale coastal fleet, mean 2021–2022 |
+    | set longliners | 8.2 | 39.0 | 35.4 | 17.4 | ITA HOK 18–24 m, 2022 |
+    | drifting longliners | 8.0 | 52.0 | 38.0 | 2.0 | mean ITA and ESP HOK 18–24 m, 2022 |
+    | bottom trawlers | 18.0 | 52.0 | 28.0 | 2.0 | large-scale fleet 2022 with trawler energy (ASSUMPTION) |
+    | midwater trawlers | 16.0 | 46.0 | 31.0 | 7.0 | large-scale fleet 2022 (ASSUMPTION) |
+    | purse seiners | 14.0 | 34.0 | 40.0 | 12.0 | large-scale fleet 2022, less energy, more labour (ASSUMPTION) |
+    | recreational | 30.0 | 50.0 | 20.0 | 0.0 | anglers' spending, no market (ASSUMPTION) |
+
+    Morocco, Algeria and Tunisia take the same gear rows (no comparable
+    economic survey, ASSUMPTION). `data/fisheries/fleet_costs_ewe.csv`
+    (Country, Fleet_pattern, ...) replaces these rows, e.g. with a
+    country-specific row. Discard fate: all discards to the discards
+    detritus group.
 
 ### Data sources and references
 

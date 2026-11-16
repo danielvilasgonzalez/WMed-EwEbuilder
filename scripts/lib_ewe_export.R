@@ -6,6 +6,7 @@
 ## EwE software reads, with the same layout, column names and file names as
 ## EwE's own csv export ("<model>-Basic_input.csv", ...):
 ##   Basic_input, Diet_composition, Landings, Discards, Definition_of_fleets,
+##   Off_vessel_price, Discard_fate,
 ##   Pedigree, Traits (+ Stanzas: the inputs of EwE's multi-stanza form)
 ## as csv files (one per table) and/or one xlsx with a sheet per table.
 ##
@@ -87,22 +88,50 @@ ewe_stanza_groups <- function(fg) {
 ## data/fisheries/fleet_costs_ewe.csv (Country, Fleet_pattern,
 ## Fixed_cost_pct, Effort_cost_pct, Sailing_cost_pct, Profit_pct,
 ## Reference) replaces the built-in rows below.
-## Built-in rows: STECF (2023) Annual Economic Report on the EU fishing
-## fleet (STECF 23-07), section 3.5 Mediterranean Sea, 2021:
-##   small-scale coastal fleet: GVA/revenue 65%, gross profit margin 23%,
-##   net profit margin 10.7% -> labour 42, capital 12.3, intermediate 35;
-##   whole Mediterranean fleet: revenue EUR 1.49 bn, GVA 0.89 bn, gross
-##   profit 389 M, net profit 191 M -> intermediate 40.3, labour 33.6,
-##   capital 13.3, net profit 12.8 (used for the large-scale gears: the
-##   report gives no cost split by gear for the Mediterranean).
+## Built-in rows (Mediterranean, STECF Annual Economic Reports; EwE items:
+## Fixed = capital costs (depreciation + opportunity cost = gross - net
+## profit), Effort = intermediate consumption (revenue - GVA: energy,
+## repair, other variable and non-variable costs), Sailing = labour (GVA -
+## gross profit), Profit = net profit; all as % of revenue). The AER gives
+## no full cost split by gear for the Mediterranean, so the gear rows are
+## anchored on the segments it reports and are ASSUMPTIONS where flagged.
+## Morocco, Algeria and Tunisia take the same gear rows (no AER; flagged).
+##   artisanal: Mediterranean small-scale coastal fleet, mean of 2021
+##     (STECF 23-07: 12.3 / 35.0 / 42.0 / 10.7) and 2022 (STECF 24-07:
+##     revenue 466 M, GVA 285 M, gross profit 66 M, net -1.7 M -> 14.5 /
+##     38.8 / 47.0 / -0.4).
+##   set longliners: ITA HOK 18-24 m 2022 (STECF 24-07 Table 3.2: revenue
+##     6.13 M, GVA 3.74, gross profit 1.57, net 1.07).
+##   drifting longliners: mean of ITA HOK 18-24 and ESP HOK 18-24 (LLD)
+##     2022 (revenue 6.33, GVA 1.26, gross -1.59, net -1.64), fixed cost
+##     raised to 8 % (the ICCAT segments report almost no capital cost).
+##   trawlers: Mediterranean large-scale fleet 2022 (revenue 1160 M, GVA
+##     639 M, gross profit 280 M, net 96.7 M -> 15.8 / 44.9 / 30.9 / 8.4)
+##     with more energy and less profit, as the Italian demersal trawlers
+##     (energy 32 % of large-scale costs; DTS 12-18 m and 24-40 m net
+##     losses in 2022) - ASSUMPTION.
+##   purse seiners: large-scale structure with less energy and more labour
+##     (share system) - ASSUMPTION.
+##   recreational: no market and no revenue; anglers' spending split into
+##     boats and gear (fixed), trips, fuel and bait (effort) and travel
+##     (sailing), profit 0 - ASSUMPTION, placeholder.
+##   other gears: whole Mediterranean fleet 2021 (STECF 23-07).
 EWE_FLEET_COSTS_DEFAULT <- data.frame(
   Country = "*",
-  Fleet_pattern = c("Recreational", "Artisanal|small.scale", "."),
-  Fixed_cost_pct = c(0, 12.3, 13.3), Effort_cost_pct = c(40, 35.0, 40.3),
-  Sailing_cost_pct = c(40, 42.0, 33.6), Profit_pct = c(20, 10.7, 12.8),
-  Reference = c("EwE default (no cost data for recreational fishing)",
-                "STECF 2023 AER (STECF 23-07), Mediterranean small-scale coastal fleet 2021: GVA/revenue 65%, gross profit margin 23%, net profit margin 10.7%",
-                "STECF 2023 AER (STECF 23-07), whole Mediterranean fleet 2021: revenue EUR 1.49 bn, GVA 0.89 bn, gross profit 389 M, net profit 191 M"),
+  Fleet_pattern = c("recreational", "midwater|pelagic trawl", "trawl", "purse|seine", "drifting", "longlin|hook",
+                    "artisanal|small.scale", "."),
+  Fixed_cost_pct   = c(30, 16.0, 18.0, 14.0,  8.0,  8.2, 13.4, 13.3),
+  Effort_cost_pct  = c(50, 46.0, 52.0, 34.0, 52.0, 39.0, 36.9, 40.3),
+  Sailing_cost_pct = c(20, 31.0, 28.0, 40.0, 38.0, 35.4, 44.5, 33.6),
+  Profit_pct       = c( 0,  7.0,  2.0, 12.0,  2.0, 17.4,  5.2, 12.8),
+  Reference = c("ASSUMPTION (no cost data for recreational fishing): anglers' spending, profit 0",
+                "ASSUMPTION: Mediterranean large-scale fleet 2022 (STECF 24-07) with more energy than average",
+                "ASSUMPTION: Mediterranean large-scale fleet 2022 (STECF 24-07: 15.8/44.9/30.9/8.4) with trawler energy and 2022 DTS losses (Italy)",
+                "ASSUMPTION: Mediterranean large-scale fleet 2022 (STECF 24-07) with less energy and more labour (share system)",
+                "STECF 24-07 Table 3.2, 2022: mean of ITA and ESP HOK 18-24 m (ICCAT segments); fixed cost raised to 8%",
+                "STECF 24-07 Table 3.2, 2022: ITA HOK 18-24 m (revenue 6.13 M, GVA 3.74, gross profit 1.57, net 1.07)",
+                "STECF 23-07 and 24-07: Mediterranean small-scale coastal fleet, mean of 2021 and 2022",
+                "STECF 23-07, whole Mediterranean fleet 2021: revenue EUR 1.49 bn, GVA 0.89 bn, gross profit 389 M, net profit 191 M"),
   stringsAsFactors = FALSE)
 
 ewe_fleet_costs <- function(fleets, cost_file = NULL) {
@@ -229,6 +258,27 @@ ewe_tables <- function(wb_path, dec = ",", fleet_cost_file = NULL) {
                                                   .ewe_fix(fc$Fixed + fc$Effort + fc$Sailing + fc$Profit, 3, dec), stringsAsFactors = FALSE),
                                        c("", "Name", "Fixed cost (%)", "EffortCost (%)", "Cost of sailing (%)", "Profit (%)", "Total value (%)"))
   attr(out, "fleet_cost_refs") <- fc
+
+  ## Off-vessel price (value per tonne landed; Ecopath_price, 02) by group x fleet
+  pr <- rd("Ecopath_price")
+  if (!is.null(pr)) {
+    t <- data.frame(a = as.character(fg$FG_num), b = fg$FG_name, stringsAsFactors = FALSE)
+    for (f in fleets) {
+      v <- if (f %in% names(pr)) suppressWarnings(as.numeric(pr[[f]][match(fg$FG_num, pr$FG_num)])) else rep(NA_real_, n)
+      t[[f]] <- ifelse(is.finite(v) & v > 0, .ewe_fix(v, 1, dec), "")
+    }
+    t <- with_stanza(t); names(t)[1:2] <- c("", "Group name")
+    out$Off_vessel_price <- t
+  }
+  ## Discard fate: each fleet's discards go to the discards detritus group (else the first detritus group)
+  det <- which(type == "detritus")
+  if (length(det)) {
+    tgt <- det[grepl("discard", fg$FG_name[det], ignore.case = TRUE)][1]; if (is.na(tgt)) tgt <- det[1]
+    dfate <- data.frame(a = as.character(seq_len(k)), b = fleets, stringsAsFactors = FALSE)
+    for (d in det) dfate[[fg$FG_name[d]]] <- .ewe_fix(rep(as.numeric(d == tgt), k), 3, dec)
+    names(dfate)[1:2] <- c("", "Fleet")
+    out$Discard_fate <- dfate
+  }
 
   ## Pedigree (index 0-1 of each input; -1 = not set)
   pg <- function(col) { v <- g(pe, col); ifelse(is.finite(v), .ewe_num(v, dec), "-1") }

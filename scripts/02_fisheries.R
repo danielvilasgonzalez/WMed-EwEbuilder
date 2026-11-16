@@ -2871,6 +2871,7 @@ stecf_fdi_catch_by_gsa <- data.table()  # placeholder, filled below if FDI data 
 stecf_fleet_prop_by_year <- data.table()  # placeholder, filled below if FDI data is available
 stecf_discard_ratio <- data.table()  # placeholder, filled below if FDI data is available
 stecf_discard_ratio_by_fleet <- data.table()  # placeholder, filled below if FDI data is available
+stecf_price_raw <- data.table()  # landing value by country x fleet type x FG (off-vessel prices), filled below if FDI has values
 stecf_fdi_effort_by_gsa <- data.table()  # placeholder, filled below if FDI data is available
 
 stecf_catches_dir <- file.path(STECF_FDI_DIR, "Catches")
@@ -3206,6 +3207,11 @@ if (!dir.exists(stecf_catches_dir)) {
                                                                             Matched = !is.na(FG_num))]
       
       stecf_raw <- stecf_raw[!is.na(FG_num)]  # drop rows with no FG match
+      ## landing value and weight by country x fleet type x FG (off-vessel prices of the EwE fleets, below)
+      if ("total_value_of_landings" %in% names(stecf_raw)) {
+        stecf_price_raw <- stecf_raw[, .(v = suppressWarnings(as.numeric(total_value_of_landings)), w = total_live_weight_landed, Country, FleetType, FG_num, year)][
+          is.finite(v) & is.finite(w) & w > 0 & v > 0, .(Value_EUR = sum(v), Landed_t = sum(w), n_years = uniqueN(year)), by = .(Country, FleetType, FG_num)]
+      }
       
       ## Discards: real columns, no flag-detection needed - landed
       ## weight and discards are separate numeric fields on the same row.
@@ -6599,32 +6605,74 @@ recreational_rows[, `:=`(Sector = "Recreational", Catch_t_by_fleet = NA_real_, D
                          Landings_t_by_fleet = NA_real_,
                          fleet_split_source = "not estimated - no source in this pipeline captures recreational catch")]  # default to "not estimated"
 
-## Recreational catch is NOT a fleet in the EwE fleet taxonomy
-## (fleet_register_taxonomy.csv) - by project decision it is not
-## estimated or added; set INCLUDE_RECREATIONAL_FLEET <- TRUE to restore.
-if (!exists("INCLUDE_RECREATIONAL_FLEET")) INCLUDE_RECREATIONAL_FLEET <- FALSE
-if (nrow(sau_sector_prop) > 0 && isTRUE(INCLUDE_RECREATIONAL_FLEET)) {
-  sau_recreational_ratio <- dcast(sau_sector_prop, Country + FG_num ~ Sector, value.var = "Catch_t", fun.aggregate = sum, fill = 0)  # reshape sectors into columns
-  commercial_cols <- intersect(c("Artisanal", "Industrial", "Subsistence"), names(sau_recreational_ratio))  # which non-recreational sector columns exist
-  if ("Recreational" %in% names(sau_recreational_ratio) && length(commercial_cols) > 0) {
-    sau_recreational_ratio[, Commercial_t := rowSums(.SD), .SDcols = commercial_cols]  # total commercial catch across sectors
-    sau_recreational_ratio[, recreational_ratio := fifelse(Commercial_t > 0, Recreational / Commercial_t, NA_real_)]  # recreational-to-commercial ratio
-    sau_recreational_ratio <- sau_recreational_ratio[!is.na(recreational_ratio), .(Country, FG_num, recreational_ratio)]  # keep only valid ratios
-    
-    fg_commercial_catch <- fleet_split[, .(Catch_t_commercial = sum(Catch_t_by_fleet, na.rm = TRUE)), by = .(Country, FG_num, Year)]  # GFCM's own commercial total by country x FG x year
-    recreational_rows <- merge(recreational_rows, sau_recreational_ratio, by = c("Country", "FG_num"), all.x = TRUE)  # attach the SAU ratio
-    recreational_rows <- merge(recreational_rows, fg_commercial_catch, by = c("Country", "FG_num", "Year"), all.x = TRUE)  # attach the commercial total to scale against
-    n_recreational_est <- sum(!is.na(recreational_rows$recreational_ratio) & !is.na(recreational_rows$Catch_t_commercial))  # cells with an estimate
-    recreational_rows[!is.na(recreational_ratio) & !is.na(Catch_t_commercial), `:=`(
-      Catch_t_by_fleet = Catch_t_commercial * recreational_ratio,  # infer recreational catch from the commercial total x ratio
-      Landings_t_by_fleet = Catch_t_commercial * recreational_ratio,  # no discard estimate exists for recreational catch anywhere in this pipeline - Landings = Catch here, same assumption Discard_t_by_fleet staying NA already implies
-      fleet_split_source = "inferred - SAU sector split's Recreational:Commercial ratio applied to GFCM's commercial total (proxy, not a measurement)"
-    )]
-    recreational_rows[, `:=`(recreational_ratio = NULL, Catch_t_commercial = NULL)]  # drop the now-unneeded helper columns
-    message("\n[Recreational] ", n_recreational_est, " of ", nrow(recreational_rows), " Country x FG x Year",
-            " cell(s) now carry an SAU-derived recreational-catch estimate (proxy - see fleet_split_source);",
-            " the rest stay 'not estimated'.")
+## --- Recreational fleets (one per country: "<code> recreational") ----
+## ASSUMPTION (flagged): no data source of this pipeline measures
+## recreational catch. Catch of country c, FG g, year y =
+##   commercial catch(c, g, y) x r(c, g)
+## with r = SAU's reconstructed Recreational : commercial (Artisanal +
+## Industrial + Subsistence) catch of that country and FG over the Ecopath
+## years (all SAU years if none there). Countries without an SAU sector
+## split (e.g. Tunisia) take the median r of the same FG in the other
+## southern countries (else all countries). r is capped at
+## RECREATIONAL_RATIO_MAX. RECREATIONAL_RATIO_MANUAL (Country, FG_num -
+## NA = every FG of the country -, ratio, source) replaces r where a
+## survey figure exists. Recreational landings = catch; discards (released
+## fish) are not estimated. Review: recreational_catch_REVIEW.csv and
+## recreational_share_by_country_REVIEW.csv (recreational / commercial
+## catch per country; Mediterranean-wide estimates put recreational catch
+## at roughly 10 % of commercial landings, FAO-GFCM SoMFi).
+if (!exists("INCLUDE_RECREATIONAL_FLEET")) INCLUDE_RECREATIONAL_FLEET <- TRUE
+if (!exists("RECREATIONAL_RATIO_MAX")) RECREATIONAL_RATIO_MAX <- 1
+if (!exists("RECREATIONAL_RATIO_MANUAL")) RECREATIONAL_RATIO_MANUAL <- data.table(Country = character(), FG_num = integer(), ratio = numeric(), source = character())
+recreational_rows[, FG_name := full_fg_list$FG_name[match(FG_num, full_fg_list$FG_num)]]
+if (isTRUE(INCLUDE_RECREATIONAL_FLEET)) {
+  .rec_sec <- function(x) grepl("recreational", x, ignore.case = TRUE)
+  rat <- data.table(Country = character(), FG_num = integer(), ratio = numeric(), basis = character())
+  if (exists("sau_sector_year") && nrow(sau_sector_year)) {
+    .rr <- function(d) d[, .(rec = sum(Catch_t[.rec_sec(Sector)], na.rm = TRUE), com = sum(Catch_t[!.rec_sec(Sector)], na.rm = TRUE)), by = .(Country, FG_num)]
+    r_all <- .rr(sau_sector_year); r_win <- .rr(sau_sector_year[Year %in% YEAR_ECOPATH])
+    r <- merge(r_all, r_win, by = c("Country", "FG_num"), all.x = TRUE, suffixes = c("_all", "_win"))
+    r[, `:=`(win_ok = is.finite(com_win) & com_win > 0)]
+    r[, ratio := fifelse(win_ok, rec_win / com_win, fifelse(com_all > 0, rec_all / com_all, NA_real_))]
+    r[, basis := fifelse(win_ok, paste0("SAU recreational:commercial catch ", paste(range(YEAR_ECOPATH), collapse = "-")), "SAU recreational:commercial catch, all SAU years")]
+    has_rec <- r[, .(any_rec = sum(rec_all, na.rm = TRUE) > 0), by = Country][any_rec == TRUE, Country]
+    rat <- r[Country %in% has_rec & is.finite(ratio), .(Country, FG_num, ratio, basis)]
   }
+  south <- c("Algeria", "Morocco", "Tunisia", "Libya", "Egypt")
+  rec_c <- unique(recreational_rows$Country)
+  for (cc in setdiff(rec_c, unique(rat$Country))) {
+    ref <- rat[Country %in% setdiff(intersect(south, rec_c), cc)]; lab <- "southern countries"
+    if (!uniqueN(ref$Country) || !(cc %in% south)) { ref <- rat[Country != cc]; lab <- "other countries" }
+    if (!nrow(ref)) next
+    rat <- rbind(rat, ref[, .(ratio = median(ratio)), by = FG_num][, `:=`(Country = cc, basis = paste0("no SAU recreational split: median of the same FG in the ", lab,
+                                                                                                       " (", paste(sort(unique(ref$Country)), collapse = ", "), ")"))], use.names = TRUE)
+  }
+  if (nrow(RECREATIONAL_RATIO_MANUAL)) {
+    for (i in seq_len(nrow(RECREATIONAL_RATIO_MANUAL))) {
+      m <- RECREATIONAL_RATIO_MANUAL[i]; fgs <- if (is.na(m$FG_num)) unique(recreational_rows$FG_num) else m$FG_num
+      rat <- rbind(rat[!(Country == m$Country & FG_num %in% fgs)], data.table(Country = m$Country, FG_num = fgs, ratio = m$ratio, basis = paste0("manual: ", m$source)))
+    }
+  }
+  rat[, ratio := pmin(ratio, RECREATIONAL_RATIO_MAX)]
+  com_tot <- fleet_split[, .(Catch_t_commercial = sum(Catch_t_by_fleet, na.rm = TRUE)), by = .(Country, FG_num, Year)]
+  recreational_rows <- merge(recreational_rows, rat, by = c("Country", "FG_num"), all.x = TRUE)
+  recreational_rows <- merge(recreational_rows, com_tot, by = c("Country", "FG_num", "Year"), all.x = TRUE)
+  .ok <- with(recreational_rows, is.finite(ratio) & ratio > 0 & is.finite(Catch_t_commercial) & Catch_t_commercial > 0)
+  recreational_rows[.ok, `:=`(Catch_t_by_fleet = Catch_t_commercial * ratio, Landings_t_by_fleet = Catch_t_commercial * ratio, Discard_t_by_fleet = 0,
+                              fleet_split_source = paste0("assumption: ", basis, " x commercial catch of the FG"))]
+  rv <- recreational_rows[Year %in% YEAR_ECOPATH, .(ratio = ratio[1], basis = basis[1], commercial_t = mean(Catch_t_commercial, na.rm = TRUE),
+                                                    recreational_t = mean(Catch_t_by_fleet, na.rm = TRUE)), by = .(Country, FG_num, FG_name)]
+  rv <- rv[is.finite(recreational_t) & recreational_t > 0][order(Country, -recreational_t)]
+  fwrite(rv, file.path(csv_out_dir, "recreational_catch_REVIEW.csv"))
+  sh <- merge(com_tot[Year %in% YEAR_ECOPATH, .(commercial_t = sum(Catch_t_commercial, na.rm = TRUE) / uniqueN(Year)), by = Country],
+              rv[, .(recreational_t = sum(recreational_t)), by = Country], by = "Country", all = TRUE)
+  sh[, recreational_pct_of_commercial := round(100 * recreational_t / commercial_t, 1)]
+  fwrite(sh, file.path(csv_out_dir, "recreational_share_by_country_REVIEW.csv"))
+  recreational_rows[, c("ratio", "basis", "Catch_t_commercial") := NULL]
+  message("\n[Recreational] One recreational fleet per country; catch = commercial catch x SAU recreational:commercial ratio (assumption). ",
+          "Recreational catch as % of commercial (", paste(range(YEAR_ECOPATH), collapse = "-"), "): ",
+          paste0(sh$Country, " ", sh$recreational_pct_of_commercial, "%", collapse = ", "),
+          " (recreational_catch_REVIEW.csv, recreational_share_by_country_REVIEW.csv).")
 }
 
 ## Per a real run: hake/anglerfish/conger (and
@@ -6653,7 +6701,7 @@ fleet_split_out <- rbindlist(list(
                   Landings_t = Landings_t_by_fleet,
                   Catch_t_incl_unreported = Catch_t_incl_unreported * prop_fleet,
                   discard_source, discard_split_source, fleet_split_source)],
-  recreational_rows[, .(Country, FG_num, Year, Sector, FleetType, GSA, Comment,
+  recreational_rows[, .(Country, FG_num, FG_name, Year, Sector, FleetType, GSA, Comment,
                         Catch_t = Catch_t_by_fleet, Discard_t = Discard_t_by_fleet,
                         Landings_t = Landings_t_by_fleet,
                         Catch_t_incl_unreported = NA_real_, discard_source = NA_character_,
@@ -7237,9 +7285,9 @@ if (nrow(multistanza_props_applied)) {
 ## --- EwE fleets (2026-11-13): the model's 30 fleets, nothing unclassified --
 ## Every country x gear fleet of the catch tables is mapped to one of the
 ## fleets of EWE_FLEETS (country code + fleet; recreational catch of every
-## country goes to one "Recreational fisheries" fleet). Gear rules
+## country goes to that country's "<code> recreational" fleet). Gear rules
 ## (EWE_FLEET_RULES, first match on the fleet type, lower case):
-##   recreational -> Recreational fisheries; purse seine / surrounding ->
+##   recreational -> <code> recreational; purse seine / surrounding ->
 ##   purse seiners; midwater / pelagic trawl -> midwater trawlers (or
 ##   trawlers, else bottom trawlers, where the country has no midwater
 ##   fleet); other trawls -> bottom trawlers (or trawlers); drifting
@@ -7259,11 +7307,11 @@ if (!exists("EWE_FLEETS", envir = .GlobalEnv, inherits = FALSE)) EWE_FLEETS <- c
   "MOR artisanal", "MOR longliners", "MOR purse seiners", "MOR trawlers",
   "SPA artisanal", "SPA bottom trawlers", "SPA drifting longliners", "SPA purse seiners", "SPA set longliners",
   "TUN artisanal", "TUN longliners", "TUN purse seiners", "TUN trawlers",
-  "Recreational fisheries")
+  "ALG recreational", "FRA recreational", "ITA recreational", "MOR recreational", "SPA recreational", "TUN recreational")
 EWE_FLEET_COUNTRY_CODE <- c(Algeria = "ALG", France = "FRA", Italy = "ITA", Morocco = "MOR", Spain = "SPA", Tunisia = "TUN")
 ## fleet type (regex) -> candidate fleets, first one the country has wins
 EWE_FLEET_RULES <- list(
-  list("recreational", "Recreational fisheries"),
+  list("recreational", "recreational"),
   list("purse|surrounding", "purse seiners"),
   list("midwater|pelagic trawl", c("midwater trawlers", "trawlers", "bottom trawlers")),
   list("trawl", c("bottom trawlers", "trawlers")),
@@ -7275,7 +7323,7 @@ EWE_FLEET_RULES <- list(
   vapply(seq_along(ft), function(i) {
     if (is.na(ft[i])) return(NA_character_)
     for (r in EWE_FLEET_RULES) if (grepl(r[[1]], ft[i])) {
-      cand <- if (identical(r[[2]], "Recreational fisheries")) r[[2]] else paste(cc[i], r[[2]])
+      cand <- paste(cc[i], r[[2]])
       hit <- cand[cand %in% EWE_FLEETS]
       return(if (length(hit)) hit[1] else NA_character_)
     }
@@ -7287,7 +7335,7 @@ ecopath_fleet_long[, EwE_fleet := .ewe_fleet_of(Country, FleetType)]
 .fl_map[, rule := fifelse(is.na(EwE_fleet), "no gear: shared among the country's fleets by their catch of the same FG", "gear rule (EWE_FLEET_RULES)")]
 ## unresolved rows: shared by the country's resolved catch of the same FG, else of all FGs
 .unres <- ecopath_fleet_long[is.na(EwE_fleet)]
-.res <- ecopath_fleet_long[!is.na(EwE_fleet) & EwE_fleet != "Recreational fisheries"]
+.res <- ecopath_fleet_long[!is.na(EwE_fleet) & !grepl("recreational", EwE_fleet)]
 if (nrow(.unres)) {
   .w_fg <- .res[, .(w = sum(Catch_t_avg, na.rm = TRUE)), by = .(Country, FG_num, EwE_fleet)][w > 0]
   .w_ct <- .res[, .(w = sum(Catch_t_avg, na.rm = TRUE)), by = .(Country, EwE_fleet)][w > 0]
@@ -7315,7 +7363,7 @@ message("[EwE fleets] ", uniqueN(.fl_map[, .(Country, FleetType)]), " country x 
         " EwE fleets (fleet_to_ewe_fleet_REVIEW.csv).")
 ecopath_fleet_long <- ecopath_fleet_long[, .(Catch_t_avg = sum(Catch_t_avg, na.rm = TRUE), Discard_t_avg = sum(Discard_t_avg, na.rm = TRUE),
                                              Landings_t_avg = sum(Landings_t_avg, na.rm = TRUE)),
-                                         by = .(FG_num, FG_name, Sector = fifelse(EwE_fleet == "Recreational fisheries", "Recreational", "Commercial"), EwE_fleet)]
+                                         by = .(FG_num, FG_name, Sector = fifelse(grepl("recreational", EwE_fleet), "Recreational", "Commercial"), EwE_fleet)]
 ecopath_fleet_long[, `:=`(Country = NA_character_, FleetType = EwE_fleet)]
 ecopath_fleet_long[, `:=`(Fleet = factor(EwE_fleet, levels = EWE_FLEETS),
                           Catch_t_km2_avg = Catch_t_avg * .kc(FG_num) / Total_Area_km2,
@@ -7374,13 +7422,13 @@ broad_discards_density <- catches_discards_fg[Year %in% YEAR_ECOPATH, .(Discard_
 
 landings_ecopath_by_fleet_wide <- merge(landings_ecopath_by_fleet_wide, broad_landings_density, by = "FG_num", all.x = TRUE)
 landings_ecopath_by_fleet_wide[is.na(Landings_t_km2_broad), Landings_t_km2_broad := 0]
-landings_ecopath_by_fleet_wide[, (OTHER_GFCM_COL) := pmax(0, Landings_t_km2_broad - rowSums(.SD, na.rm = TRUE)), .SDcols = landings_fleet_cols]
+landings_ecopath_by_fleet_wide[, (OTHER_GFCM_COL) := pmax(0, Landings_t_km2_broad - rowSums(.SD, na.rm = TRUE)), .SDcols = grep("recreational", landings_fleet_cols, ignore.case = TRUE, value = TRUE, invert = TRUE)]  # recreational catch is not in the commercial total
 landings_ecopath_by_fleet_wide[, Landings_t_km2_broad := NULL]
 landings_fleet_cols <- c(landings_fleet_cols, OTHER_GFCM_COL)
 
 discards_ecopath_by_fleet_wide <- merge(discards_ecopath_by_fleet_wide, broad_discards_density, by = "FG_num", all.x = TRUE)
 discards_ecopath_by_fleet_wide[is.na(Discard_t_km2_broad), Discard_t_km2_broad := 0]
-discards_ecopath_by_fleet_wide[, (OTHER_GFCM_COL) := pmax(0, Discard_t_km2_broad - rowSums(.SD, na.rm = TRUE)), .SDcols = discards_fleet_cols]
+discards_ecopath_by_fleet_wide[, (OTHER_GFCM_COL) := pmax(0, Discard_t_km2_broad - rowSums(.SD, na.rm = TRUE)), .SDcols = grep("recreational", discards_fleet_cols, ignore.case = TRUE, value = TRUE, invert = TRUE)]
 discards_ecopath_by_fleet_wide[, Discard_t_km2_broad := NULL]
 discards_fleet_cols <- c(discards_fleet_cols, OTHER_GFCM_COL)
 
@@ -7402,7 +7450,7 @@ message("\n[Ecopath by fleet] Ecopath_L/Ecopath_Di: ", nrow(landings_ecopath_by_
 ## EwE fleet gets its column, in the order of EWE_FLEETS.
 .ewe_fill_fleets <- function(w, resid_col = NULL, what = "") {
   for (f in setdiff(EWE_FLEETS, names(w))) w[, (f) := 0]
-  com <- setdiff(EWE_FLEETS, "Recreational fisheries")
+  com <- EWE_FLEETS[!grepl("recreational", EWE_FLEETS, ignore.case = TRUE)]
   if (!is.null(resid_col) && resid_col %in% names(w)) {
     tot <- colSums(w[, ..com], na.rm = TRUE)
     rs <- w[[resid_col]]; rs[is.na(rs)] <- 0
@@ -7430,6 +7478,69 @@ if (nrow(.rr)) {
           " the commercial fleets by their catch of the same FG (fleet_not_resolved_shared_REVIEW.csv).")
 }
 landings_fleet_cols <- discards_fleet_cols <- EWE_FLEETS
+
+## --- Off-vessel prices (EUR/t of landings) by FG x EwE fleet -----------
+## From STECF FDI (landing value / landed weight, Spain, France, Italy,
+## all FDI years, nominal EUR): the fleet's own price for the FG, else the
+## country's price for the FG (all its fleets), else the FDI price of the
+## FG over the three countries. Morocco, Algeria, Tunisia (no FDI): the FDI
+## price of the same gear for the FG (trawlers -> bottom trawlers,
+## longliners -> set longliners), else of the FG, x PRICE_COUNTRY_FACTOR
+## (default 1 = EU prices; ASSUMPTION, flagged). Recreational fleets: the
+## FDI price of the FG x RECREATIONAL_PRICE_FACTOR (default 1), i.e. the
+## catch valued at commercial first-sale prices (no market; ASSUMPTION).
+## Only cells with landings get a price. Sheet Ecopath_price; basis per
+## cell: fisheries/offvessel_price_REVIEW.csv.
+if (!exists("PRICE_COUNTRY_FACTOR")) PRICE_COUNTRY_FACTOR <- c(Algeria = 1, Morocco = 1, Tunisia = 1)
+if (!exists("RECREATIONAL_PRICE_FACTOR")) RECREATIONAL_PRICE_FACTOR <- 1
+tryCatch({
+  if (nrow(stecf_price_raw)) {
+    pr <- copy(stecf_price_raw)[, EwE_fleet := .ewe_fleet_of(Country, FleetType)]
+    pr[, gear := sub("^[A-Z]{3} ", "", EwE_fleet)]
+    .pp <- function(d, by) d[, .(price = sum(Value_EUR) / sum(Landed_t)), by = by]
+    p_fl <- .pp(pr[!is.na(EwE_fleet)], c("EwE_fleet", "FG_num")); p_cf <- .pp(pr, c("Country", "FG_num"))
+    p_gr <- .pp(pr[!is.na(gear)], c("gear", "FG_num")); p_fg <- .pp(pr, "FG_num")
+    .cc_of <- setNames(names(EWE_FLEET_COUNTRY_CODE), EWE_FLEET_COUNTRY_CODE)
+    .gear_alt <- c(trawlers = "bottom trawlers", longliners = "set longliners")
+    L <- melt(landings_ecopath_by_fleet_wide[, c("FG_num", "FG_name", EWE_FLEETS), with = FALSE], id.vars = c("FG_num", "FG_name"),
+              variable.name = "EwE_fleet", value.name = "L", variable.factor = FALSE)[is.finite(L) & L > 0]
+    L[, `:=`(Country = unname(.cc_of[sub(" .*$", "", EwE_fleet)]), gear = sub("^[A-Z]{3} ", "", EwE_fleet))]
+    L[, `:=`(price = NA_real_, basis = NA_character_)]
+    .fill <- function(rows, tab, on, lab) {
+      if (!any(rows)) return(invisible())
+      m <- tab[L[rows], on = on, x.price]
+      k <- which(rows)[is.finite(m)]
+      L[k, `:=`(price = m[is.finite(m)], basis = lab)]
+    }
+    rec <- grepl("recreational", L$EwE_fleet); eu <- L$Country %in% unique(pr$Country) & !rec
+    .fill(eu & is.na(L$price), p_fl, c("EwE_fleet", "FG_num"), "FDI: fleet's own price")
+    .fill(eu & is.na(L$price), p_cf, c("Country", "FG_num"), "FDI: country's price of the FG")
+    south <- !eu & !rec
+    L[south, gear2 := fifelse(gear %in% names(.gear_alt), .gear_alt[gear], gear)]
+    fac_s <- function() { f <- PRICE_COUNTRY_FACTOR[L$Country]; f[is.na(f)] <- 1; f }
+    if (any(south)) {
+      m <- p_gr[L[south], on = c(gear = "gear2", "FG_num"), x.price]
+      k <- which(south)[is.finite(m)]; f <- fac_s()[k]
+      L[k, `:=`(price = m[is.finite(m)] * f, basis = paste0("FDI price of EU ", gear2, " for the FG x ", f))]
+    }
+    m <- p_fg[L, on = "FG_num", x.price]
+    k <- which(is.na(L$price) & is.finite(m))
+    f <- ifelse(rec[k], RECREATIONAL_PRICE_FACTOR, ifelse(south[k], fac_s()[k], 1))
+    L[k, `:=`(price = m[k] * f, basis = ifelse(rec[k], paste0("assumption: FDI first-sale price of the FG x ", f, " (recreational)"),
+                                               paste0("FDI price of the FG (all EU fleets) x ", f)))]
+    L[, gear2 := NULL]
+    fwrite(L[, .(FG_num, FG_name, EwE_fleet, landings_t_km2 = L, price_EUR_t = round(price), basis)][order(FG_num, EwE_fleet)],
+           file.path(csv_out_dir, "offvessel_price_REVIEW.csv"))
+    ecopath_price <- dcast(L, FG_num + FG_name ~ factor(EwE_fleet, levels = EWE_FLEETS), value.var = "price", drop = FALSE)
+    ecopath_price <- merge(full_fg_list, ecopath_price, by = c("FG_num", "FG_name"), all.x = TRUE)
+    for (f in setdiff(EWE_FLEETS, names(ecopath_price))) ecopath_price[, (f) := NA_real_]
+    setcolorder(ecopath_price, c("FG_num", "FG_name", EWE_FLEETS)); setorder(ecopath_price, FG_num)
+    upsert_workbook_sheets(list(Ecopath_price = ecopath_price), ECOPATH_WORKBOOK_PATH)
+    message("[Prices] Off-vessel price (EUR/t) for ", L[is.finite(price), .N], " of ", nrow(L), " FG x fleet cells with landings (",
+            paste(L[is.finite(price), .N, by = .(b = sub(" x .*$", "", basis))][, paste0(b, ": ", N)], collapse = "; "),
+            "); sheet Ecopath_price, offvessel_price_REVIEW.csv.")
+  } else message("[Prices] No FDI landing values - off-vessel prices not set.")
+}, error = function(e) message("[Prices] Off-vessel prices not built (", conditionMessage(e), ")."))
 
 upsert_workbook_sheets(
   list(Ecopath_L = landings_ecopath_by_fleet_wide, Ecopath_Di = discards_ecopath_by_fleet_wide),
@@ -8115,7 +8226,12 @@ if (nrow(unreported_by_country) > 0) fwrite(unreported_by_country, file.path(csv
 ##    country's artisanal fleet, Industrial -> EWE_FLEET_RULES on the gear.
 ##  - Effort with no gear ("Other gear", unknown) is shared among the
 ##    country's commercial fleets in proportion to their Ecopath catch.
-##  - Recreational fisheries: no effort source - constant (1 every year).
+##  - Recreational fleets (one per country): no effort source. ASSUMPTION
+##    (flagged): effort follows SAU's reconstructed recreational catch of
+##    the country (built from participation estimates), held at the
+##    nearest year outside SAU's years; constant 1 where SAU has none.
+##    RECREATIONAL_EFFORT_MANUAL (Country, Year, recreational_effort)
+##    replaces it where a survey figure exists.
 ## Units differ between sources (days, kW-days) but never within a fleet,
 ## and Ecosim_ts uses each series as an index (1 = mean of the Ecopath
 ## years). Source rows -> fleet: fisheries/effort_to_ewe_fleet_REVIEW.csv;
@@ -8163,12 +8279,12 @@ tryCatch({
   ef <- ef[is.finite(E) & Country %in% names(EWE_FLEET_COUNTRY_CODE)]
   ef[, EwE_fleet := fifelse(!is.na(Sector) & grepl("artisanal|small", Sector, ignore.case = TRUE),
                             paste(EWE_FLEET_COUNTRY_CODE[Country], "artisanal"), .ewe_fleet_of(Country, src_fleet))]
-  ef[, recreational := EwE_fleet %in% "Recreational fisheries" | (!is.na(Sector) & grepl("recreational", Sector, ignore.case = TRUE))]
+  ef[, recreational := grepl("recreational", EwE_fleet) | (!is.na(Sector) & grepl("recreational", Sector, ignore.case = TRUE))]
   rev <- ef[, .(E_mean = mean(E, na.rm = TRUE), years = paste0(min(Year), "-", max(Year))), by = .(Country, src_fleet, Sector, source, unit, EwE_fleet)]
-  rev[EwE_fleet %in% "Recreational fisheries", EwE_fleet := "Recreational fisheries (not used: constant effort)"]
+  rev[grepl("recreational", EwE_fleet), EwE_fleet := paste(EwE_fleet, "(not used: SAU recreational index)")]
   ef <- ef[recreational == FALSE]                                  # recreational: constant effort below
   ## no gear: shared by the country's commercial catch per EwE fleet
-  cw <- ecopath_fleet_long[EwE_fleet != "Recreational fisheries", .(w = sum(Catch_t_avg, na.rm = TRUE)), by = EwE_fleet]
+  cw <- ecopath_fleet_long[!grepl("recreational", EwE_fleet), .(w = sum(Catch_t_avg, na.rm = TRUE)), by = EwE_fleet]
   cw[, cc := sub(" .*$", "", EwE_fleet)]
   un <- ef[is.na(EwE_fleet)]
   if (nrow(un)) {
@@ -8217,9 +8333,26 @@ tryCatch({
             paste(unique(.clean[grepl("^no Ecopath", fix), Fleet]), collapse = ", "), " (effort_cleaning_REVIEW.csv).")
   }
   yrs <- sort(unique(effort_ewe$Year))
-  if ("Recreational fisheries" %in% EWE_FLEETS && length(yrs))
-    effort_ewe <- rbindlist(list(effort_ewe, data.table(Fleet = "Recreational fisheries", Year = yrs, E = 1, unit = "none",
-                                                        source = "no effort data: constant")), fill = TRUE)
+  rec_fl <- grep("recreational", EWE_FLEETS, value = TRUE)
+  if (length(rec_fl) && length(yrs)) {
+    .cc_of <- setNames(names(EWE_FLEET_COUNTRY_CODE), EWE_FLEET_COUNTRY_CODE)
+    rec_e <- rbindlist(lapply(rec_fl, function(fl) {
+      cn <- unname(.cc_of[sub(" .*$", "", fl)])
+      z <- if (exists("sau_recreational_cy") && nrow(sau_recreational_cy)) sau_recreational_cy[Country == cn & Recreational_t > 0] else data.table()
+      if (nrow(z) >= 2) {
+        E <- stats::approx(z$Year, z$Recreational_t, xout = yrs, rule = 2)$y
+        base <- mean(E[yrs %in% YEAR_ECOPATH]); if (!is.finite(base) || base <= 0) base <- mean(E)
+        d <- data.table(Fleet = fl, Year = yrs, E = E / base, unit = "index (1 = Ecopath years)",
+                        source = paste0("assumption: SAU reconstructed recreational catch of ", cn, " (", min(z$Year), "-", max(z$Year), ", held outside)"))
+      } else d <- data.table(Fleet = fl, Year = yrs, E = 1, unit = "index", source = "assumption: no recreational effort data, constant")
+      if (exists("RECREATIONAL_EFFORT_MANUAL") && nrow(RECREATIONAL_EFFORT_MANUAL)) {
+        m <- RECREATIONAL_EFFORT_MANUAL[Country == cn]
+        if (nrow(m)) d[m, on = "Year", `:=`(E = i.recreational_effort, source = paste0("manual: ", i.source_citation))]
+      }
+      d
+    }), fill = TRUE)
+    effort_ewe <- rbindlist(list(effort_ewe, rec_e), fill = TRUE)
+  }
   effort_ewe[, Fleet := factor(Fleet, levels = EWE_FLEETS)]
   setorder(effort_ewe, Fleet, Year)
   effort_ewe[, Fleet := as.character(Fleet)]
@@ -8228,7 +8361,7 @@ tryCatch({
   fwrite(rev[order(Country, EwE_fleet)], file.path(csv_out_dir, "effort_to_ewe_fleet_REVIEW.csv"))
   message("[Effort] Ecosim effort by EwE fleet: ", uniqueN(effort_ewe$Fleet), " of ", length(EWE_FLEETS), " fleets",
           if (length(miss)) paste0(" (no effort: ", paste(miss, collapse = ", "), ")") else "",
-          "; EU-3 from STECF FDI days, Morocco/Algeria/Tunisia from FishMIP kW-days, recreational constant",
+          "; EU-3 from STECF FDI days, Morocco/Algeria/Tunisia from FishMIP kW-days, recreational from the SAU recreational-catch index",
           " (effort_to_ewe_fleet_REVIEW.csv).")
 }, error = function(e) message("[Effort] Ecosim effort by EwE fleet not built (", conditionMessage(e), ") - the FishMIP fleets are used."))
 

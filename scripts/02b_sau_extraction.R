@@ -118,7 +118,7 @@ if (length(sau_dir_files) == 0 && isTRUE(AUTO_DOWNLOAD_SAU) && !file.exists(SAU_
 sau_country_fg_gear <- data.table()
 sau_country_fg_gear_year <- data.table()
 sau_total_cy <- data.table(); sau_reported_cy <- data.table()
-sau_sector_prop <- data.table()
+sau_sector_prop <- data.table(); sau_sector_year <- data.table(); sau_recreational_cy <- data.table()
 sau_discard_ratio_by_year <- data.table()
 
 if (length(sau_dir_files) == 0 && !file.exists(SAU_RAW_CSV)) {
@@ -248,6 +248,8 @@ if (length(sau_dir_files) == 0 && !file.exists(SAU_RAW_CSV)) {
   ## of the fleet split where STECF FDI has no coverage.
   sau_sector_prop <- data.table()
   if (!is.null(sau_resolved$sector)) {
+    sau_sector_year <- sau_raw[!is.na(FG_num), .(Catch_t = sum(tonnes, na.rm = TRUE)), by = .(Country = country, FG_num, Sector = sector, Year = year)]  # same split by year (recreational ratio of the Ecopath years)
+    sau_recreational_cy <- sau_raw[grepl("recreational", sector, ignore.case = TRUE), .(Recreational_t = sum(tonnes, na.rm = TRUE)), by = .(Country = country, Year = year)]  # recreational effort index
     sau_sector_cy <- sau_raw[!is.na(FG_num), .(Catch_t = sum(tonnes, na.rm = TRUE)),
                              by = .(Country = country, FG_num, Sector = sector)]  # sum catch by country x FG x sector
     sau_sector_prop <- copy(sau_sector_cy)

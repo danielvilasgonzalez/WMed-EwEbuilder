@@ -3950,7 +3950,7 @@ trim_workbook_to_final_sheets <- function(out_path) {
     ## Biomass/PB/QB/reference-year from other published Western Med
     ## Ecopath models, for direct comparison against this model's own
     ## Ecopath_B/Ecopath_PBQB values). 11 final sheets total.
-    target_order = c("info", "FGs", "Fleets", "FG_spp", "Ecopath_B", "Ecopath_L", "Ecopath_Di", "Ecopath_PBQB",
+    target_order = c("info", "FGs", "Fleets", "FG_spp", "Ecopath_B", "Ecopath_L", "Ecopath_Di", "Ecopath_price", "Ecopath_PBQB",
                      "Ecopath_multistanza", "Ecopath_traits", "Ecopath_diet", "Ecosim_ts", "FG_References", "Ecobase"),
     drop_extras = TRUE
   )
