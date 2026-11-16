@@ -304,8 +304,11 @@ later runs only fetch the new years (about 15 minutes). The same
 settings block can be copied or downloaded to run the pipeline from the
 R console instead, and a downloaded settings file can be loaded again
 with **Load settings (.R)** (only its values are read; the file is not
-run). The **FG explorer** under Results shows one group's Ecosim
-biomass series, with the survey sampling band, and its catches.
+run). The **Results explorers** under Results (also listed in the
+contents on the right) show the outputs of a run: the survey hauls map,
+the FG explorer (one group's Ecosim biomass series, with the survey
+sampling band, and its catches), the fleet, diet and responses
+explorers and the Ecospace driver maps.
 
 This works when the document is opened with **Run Document** in RStudio
 (or `quarto serve WMed-EwEbuilder.qmd` in a terminal). A plain HTML file

@@ -131,9 +131,10 @@ tagList(
       var top = $('#TOC a[href=\"#sec-configure\"]').first();
       if (!top.length || top.siblings('ul.wm-toc-app').length) return;
       var ul = $('<ul class=\"wm-toc-app\"></ul>');
-      function add(list, href, txt, tab) {
+      function add(list, href, txt, tab, openIt) {
         var a = $('<a class=\"nav-link\"></a>').attr('href', href).text(txt);
         if (tab) a.on('click', function () { var b = $('[data-bs-target=\"' + tab + '\"]'); if (b.length) b.trigger('click'); });
+        if (openIt) a.on('click', function () { var d = document.querySelector(href); if (d && d.tagName === 'DETAILS') d.open = true; });
         var li = $('<li></li>').append(a); list.append(li); return li;
       }
       $('.wm-card[id^=\"wm-card-\"]').each(function () {
@@ -141,7 +142,11 @@ tagList(
         if (this.id === 'wm-card-7') {
           var sub = $('<ul></ul>');
           add(sub, '#run_summary', 'Run summary');
-          add(sub, '#wm-fg-explorer', 'FG explorer');
+          var ex = add(sub, '#wm-results-explorers', 'Results explorers'), exl = $('<ul></ul>');
+          [['#wm-haul-map-box', 'Survey hauls map'], ['#wm-fg-explorer', 'FG explorer'], ['#wm-fleet-explorer', 'Fleet explorer'],
+           ['#wm-diet-explorer', 'Diet explorer'], ['#wm-resp-explorer', 'Responses explorer'], ['#wm-esp-explorer', 'Ecospace maps explorer']
+          ].forEach(function (e) { if ($(e[0]).length) add(exl, e[0], e[1], null, true); });
+          ex.append(exl);
           add(sub, '#results', 'Key plots', '#wm-view-key');
           add(sub, '#results', 'All plots', '#wm-view-all');
           li.append(sub);
@@ -410,6 +415,8 @@ tagList(
       tags$div(class = "wm-help", "Tables: Basic_input, Diet_composition, Landings, Discards, Definition_of_fleets, Pedigree, Traits (e.g. Western_Mediterranean_Sea-Basic_input.csv). Use the decimal separator EwE uses on the computer that runs it (comma for Spanish, French or Italian settings; then columns are separated by \";\"). Text in double quotes, UTF-8. Multi-stanza groups (e.g. European hake juv. + adult) get their stanza row, Z as Total mortality and their own Q/B; the Stanzas file lists what EwE\u2019s multi-stanza form asks for (age at start, Z, K, Wmat/Winf, BA/B, leading stanza). Pedigree: the pipeline's confidence index (0-1) of each input, -1 when not set. The pipeline also writes these files at the end of each run, to the output folder ewe_import/.")),
     uiOutput("run_summary"),
     tags$div(class = "wm-help mb-2", tags$strong("FGs with high F"), " are only reported, never changed: F above 1, or above the highest F in the stock assessments of the FG's species. Each one gets a recommendation in high_F_REVIEW.csv (e.g. a trawl survey that hardly samples the group, missing catchability (card 4), or catch to check)."),
+    tags$h4(id = "wm-results-explorers", class = "mt-3 mb-2", "Results explorers"),
+    tags$div(class = "wm-help mb-2", "Each explorer opens on click and closes on its own: survey hauls, FG series, fleets, diets, Ecospace response functions and driver maps of the run shown above."),
     tags$details(class = "card mb-3", id = "wm-haul-map-box",
       tags$summary(class = "card-header py-2", tags$strong("Survey hauls map"), " - MEDITS density in each haul, by year: zoom, move and filter"),
       tags$div(class = "card-body py-2",
