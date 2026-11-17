@@ -8,7 +8,7 @@ WMed-EwEbuilder is an R pipeline that turns survey, fisheries, literature and oc
 
 Created by: Daniel Vilas (iMARES, ICM-CSIC)
 
-**Contents:** [What you need](#what-you-need) · [Quick start](#quick-start) · [Interactive page](#interactive-page) · [Pipeline steps](#pipeline-steps) · [Main options](#main-options) · [First run](#first-run-downloads-and-time) · [Outputs](#outputs-under-out_dir) · [Reproducibility](#reproducibility) · [Troubleshooting](#troubleshooting) · [Repository structure](#repository-structure) · [Known limitations](#known-limitations) · [How to cite](#how-to-cite)
+**Contents:** [What you need](#what-you-need) · [How to run it](#how-to-run-it) · [Interactive page](#interactive-page) · [Pipeline steps](#pipeline-steps) · [Main options](#main-options) · [First run](#first-run-downloads-and-time) · [Outputs](#outputs-under-out_dir) · [Reproducibility](#reproducibility) · [Troubleshooting](#troubleshooting) · [Repository structure](#repository-structure) · [Known limitations](#known-limitations) · [How to cite](#how-to-cite)
 
 ## What you need
 
@@ -19,21 +19,81 @@ Created by: Daniel Vilas (iMARES, ICM-CSIC)
 - **Internet** on the first run: several sources are downloaded once and cached.
 - **A free Copernicus Marine account**, only for step 05 (environmental drivers): <https://data.marine.copernicus.eu/register>.
 
-## Quick start
+## How to run it
 
-1. Clone the repo and open the `.Rproj` file in RStudio:
+### 1. Set up a computer (once)
+
+1. Install **R** (≥ 4.3) and **RStudio** (it includes Quarto).
+2. Get access to the shared pCloud folder **"EwE Western Med 2026"** and install **pCloud Drive**. Wait until the folder shows up as a drive.
+3. Get the code and open the project:
    ```bash
    git clone https://github.com/danielvilasgonzalez/WMed-EwEbuilder.git
    ```
-2. Install the packages (once, then restart R):
+   then double-click `WMed_EwE.Rproj` to open it in RStudio.
+4. Install the packages, then restart R (Session → Restart R):
    ```r
    source("scripts/install_packages.R")
    ```
-3. Either open the interactive page (recommended, see below), or run the pipeline from the console:
-   ```r
-   setwd("scripts")
-   source("run_pipeline_demo.R")
-   ```
+5. Only if you will run step 05 (environmental drivers): make a free Copernicus Marine account (<https://data.marine.copernicus.eu/register>). You give the login on the page (card 5); never write it in the code.
+
+### 2a. Run it from the interactive page (recommended)
+
+1. In RStudio open `scripts/WMed-EwEbuilder.qmd`, switch the editor to **Source** (not Visual) and click **Run Document**. Click *Show in new window* to use it in your browser. Keep RStudio open while it runs.
+2. Go through the cards from top to bottom. The defaults reproduce the standard Western Med model, so on a first run you only need cards 0 and 6:
+
+   | Card | What to do |
+   |---|---|
+   | 0 Folders | Check the three folders and click **Check setup**; fix anything it reports. |
+   | 1 Model area | Click the GSAs, or give a custom region. |
+   | 2 Food web | Keep `FG_WMed_2026.csv` or upload your own species → FG table; tick the diet sources. |
+   | 3 Years | Ecopath baseline (default 1994–1996) and Ecosim years (1995–2023). |
+   | 4 Biomass | Survey and catchability options (defaults are fine). |
+   | 5 Environment and Ecospace | Only for steps 05/05b/05c: Copernicus login, Ecospace base map and cell size, climate scenarios (none by default). |
+   | 6 Run | Tick the scripts (default 01–04 and 06; tick 05 for the environment, 05b + 05c for Ecospace maps and response functions) and click **Run pipeline**. The bar shows each step and the time left; **Stop** ends the run. |
+   | 7 Results | Check the run summary, open the explorers, and download the workbook or the **EwE import files**. |
+
+3. The first run copies the data from pCloud to your computer (~2.5 GB) and downloads some sources once (see [First run](#first-run-downloads-and-time)), so it is slower; later runs take 10–30 minutes for 01–04 and 06.
+
+### 2b. Run it from the R console
+
+From the project folder:
+```r
+setwd("scripts")
+source("run_pipeline_demo.R")   # steps 01-04 and 06, default settings
+```
+
+To change settings, set them **before** `source()` together with `CLEAN_START <- FALSE` (otherwise the workspace, and your settings with it, is cleared at the start; only `RUN_STEPS` is always kept):
+```r
+setwd("scripts")
+CLEAN_START  <- FALSE
+RUN_STEPS    <- c(1:4, 7)        # 1-4 = 01-04, 5 = 05, 6 = 05b + 05c, 7 = 06 (always last)
+MODEL_GSAS   <- c(1, 5, 6)       # a subset of GSAs
+YEAR_ECOPATH <- 1994:1996
+TS_YEARS     <- 1995:2023
+source("run_pipeline_demo.R")
+```
+Every option is listed, with its default, at the top of `run_pipeline_demo.R` and in [Main options](#main-options).
+
+**Common runs**
+
+| I want to... | Set before `source("run_pipeline_demo.R")` |
+|---|---|
+| redo only the validation plots | `RUN_STEPS <- 7` |
+| keep the biomass and redo fisheries, P/B-Q/B, diets | `RUN_STEPS <- c(2:4, 7)` |
+| the environmental drivers and Ecospace maps | `RUN_STEPS <- c(5, 6)` (Copernicus login needed; the first 05 run can take hours, later ones ~15 min) |
+| add climate scenarios | `CLEAN_START <- FALSE; ENV_SCENARIOS <- c("ssp126", "ssp370", "ssp585"); RUN_STEPS <- c(5, 6)` |
+| Ecospace maps on another grid | `CLEAN_START <- FALSE; ECOSPACE_DEPTH_FILE <- "my_depth.asc"` (or `ECOSPACE_CELL_SIZE <- 1/12` for a 5′ grid); `RUN_STEPS <- 6` |
+| a custom region | `CLEAN_START <- FALSE; AREA_MODE <- "custom"; AREA_NAME <- "my_area"; CUSTOM_BBOX <- c(xmin = 2, xmax = 8, ymin = 38, ymax = 42)` (or `CUSTOM_AREA_TYPE <- "shapefile"; CUSTOM_SHAPEFILE_PATH <- "..."`) |
+
+### 3. Check the results
+
+When the run ends, the console prints `Pipeline finished in ... min. Workbook: ...`. In the output folder (`out_dir`, see below):
+
+1. **`validation/validation_summary_ALL.csv`** and **`plots/validation/validation_plots_ALL.pdf`**: the checks of every step (P/Q, diet sums, cannibalism, PREBAL, F, comparison with the 1995 model). Start here.
+2. **`*_REVIEW.csv`** in each step's folder: what needs a decision (e.g. `fisheries/high_F_REVIEW.csv`, `diet/diet_still_missing_REVIEW.csv`).
+3. **Logs**: `<date>_0N_<step>_log.txt`, one per script; the page's run summary shows the first error of each script.
+4. **`ecopath_ecosim_inputs.xlsx`**: all the inputs in one workbook.
+5. **`ewe_import/`**: the same inputs in the layout and names of EwE's own export files (Basic_input, Diet_composition, Landings, Discards, Definition_of_fleets, Off_vessel_price, Discard_fate, Pedigree, Traits, Stanzas), ready to bring into EwE. `EWE_DECIMAL` (default `","`) and `EWE_EXPORT_FORMAT` (`"csv"`, `"xlsx"` or `"both"`) match them to your EwE settings.
 
 You don't need to edit any paths. `scripts/wmed_paths.R` finds the three folders on each computer:
 
