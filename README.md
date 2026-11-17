@@ -76,7 +76,7 @@ On a new computer only `rmarkdown`, `knitr` and `shiny` must be installed before
 | 4 Biomass settings (01, 01b) | Survey estimator, outliers, catchability (and your own q table), filling missing Ecopath B, Ecosim normalisation, phytoplankton source, and the upload of biomass from any survey. |
 | 5 Environment and Ecospace (05, 05b, 05c) | Your Copernicus login for step 05, and (collapsed) the Ecospace base map, resolution, map viewer and downloads for 05b, and the Ecospace response functions of 05c (AquaMaps). |
 | 6 Run | Tick the scripts to run (01–06; they run in order and 06 diagnostics runs last), then **Run pipeline** / **Stop**, with progress and time left per step. The *Settings block* shows the same run as R code: copy or download it, and **Load settings (.R)** fills the page again from a downloaded file (the file is read, never run). |
-| 7 Results | Download the workbook, diet matrices, review tables, all tables or the logs, and the **EwE import files** (Basic_input, Diet_composition, Landings, Discards, Definition_of_fleets, Pedigree, Traits in the layout and names of EwE's own export, plus Stanzas with the multi-stanza inputs; csv files or one xlsx, decimal comma (columns ";") or point (columns ","), text in double quotes, UTF-8; also written to `ewe_import/` at the end of each run). A summary of the last run (errors, warnings, FGs with F > 1, FGs without Ecopath B). FGs with high F are only reported, with a recommendation each (high_F_REVIEW.csv). Explorers, each opening on click: **Survey hauls map**, **Fleet explorer** (a fleet's landings, discards and effort, or an FG's catch by fleet), **Diet explorer** (a predator's diet by source, or one source's matrix), **Responses explorer** (AquaMaps response functions over the driver values of the Ecospace maps), **Ecospace maps explorer**, and the **FG explorer** (one group's Ecosim biomass with the survey uncertainty band and the same series without catchability q, and its catches; point at a year to see the species shares), the key plots and every plot, with zoom. |
+| 7 Results | Download the workbook, diet matrices, review tables, all tables or the logs, and the **EwE import files** (Basic_input, Diet_composition, Landings, Discards, Definition_of_fleets, Off_vessel_price, Discard_fate, Pedigree, Traits in the layout and names of EwE's own export, plus Stanzas with the multi-stanza inputs; csv files or one xlsx, decimal comma (columns ";") or point (columns ","), text in double quotes, UTF-8; also written to `ewe_import/` at the end of each run). A summary of the last run (errors, warnings, FGs with F > 1, FGs without Ecopath B). FGs with high F are only reported, with a recommendation each (high_F_REVIEW.csv). Explorers, each opening on click: **Survey hauls map**, **Fleet explorer** (a fleet's landings, discards and effort, or an FG's catch by fleet), **Diet explorer** (a predator's diet by source, or one source's matrix), **Ecospace maps explorer** (environmental drivers by month, historical or climate scenario, with the map-mean series; habitat drivers: depth and EUSeaMap habitats), **Responses explorer** (AquaMaps response functions over the driver values of the Ecospace maps), and the **FG explorer** (one group's Ecosim biomass with the survey uncertainty band and the same series without catchability q, and its catches; point at a year to see the species shares), the key plots and every plot, with zoom. |
 
 The floating **Run / Results / Methods** bar jumps around the page; **Hide methods** hides the documentation while you work.
 
@@ -88,11 +88,11 @@ Each step reads files the earlier ones wrote. `run_pipeline_demo.R` runs the ste
 |---|---|---|
 | 1 | `01_biomass.R` (sources `01b_biomass_unsurveyed.R`) | **Biomass** from the MEDITS bottom-trawl and MEDIAS acoustic surveys, strata-weighted, with the sampling CV of every index. MEDITS densities are divided by the species catchability q (a species without its own q takes the mean q of its FG; q = 1 outside MEDITS). Gaps in the JRC survey files are filled from `data/extra_data` (`USE_EXTRA_DATA`). AquaMaps depth pseudo-strata cover 0–10 m, 800–1000 m and 1000 m to the seafloor (3,785 m). Stock assessments for assessed single-species FGs and hake stanzas. Small pelagics back-cast to 1994–96. Writes Ecopath_B, the Ecosim biomass series, their weights from the survey CV, and FG_spp. |
 | 1b | `01b_biomass_unsurveyed.R` | **Groups the surveys can't measure.** Seagrass, macroalgae and corals: density × mapped area × occupancy. Plankton: ISIMIP COBALT model, or Copernicus from step 05 (`PHYTO_SOURCE`). Detritus: Pauly et al. 1993. Macrozooplankton: MAREDAT. Cetaceans, seabirds, turtles and monk seal: survey density × body mass. Bluefin tuna and swordfish: ICCAT. Some FGs are left for Ecopath to estimate (EE = 0.95). |
-| 2 | `02_fisheries.R` | **Catch, landings, discards, effort and F** by country, fleet and FG. Catch from GFCM, STECF FDI, Sea Around Us and ICCAT; effort from FishMIP and FDI, with technology creep. Landings and discards by the model's 30 EwE fleets (country × gear, plus one recreational fleet; `EWE_FLEETS`); catch with no gear is shared among the country's fleets (`fleet_*_REVIEW.csv`). Ecosim effort for the same 30 fleets (`effort_to_ewe_fleet_REVIEW.csv`). F by country, to find where a high F comes from. |
+| 2 | `02_fisheries.R` | **Catch, landings, discards, effort and F** by country, fleet and FG. Catch from GFCM, STECF FDI, Sea Around Us and ICCAT; effort from FishMIP and FDI, with technology creep and cleaning of gaps and of years with an unusual share of unclassified effort (`effort_cleaning_REVIEW.csv`). Landings and discards by the model's 35 EwE fleets (29 commercial, country × gear, and one recreational fleet per country; `EWE_FLEETS`); catch with no gear is shared among the country's fleets (`fleet_*_REVIEW.csv`). Recreational catch = commercial catch × the Sea Around Us recreational:commercial ratio of the country and FG (assumption; `recreational_share_by_country_REVIEW.csv`). Ecosim effort for the same fleets (`effort_to_ewe_fleet_REVIEW.csv`). Off-vessel prices from the FDI landing values (`Ecopath_price`, `offvessel_price_REVIEW.csv`) and fleet cost shares by gear from the STECF Annual Economic Reports (`data/fisheries/fleet_costs_ewe.csv`). F by country, to find where a high F comes from; FGs with F > 1 are reported, not changed (`high_F_REVIEW.csv`). |
 | 3 | `03_pbqb-traits.R` | **P/B and Q/B** per FG from FishBase/SeaLifeBase traits and empirical equations, plus EcoBase. Multi-stanza groups (hake): P/B = Z of each stanza, Q/B of each stanza from von Bertalanffy growth, and the stanza inputs (age at start, Z, K, Wmat/Winf, BA/B) in `Ecopath_multistanza`. |
 | 4 | `04_diets.R` | **Diet matrix.** Sources in order: dietcalcR (the iMARES diet calculator on the Mediterranean diet database; `DIET_ENGINE = "dietcalc"`, `lib_dietcalc.R`) → MAISHA → FishBase/SeaLifeBase → EcoBase (no manual diet entries). FG order follows the FG table. |
-| 5 | `05_environment.R` (optional) | **Environmental drivers** from Copernicus Marine (Mediterranean reanalyses; global model scaled to the Med for 1994–98): bottom and surface temperature, surface salinity, NPP. Monthly maps on the native grid, time series with the 10–90 % range over the area, Ecosim forcing series, and phytoplankton B and P/B for Ecopath.. With `ENV_SCENARIOS`, `05s_environment_scenarios.R` continues the drivers to `ENV_SCEN_END` under climate scenarios (ISIMIP3b GFDL-ESM4 and IPSL-CM6A-LR change added to the Copernicus climatology): monthly maps and Ecosim forcing per scenario in `environment/scenarios/`, and 05b makes their Ecospace maps. |
-| 6 | `05b_ecospace_drivers.R` (optional) | **Ecospace driver maps**: the monthly maps of 05 regridded onto your Ecospace depth `.asc` (any resolution or projection), coastal gaps filled, one `.asc` per variable and month plus an index file. No download; rerun alone for a new base map. |
+| 5 | `05_environment.R` (optional) | **Environmental drivers** from Copernicus Marine (Mediterranean reanalyses; global model scaled to the Med for 1994–98): bottom and surface temperature, surface salinity, NPP, phytoplankton carbon. Monthly maps on the native grid, time series with the 10–90 % range over the area, Ecosim forcing series, and phytoplankton B and P/B for Ecopath. With `ENV_SCENARIOS`, `05s_environment_scenarios.R` continues the drivers to `ENV_SCEN_END` under climate scenarios: the ISIMIP3b GFDL-ESM4 and IPSL-CM6A-LR change, bias-adjusted to the Copernicus hindcast per map cell and calendar month (mean, year-to-year spread, and a join so each scenario starts from the last historical year; `environment_scenarios_continuity.csv`). Monthly maps and Ecosim forcing per scenario in `environment/scenarios/`, and 05b makes their Ecospace maps. |
+| 6 | `05b_ecospace_drivers.R` (optional) | **Ecospace driver maps**: the monthly maps of 05 (historical and each scenario) regridded onto your Ecospace depth `.asc` (any resolution or projection), coastal gaps filled, one `.asc` per variable and month plus an index file. **Habitat drivers** (static): depth and the share of each cell covered by seagrass, coralligenous, rock, other biogenic, gravel, mixed sediment, sand and mud, from EUSeaMap (2025, else 2023; EUNIS 2019 codes). No download; rerun alone for a new base map. |
 | 6 | `05c_habitat_responses.R` (optional, with 05b) | **Ecospace response functions** of every FG to depth, bottom and surface temperature, salinity and NPP, as EwE keeps them (1200 values between X min and X max, maximum 1), from **AquaMaps** (species envelopes weighted by their share of the FG biomass), plus the values each driver takes in the Ecospace maps of 05b (`ecospace_driver_distribution.csv`), drawn behind the curves. |
 | 7 | `06_diagnostics.R` | **Validation.** Compares with the 1995 Western Med model and runs the EwE plausibility checks (P/Q, diet sums, cannibalism, PREBAL, F). Writes one summary table and one PDF of all plots. |
 
@@ -110,16 +110,18 @@ Set these on the page, or at the top of `scripts/run_pipeline_demo.R` (every opt
 | `AREA_MODE` | `"westmed"` | `"custom"` with `AREA_NAME` and `CUSTOM_AREA_TYPE = "shapefile"` (`CUSTOM_SHAPEFILE_PATH`) or `"bbox"` (`CUSTOM_BBOX`). Runs all steps for that region; outputs in `out_dir/<AREA_NAME>/`; catch from the GSA(s) it overlaps. |
 | `YEAR_ECOPATH` / `TS_YEARS` | `1994:1996` / `1995:2023` | Ecopath baseline / Ecosim years. |
 | `ECOPATH_B_FILL_MODE`, `ECOPATH_B_FILL_YEARS` | `"window_mean"`, `1995:2000` | FGs with no biomass in the Ecopath years take this mean; "Expanding" FGs get 0.00001. |
-| `HIGH_F_B_FIX` | `"none"` | FGs with F > 1: `"none"` reports them (`high_F_REVIEW.csv`); `"min_from_catch"` raises B to catch / 1; `"ecopath_estimate"` leaves B to Ecopath (EE = 0.95). |
+| `F_MAX` | `1` | FGs with F above this (or above their stock-assessment F) are reported with a recommendation each (`high_F_REVIEW.csv`); Ecopath B is not changed. |
 | `PHYTO_SOURCE` | `"isimip"` | Phytoplankton B and P/B: `"isimip"` (COBALT 1995, EcoBase P/B) or `"copernicus"` (from step 05; run 05 first). |
-| `ENV_SCENARIOS`, `ENV_SCEN_END` | none, `2050` | Optional climate scenarios of the drivers (05s, 05b; about 20 min or more; none = historical only): any of `"ssp126"`, `"ssp245"`, `"ssp370"`, `"ssp585"` (ISIMIP3b has 126, 370 and 585; a scenario without files is reported and skipped), until that year. Also `ENV_SCEN_MODELS`, `ENV_SCEN_REF_YEARS` (1995–2014). |
+| `ENV_SCENARIOS`, `ENV_SCEN_END` | none, `2050` | Optional climate scenarios of the drivers (05s, 05b; about 20 min or more the first time; none = historical only): any of `"ssp126"`, `"ssp245"`, `"ssp370"`, `"ssp585"` (ISIMIP3b has 126, 370 and 585; a scenario without files is reported and skipped), until that year. Also `ENV_SCEN_MODELS`, `ENV_SCEN_REF_N` (reference = last 20 hindcast years), `ENV_SCEN_SMOOTH_YEARS` (11-year running mean of the model change), `ENV_SCEN_VAR_SCALE`, `ENV_SCEN_JOIN_YEARS` (1) and `ENV_SCEN_BLEND_YEARS` (10; how fast the last historical year's anomaly fades). |
 | `STOCK_ASSESSMENT_SOURCE` | `"GFCM"` | `"GFCM"` = the newest GFCM Stock Assessment Forms, downloaded and read automatically (check `biomass/gfcm_saf_parse_REVIEW.csv`); `"RAM"` = RAM Legacy. |
 | `STRATA`, `DROP_OUTLIERS`, `NORMALIZE_TS` | `TRUE` | Strata-weighted density; remove flagged outlier hauls; Ecosim series as a relative index. |
 | `USE_EXTRA_DATA`, `EXTRA_DATA_DIR` | `TRUE`, `data/extra_data` | Add the extra MEDITS hauls, MEDIAS rows and GFCM STAR workbooks in that folder, only where the standard data have nothing (see its README; `biomass/extra_medits_hauls_added.csv`, `star_extra_REVIEW.csv`). |
 | `APPLY_CATCHABILITY` | `TRUE` | Divide MEDITS density by the species catchability (default table in pCloud, from Lloret-Lloret 2023, or your own `CATCHABILITY_FILE`). A MEDITS species with no q of its own takes the mean q of its FG's species; groups not sampled by MEDITS keep q = 1. |
-| `EWE_FLEETS` | the 30 model fleets | EwE fleets, in order (ALG, FRA, ITA, MOR, SPA, TUN × gear, and Recreational fisheries). |
+| `EWE_FLEETS` | the 35 model fleets | EwE fleets, in order (ALG, FRA, ITA, MOR, SPA, TUN × gear, then one recreational fleet per country). |
+| `INCLUDE_RECREATIONAL_FLEET`, `RECREATIONAL_RATIO_MANUAL`, `RECREATIONAL_EFFORT_MANUAL` | `TRUE`, none, none | Recreational catch and effort (assumptions, see step 2); the manual tables replace the ratio or the effort index where a survey value exists. |
+| `PRICE_COUNTRY_FACTOR`, `RECREATIONAL_PRICE_FACTOR` | `1` | Off-vessel prices of Morocco, Algeria and Tunisia, and of the recreational fleets, as a multiple of the EU (FDI) price of the same FG. |
 | `DIET_FALLBACK_ENABLE_MAISHA`, `..._FISHBASE`, `..._ECOBASE` | `TRUE` | Diet data sources to use besides dietcalcR (page card 2); each source also writes its own matrix (`diet/dietcalc`, `diet/MAISHA`, `diet/FishBase`), compared in the Diet explorer. |
-| `DIET_ENGINE` | `"pipeline"` | Diet matrix (04): `"pipeline"` (MAISHA → FishBase/SeaLifeBase → EcoBase → literature) or `"dietcalc"`: dietcalcR (iMARES diet calculator) scores the records of a diet database (`DIETCALC_DB`: Access, SQLite or a folder of csv) by region, years, data type and method, and its diets replace the pipeline's for the predator FGs it covers. Also `DIETCALC_DIR` (dietcalcR folder), `DIETCALC_CONFIG_DIR` (compatibility tables), `DIETCALC_REGION`. FG membership comes from the FG table (as edited in the page); the 01 biomass only weights the species (`dietcalc_fg_vs_01_biomass_REVIEW.csv` lists differences). dietcalcR is run with its own workflow (`dietcalc_run_scenario()`: scoring, study selection and merging, `build_ewe_diet_matrix()`), and its EwE diet table is used as it comes (columns sum to 1; prey outside the model go to the EwE Import row). Outputs in `diet/dietcalc/`: the same tables as dietcalcR's workflow (`01_studies_table` … `08_ewe_matrix_column_sums_verification`), the run summary, species matching, record and study scores, selected studies, merged diets, its EwE diet table and matrix, and the diet pedigree (used for the Diet pedigree of those FGs in 06); all shown in the Diet explorer ("dietcalcR outputs"). |
+| `DIET_ENGINE` | `"pipeline"` | Diet matrix (04): `"pipeline"` (MAISHA → FishBase/SeaLifeBase → EcoBase) or `"dietcalc"`: dietcalcR (iMARES diet calculator) scores the records of a diet database (`DIETCALC_DB`: Access, SQLite or a folder of csv) by region, years, data type and method, and its diets replace the pipeline's for the predator FGs it covers. Also `DIETCALC_DIR` (dietcalcR folder), `DIETCALC_CONFIG_DIR` (compatibility tables), `DIETCALC_REGION`. FG membership comes from the FG table (as edited in the page); the 01 biomass only weights the species (`dietcalc_fg_vs_01_biomass_REVIEW.csv` lists differences). dietcalcR is run with its own workflow (`dietcalc_run_scenario()`: scoring, study selection and merging, `build_ewe_diet_matrix()`), and its EwE diet table is used as it comes (columns sum to 1; prey outside the model go to the EwE Import row). Outputs in `diet/dietcalc/`: the same tables as dietcalcR's workflow (`01_studies_table` … `08_ewe_matrix_column_sums_verification`), the run summary, species matching, record and study scores, selected studies, merged diets, its EwE diet table and matrix, and the diet pedigree (used for the Diet pedigree of those FGs in 06); all shown in the Diet explorer ("dietcalcR outputs"). |
 | `RESPONSE_DRIVERS` | `c("depth", "temp_bot", "temp_surf", "sal_surf", "npp")` | Drivers of the Ecospace response functions (05c, AquaMaps). |
 | `FG_SPECIES_FILE` | `data/FG_WMed_2026.csv` | Species → FG table. |
 | `PLOT_DPI` | `300` | Resolution of every PNG. |
@@ -134,7 +136,7 @@ Steps 01–06 take about 10–30 minutes. The first run on a new computer can ta
 | Bathymetry (EMODnet, NOAA ETOPO as fallback) | small, per area | 01, 01b | stratum and habitat depths |
 | FishBase / SeaLifeBase (`rfishbase`) | small | 01, 03, 04 | taxonomy, traits, diets |
 | ISIMIP3a COBALT plankton fields | hundreds of MB | 01b | plankton and primary production |
-| EUSeaMap 2025 geodatabase | > 1 GB | 01b | put it in `data/Complementary data/EUSeaMap_2025/` |
+| EUSeaMap geodatabase (2025, or 2023) | > 1 GB | 01b, 05b | put it in `data/Complementary data/EUSeaMap_2025/` (or `EUSeaMap_2023/`) |
 | GFCM Stock Assessment Forms (PDF) | ~1 MB each, ~70 stocks | 01b, 02 | cached in `data/fisheries/GFCM_SAF/pdf/` |
 | Copernicus Marine | several GB | 05 | the first 05 run can take a few hours; later runs only fetch new years (~15 min) |
 
@@ -154,9 +156,9 @@ The main inputs, under `EwE Western Med 2026/data/`:
 - `FG_WMed_2026.csv`: species → functional groups (80 FGs).
 - `Medits_Medias_JRC2026/`: MEDITS and MEDIAS survey data.
 - `extra_data/`: survey and assessment files shared outside the JRC data call (IEO MEDITS for Spain, MEDITS/MEDIAS data call for GSAs 6–7, GFCM STAR workbooks); used to fill gaps (`USE_EXTRA_DATA`).
-- `fisheries/`: GFCM, FDI, Sea Around Us, FishMIP, ICCAT, RousseauEtAl2023, STAR_RAMLegacy, GFCM_SAF.
+- `fisheries/`: GFCM, FDI, Sea Around Us (`sau_raw_combined_west_med.csv`), FishMIP, ICCAT, RousseauEtAl2023, STAR_RAMLegacy, GFCM_SAF, and `fleet_costs_ewe.csv` (fleet cost shares by gear).
 - `Complementary data/`: reference tables with a citation on every row (habitat biomass, megafauna, unit conversions, diet tables).
-- `diet/`: metaweb and MAISHA files.
+- `diet/`: the dietcalcR diet database and configuration (`dietcalc_db/`, `dietcalc_config/`), MAISHA files and the FishBase trophic snapshot.
 - `Bathymetry/`: `depth_wmed.asc` (the Ecospace base map) and `EMODnet_WMed_1arcmin.tif` (EMODnet bathymetry for the strata, the 05b grids).
 - `aquamaps_cache/`: AquaMaps species IDs and envelopes already looked up, so most runs never open the AquaMaps database.
 - `WMed_EwE.xlsx`: the 1995 Western Med model, used for validation.
@@ -168,11 +170,13 @@ Every csv is written with `;` between columns, `,` as decimal separator, text in
 
 ```
 ecopath_ecosim_inputs.xlsx      # the EwE workbook: info, FGs, Fleets, FG_spp, Ecopath_B, Ecopath_L,
-                                #   Ecopath_Di, Ecopath_PBQB, Ecopath_multistanza, Ecopath_traits,
-                                #   Ecopath_diet, Ecosim_ts, FG_References, Ecobase, Pedigree
-ewe_import/                     # the same inputs as EwE import files (csv per table, or one xlsx)
+                                #   Ecopath_Di, Ecopath_price, Ecopath_PBQB, Ecopath_multistanza,
+                                #   Ecopath_traits, Ecopath_diet, Ecosim_ts, FG_References, Ecobase, Pedigree (06)
+ewe_import/                     # the same inputs as EwE import files (csv per table, or one xlsx), incl.
+                                #   Definition_of_fleets (costs), Off_vessel_price and Discard_fate
 environment/scenarios/          # climate scenarios of the drivers: maps and Ecosim forcing per scenario (05s)
-environment/ecospace_drivers/   # Ecospace driver maps (.asc), per base map (05b): <base map>/historical/ and <base map>/<scenario>/, each with sst/ sbt/ sss/ pp/ phyc/
+environment/ecospace_drivers/   # Ecospace driver maps (.asc), per base map (05b): <base map>/historical/ and <base map>/<scenario>/,
+                                #   each with sst/ sbt/ sss/ pp/ phyc/; <base map>/habitat/ with depth and the habitat layers
 environment/ecospace_responses/ # Ecospace response functions (AquaMaps) and driver values of the maps (05c)
 biomass/ fisheries/ pbqb-traits/ diet/ validation/ environment/
                                 # CSVs of each step; *_REVIEW.csv tables are the ones to check
@@ -181,6 +185,7 @@ plots/                          # PNGs by step
 run_record_<time>.json          # settings, minutes per step, git commit, R and package versions, input files
 data_catalogue.csv              # every input file used: size, date, md5, scripts, source and licence
 previous_runs/<time>/           # the workbook, logs and validation summary of the last 5 runs
+runs/<area>__EP<years>_TS<years>/  # a run with other area, years or FG table than the defaults gets its own folder
 ```
 
 ## Reproducibility
@@ -215,11 +220,17 @@ scripts/
   run_pipeline_demo.R              # runs the steps; all options
   wmed_paths.R                     # finds git_dir, pcloud_dir, out_dir on any computer
   install_packages.R  package_versions.csv
-  01_biomass.R  01b_biomass_unsurveyed.R  02_fisheries.R  03_pbqb-traits.R  04_diets.R
+  01_biomass.R  01b_biomass_unsurveyed.R  02_fisheries.R  02b_sau_extraction.R  03_pbqb-traits.R  04_diets.R
   05_environment.R  05s_environment_scenarios.R  05b_ecospace_drivers.R  05c_habitat_responses.R  06_diagnostics.R
   03b_ecobase.R                    # EcoBase fallbacks
-  lib_*.R                          # shared functions (survey density, AquaMaps, FishBase diets,
-                                   #   plankton, Copernicus, taxonomy, extra data, EwE export, run record)
+  lib_*.R                          # shared functions (survey density, AquaMaps, FishBase/MAISHA diets, dietcalcR,
+                                   #   plankton, gelatinous/macrozooplankton, GFCM SAF, Copernicus, taxonomy,
+                                   #   extra data, EwE export, output tidying, run record)
+  phyto.R  posidonia.R  coral_gorgonian.R  emodnet_benthic_habitat_biomass_extraction.R
+  combine_STAR_RAMlegacy.R  export_gsa_boundaries.R  environmental_pipeline.R
+                                   # standalone helpers used to build reference tables; not run by the pipeline
+  medbs_pipeline_methodology.qmd  pipeline_documentation.*   # older documentation (the page is the current one)
+  downloads/  figures/             # example outputs and figures of the documentation
   check_pipeline.R                 # checks before committing or sharing
   make_input_snapshot.R            # zip of the inputs for Zenodo
   references.bib  ieee.csl         # every reference of the pipeline
@@ -228,7 +239,9 @@ scripts/
   example_regions/                 # example custom region (cetacean migration corridor MPA)
   leaflet/  images/                # map library and logos of the page
   additional/                      # one-off helpers, not run by the pipeline
+gsa_export/                        # GFCM GSA shapefile and GeoJSON (used by the helpers)
 config.R.example                   # template for config.local.R (your folders; git-ignored)
+CITATION.cff                       # how to cite the code
 ewe_infography.jpg                 # workflow figure
 ewe_infography_references.md       # references by block of the workflow figure
 ```
@@ -238,9 +251,10 @@ ewe_infography_references.md       # references by block of the workflow figure
 - The survey density of GSAs 1, 2 and 5–11 is applied to the unsurveyed GSAs 3, 4 and 12.
 - Several groups rest on literature values from one site or on surveys from 2011–2019 (flagged as temporal mismatches in the review tables).
 - Some groups the trawl survey hardly sees (coastal, rocky-bottom, pelagic) get F > 1; see the *F by country* figure and the `HIGH_F_B_FIX` option.
-- The GFCM fleet register file is not parsed correctly yet. The vessel-based fleet split for Morocco, Algeria and Tunisia falls back to the GFCM fleet taxonomy or Sea Around Us.
-- The literature diet fallback for corals and gorgonians, meso- and microzooplankton and suprabenthos has no proportions yet.
-- Ecosim fishing effort mixes units between countries (STECF FDI fishing days for Spain, France and Italy; FishMIP kW-days for Morocco, Algeria and Tunisia), so each fleet's series is only used as an index; recreational effort has no source and is kept constant.
+- Corals and gorgonians, meso- and microzooplankton and suprabenthos have no diet until the full diet database (dietcalcR) covers them (`diet_still_missing_REVIEW.csv`); no diets are entered by hand.
+- Ecosim fishing effort mixes units between countries (STECF FDI fishing days for Spain, France and Italy; FishMIP kW-days for Morocco, Algeria and Tunisia), so each fleet's series is only used as an index.
+- Recreational catch and effort have no direct source: catch from the Sea Around Us recreational:commercial ratio (Tunisia: the median of Algeria and Morocco), effort from the Sea Around Us recreational catch of the country.
+- Fleet costs are Mediterranean values by gear (STECF AER), the same for every country; prices of Morocco, Algeria and Tunisia are EU (FDI) prices unless `PRICE_COUNTRY_FACTOR` is set.
 - AquaMaps envelopes come from the species match in `data/aquamaps_cache/`; a wrong or genus-level match gives a wrong curve (check `environment/ecospace_responses/aquamaps_envelopes_by_species.csv` and the response plots).
 - Package versions are recorded and checked, not pinned (no `renv` lockfile).
 
