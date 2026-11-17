@@ -493,7 +493,7 @@ reference tables, each with a citation per row.
 | 02 | `fisheries/GFCM/`, `fisheries/FDI/`, `fisheries/SAU/`, `fisheries/FishMIP/`, `fisheries/RousseauEtAl2023/`, `fisheries/Morocco_Algeria/` | `data/` | catch, landings, discards, effort | yes |
 | 02 | `fisheries_reference_tables/`, `GFCM-FleetRegister.xlsx` | `data/Complementary data/` | gear → fleet maps, fleet register, technology creep, country codes | yes |
 | 03 | `pbqb_reference_tables/` | `data/Complementary data/` | method references, mammal survivorship type, mean body masses | yes |
-| 04 | `diet/MAISHA/`, `diet_reference_tables/`, `data_entry_metaweb_empty.xlsx` | `data/` and `data/Complementary data/` | diet sources, prey category rules, literature fallback | yes |
+| 04 | `diet/MAISHA/`, `diet_reference_tables/`, `data_entry_metaweb_empty.xlsx` | `data/` and `data/Complementary data/` | diet sources, prey category rules | yes |
 | 06 | `WMed_EwE.xlsx`, `validation_reference_tables/` | `data/` and `data/Complementary data/` | 1995 model, crosswalk, other models | yes |
 | 01 | custom region shapefile | uploaded on the page → `out_dir/shapefiles/custom/<area name>/` | custom study area | custom runs |
 | downloaded | GFCM GSA shapefile, NOAA bathymetry (only if `BATHY_SOURCE = "noaa"` or as fallback), AquaMaps, ISIMIP3a COBALT, FishBase/SeaLifeBase | `out_dir/` caches | GSA polygons, depths, depth suitability, plankton, traits | first run |
@@ -2868,7 +2868,7 @@ Each one is written to the file in the third column at every run.
 | Biomass | Jellyfish, salps, suprabenthos, benthic mollusc, other macro-benthos left to Ecopath (EE = 0.95) | 01 log | check the B Ecopath returns against the review values ([@luo2020], salp bound 10.8) |
 | Biomass | 4 FGs still on an even within-FG species split | `fg_species_biomass_needs_review.csv` | — |
 | P/B, Q/B | Some FGs without P/B or Q/B, and FGs outside P/Q 0.05–0.3 | 03 log, `F_vs_PQ_diagnostic_REVIEW.csv` | review |
-| Diet | No diet for corals and gorgonians, meso and micro zooplankton, suprabenthos | `diet_still_missing_REVIEW.csv` | fill `diet_literature_fallback.csv` by hand, e.g. from [@ribes1999] (gorgonians), [@coll2006] (zooplankton), [@banaru2013] (suprabenthos) |
+| Diet | No diet for corals and gorgonians, meso and micro zooplankton, suprabenthos | `diet_still_missing_REVIEW.csv` | filled when the full diet database (dietcalcR) is available; no manual diet entries |
 | Diet | Cannibalism \> 0.1: jellyfish 0.497, other macro-benthos 0.156, benthic mollusc 0.114 | `diet_cannibalism_REVIEW.csv` | move the self-prey to other FGs (EwE User Guide) |
 | Data | `FG_WMed_2026.csv` has no `survey_exempt` column (hard-coded list used) | 01 log | add the column |
 
