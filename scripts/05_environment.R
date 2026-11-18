@@ -14,14 +14,18 @@
 ##   temp_surf  sea surface temperature, deg C   MedPHY reanalysis, thetao, first level (~1 m)
 ##   sal_surf   sea surface salinity             MedPHY reanalysis, so, first level
 ##   temp_bot   sea bottom temperature, deg C    MedPHY reanalysis, bottomT
-##   npp        net primary production, g C m-2 d-1, integrated over the euphotic zone
-##   phyto_c    phytoplankton carbon, g C m-2, integrated over the euphotic zone
-##  Euphotic zone (ENV_INTEGRATION = "euphotic", default): per cell and month,
-##  the depth above which ENV_EU_FRACTION (99%) of the 0-ENV_INTEGRATION_DEPTH m
-##  NPP happens, from MedBFM's own NPP profile (MedBFM publishes no euphotic
-##  depth). NPP = that 99%; phytoplankton carbon is summed down to the same
-##  depth, so non-producing biomass below it (sinking cells) is left out.
-##  ENV_INTEGRATION = "fixed" integrates both over 0-ENV_INTEGRATION_DEPTH m.
+##   npp        net primary production, g C m-2 d-1, integrated over the water column
+##   phyto_c    phytoplankton carbon, g C m-2, integrated over the water column
+##  Water column (ENV_INTEGRATION = "column", default): every MedBFM level
+##  from the surface to the seafloor, or to ENV_INTEGRATION_DEPTH (200 m)
+##  where the sea is deeper, summed with its layer thickness. MedBFM's NPP
+##  is light-limited and ends above ~150 m; the share of phytoplankton
+##  carbon in the deepest 50 m read is logged and written to
+##  diagnostics/netcdf_units_and_levels.csv (share_last_50m_pct) - if it is
+##  not small, raise ENV_INTEGRATION_DEPTH (a new download).
+##  ENV_INTEGRATION = "euphotic": per cell and month the depth above which
+##  ENV_EU_FRACTION (99%) of the column NPP happens (from MedBFM's NPP
+##  profile); NPP = that 99% and phytoplankton carbon only down to it.
 ##  The PISCES gap fill keeps 0-ENV_INTEGRATION_DEPTH m: only its
 ##  year-to-year ratio is used, the level comes from MedBFM (see below).
 ##  For each: one GeoTIFF per variable on the native 1/24 deg grid (one
@@ -56,15 +60,20 @@
 ##    (cmems_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M, OCEANCOLOUR_GLO_
 ##    BGC_L4_MY_009_104; the Med L4 monthly datasets have chlorophyll only,
 ##    CMEMS-OC-PUM), mean of ENV_PFT_YEARS (2002-2004: size classes start in
-##    2002, before that only SeaWiFS flew; earlier years are moved there):
-##      share_large = MICRO / (MICRO + NANO + PICO), share_small = 1 - share_large
+##    2002, before that only SeaWiFS flew; earlier years are moved there),
+##    per cell and calendar month (STEP 2b):
+##      share_large(x, m) = MICRO / (MICRO + NANO + PICO), share_small = 1 - share_large
+##      phyto_large(x, y, m) = phyto_c(x, y, m) x share_large(x, m)
+##    applied to every year of MedBFM (and the PISCES gap fill), so the
+##    split keeps its map and seasonal cycle back to 1994.
 ##    ASSUMPTION (flagged): the chlorophyll share is used as the carbon
-##    share, and both groups get the same P/B (no size-resolved NPP in
-##    these products).
+##    share, the surface share for the whole column, the 2002-2004
+##    climatology for every year, and both groups get the same P/B (no
+##    size-resolved NPP in these products).
 ##
 ## ECOPATH VALUES
-##   B (t WW km-2)  = phyto_c(ENV_ECOPATH_B_YEAR) x PHYTO_C_TO_WW x share
-##   P/B (yr-1)     = NPP_annual(ENV_ECOPATH_PB_YEARS) / phyto_c(ENV_ECOPATH_B_YEAR)
+##   B (t WW km-2)  = mean of phyto_large / phyto_small over ENV_ECOPATH_PB_YEARS (= YEAR_ECOPATH) x PHYTO_C_TO_WW
+##   P/B (yr-1)     = NPP_annual / phyto_c, both means over ENV_ECOPATH_PB_YEARS
 ##   NPP_annual (g C m-2 yr-1) = sum over months of npp (g C m-2 d-1) x days in the month
 ##   phyto_c (g C m-2) = annual mean of the monthly values
 ##   all area-weighted (cos latitude) means over the model area
@@ -109,15 +118,17 @@ source(file.path(git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"))   # c
 .env_default("ENV_YEARS", if (exists("TS_YEARS", envir = .GlobalEnv)) TS_YEARS else 1995:as.integer(format(Sys.Date(), "%Y")))
 .env_default("ENV_ECOPATH_B_YEAR", if (exists("YEAR_ECOPATH", envir = .GlobalEnv)) as.integer(round(stats::median(YEAR_ECOPATH))) else 1995L)
 ## P/B: NPP of the Ecopath years up to the B year (1994:1996 -> 1994-1995)
-.env_default("ENV_ECOPATH_PB_YEARS", if (exists("YEAR_ECOPATH", envir = .GlobalEnv)) YEAR_ECOPATH[YEAR_ECOPATH <= ENV_ECOPATH_B_YEAR] else 1994:1995)
+.env_default("ENV_ECOPATH_PB_YEARS", if (exists("YEAR_ECOPATH", envir = .GlobalEnv)) YEAR_ECOPATH else 1994:1996)   # NPP of the Ecopath years
 .env_default("ENV_BASE_YEAR", ENV_ECOPATH_B_YEAR)                     # Ecosim forcing = value / mean of this year
 .env_default("ENV_OVERLAP_YEARS", 1999:2010)                          # MedBFM vs PISCES, for the gap fill
 .env_default("ENV_GAP_RATIO_MAX", 4)
 .env_default("ENV_PFT_YEARS", 2002:2004)   # size classes exist from 2002
 .env_default("ENV_INTEGRATION_DEPTH", 200)                            # m, deepest level read for NPP and phytoplankton carbon
-.env_default("ENV_INTEGRATION", "euphotic")                           # "euphotic" (depth with 99% of the column NPP) or "fixed" (0-ENV_INTEGRATION_DEPTH m)
+.env_default("ENV_INTEGRATION", "column")                             # "column" (surface to seafloor, at most ENV_INTEGRATION_DEPTH) or "euphotic" (depth with 99% of the column NPP)
+if (identical(ENV_INTEGRATION, "fixed")) ENV_INTEGRATION <- "column"
 .env_default("ENV_EU_FRACTION", 0.99)                                 # share of the column NPP above the euphotic depth
-.int_lab <- if (identical(ENV_INTEGRATION, "euphotic")) paste0("over the euphotic zone (", round(100 * ENV_EU_FRACTION), "% of the 0-", ENV_INTEGRATION_DEPTH, " m NPP)") else paste0("0-", ENV_INTEGRATION_DEPTH, " m")
+.int_lab <- if (identical(ENV_INTEGRATION, "euphotic")) paste0("over the euphotic zone (", round(100 * ENV_EU_FRACTION), "% of the 0-", ENV_INTEGRATION_DEPTH, " m NPP)") else
+  paste0("over the water column (surface to seafloor, at most ", ENV_INTEGRATION_DEPTH, " m)")
 .env_default("ENV_DOMAIN", "area")                                    # "area" = the run's model area (GSAs or custom region); "ecospace" = cells of ECOSPACE_DEPTH_FILE
 .env_default("PHYTO_C_TO_WW", 9)
 .env_default("ECOSPACE_DEPTH_FILE", file.path(pcloud_dir, "data", "Bathymetry", "depth_wmed.asc"))
@@ -169,7 +180,8 @@ if (any(ENV_PFT_YEARS < 2002)) {
            paste(range(2002:(2001 + length(ENV_PFT_YEARS))), collapse = "-"), ".")
   ENV_PFT_YEARS <- 2002:(2001 + length(ENV_PFT_YEARS))
 }
-ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", npp = "g C m-2 d-1", phyto_c = "g C m-2")
+ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", npp = "g C m-2 d-1", phyto_c = "g C m-2",
+                   phyto_large = "g C m-2", phyto_small = "g C m-2")
 
 ## =================================================================
 ## Helpers
@@ -269,7 +281,7 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
   zeu_in <- if (eu && name == "phyto_c" && !is.null(zeu_file) && file.exists(zeu_file)) readRDS(zeu_file) else NULL
   if (eu && name == "phyto_c" && is.null(zeu_in))
     .env_msg("  [euphotic] no euphotic depth for ", basename(f), " - phytoplankton carbon integrated 0-", ENV_INTEGRATION_DEPTH, " m.")
-  zeu_vals <- list()
+  zeu_vals <- list(); deep_share <- list()
   layers <- vector("list", length(dates))
   for (k in seq_along(dates)) {
     st <- rep(1, length(dims)); ct <- rep(-1, length(dims)); st[i_tim] <- k; ct[i_tim] <- 1
@@ -282,6 +294,12 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
       a[!is.finite(a)] <- 0
       contrib <- sweep(a, 3, th, `*`)
       m <- apply(contrib, c(1, 2), sum); m[!ok] <- NA
+      ## share of the column integral in the deepest 50 m read (cells reaching that depth)
+      .lw <- which(edges_lo >= max(edges_hi) - 50)
+      if (length(z) > 1 && length(.lw)) {
+        .deep <- apply(contrib[, , .lw, drop = FALSE], c(1, 2), sum)
+        deep_share[[length(deep_share) + 1]] <- sum(.deep[ok], na.rm = TRUE) / max(sum(m[ok], na.rm = TRUE), 1e-12)
+      }
       mkey <- format(dates[k], "%Y-%m")
       if (eu && name == "npp" && length(z) > 1) {
         ## depth where the cumulative NPP reaches ENV_EU_FRACTION of the column
@@ -326,7 +344,11 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
                                 n_levels = length(z), top_m = min(z), bottom_m = max(z),
                                 thickness_sum_m = if (integrate) sum(th) else NA_real_,
                                 integration = if (integrate) (if (length(zeu_vals)) "euphotic" else paste0("0-", ENV_INTEGRATION_DEPTH, " m")) else "surface/bottom",
-                                zeu_p10_m = zq[[1]], zeu_median_m = zq[[2]], zeu_p90_m = zq[[3]])
+                                zeu_p10_m = zq[[1]], zeu_median_m = zq[[2]], zeu_p90_m = zq[[3]],
+                                share_last_50m_pct = if (length(deep_share)) round(100 * mean(unlist(deep_share)), 2) else NA_real_)
+  if (integrate && length(deep_share) && !length(zeu_vals))
+    .env_msg("  [column] ", basename(f), ": ", round(100 * mean(unlist(deep_share)), 2), "% of the ", name, " column integral is in the deepest 50 m read (",
+             round(max(edges_hi) - 50), "-", round(max(edges_hi)), " m)", if (mean(unlist(deep_share)) > 0.02) " - not negligible: consider a larger ENV_INTEGRATION_DEPTH." else ".")
   r
 }
 
@@ -334,6 +356,7 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
 .env_year <- function(name, year, ids, var, depth, integrate, tag = name) {
   eu <- integrate && identical(ENV_INTEGRATION, "euphotic") && !grepl("_pisces$", tag)
   if (eu) tag <- paste0(tag, "_eu", round(100 * ENV_EU_FRACTION))       # own cache, so a 0-200 m cache is not reused
+  if (!eu && integrate && ENV_INTEGRATION_DEPTH != 200) tag <- paste0(tag, "_0-", ENV_INTEGRATION_DEPTH, "m")   # 0-200 m keeps the plain cache name
   zeu_file <- if (eu) file.path(cache_dir, sprintf("zeu_eu%d_%d.rds", round(100 * ENV_EU_FRACTION), year)) else NULL
   cf <- file.path(cache_dir, sprintf("%s_%d.tif", tag, year))
   if (file.exists(cf) && !(eu && name == "npp" && !file.exists(zeu_file))) return(terra::rast(cf))
@@ -516,11 +539,90 @@ for (nm in c("npp", "phyto_c")) {
 .env_tick("gap fill")
 
 ## =================================================================
+## STEP 2b - Large / Small phytoplankton maps (satellite size classes)
+## =================================================================
+## MedBFM gives total phytoplankton only. The share of micro-phytoplankton
+## (Large) in the chlorophyll of the satellite size classes
+## (ENV_PFT_DATASETS, MICRO / (MICRO + NANO + PICO)) is averaged per cell
+## and calendar month over ENV_PFT_YEARS, put on the MedBFM grid, and
+## applied to the MedBFM phytoplankton carbon of every month and year
+## (1994-1998 from the PISCES gap fill): Large = C x share(cell, month),
+## Small = C x (1 - share). So the split keeps its spatial pattern and
+## seasonal cycle and is extrapolated in time to the years before the
+## satellite (ASSUMPTIONS: chlorophyll share = carbon share, surface share
+## = column share, the 2002-2004 climatology holds for every year). Cells
+## the satellite misses take the mean of their neighbours, then the area
+## mean of that month. Without satellite data: 0.55 everywhere (Delgado
+## et al. 1992). Writes phyto_large / phyto_small maps, series and Ecosim
+## forcing like the other variables.
+.pft_yr <- ENV_PFT_YEARS[ENV_PFT_YEARS >= 1997]
+.pft_cache <- file.path(cache_dir, sprintf("pft_micro_share_clim_%d-%d.tif", min(.pft_yr), max(.pft_yr)))
+pft_share_map <- if (file.exists(.pft_cache)) terra::rast(.pft_cache) else NULL
+if (is.null(pft_share_map)) for (id in ENV_PFT_DATASETS) {
+  acc <- list()
+  for (y in .pft_yr) {
+    f <- .env_subset(id, c("MICRO", "NANO", "PICO"), sprintf("%d-01-01", y), sprintf("%d-12-31", y), tag = "pftmap")
+    if (is.null(f)) next
+    rr <- tryCatch(local({
+      nc <- ncdf4::nc_open(f); on.exit(ncdf4::nc_close(nc))
+      lon <- nc$dim[[grep("^lon", names(nc$dim))]]$vals; lat <- nc$dim[[grep("^lat", names(nc$dim))]]$vals
+      dates <- .env_nc_dates(nc)
+      get3 <- function(v) { a <- ncdf4::ncvar_get(nc, v, collapse_degen = FALSE); dm <- dim(a)
+        if (length(dm) == 4) a <- a[, , 1, , drop = TRUE]; dm <- dim(a); if (length(dm) == 2) a <- array(a, c(dm, 1)); a }
+      mi <- get3("MICRO"); tot <- mi + get3("NANO") + get3("PICO")
+      sh <- mi / tot; sh[!is.finite(sh) | tot <= 0] <- NA
+      r <- terra::rast(lapply(seq_len(dim(sh)[3]), function(k) .env_mat2rast(sh[, , k], lon, lat)))
+      names(r) <- format(dates, "%m"); r
+    }), error = function(e) { .env_msg("  [PFT] ", basename(f), ": ", conditionMessage(e)); NULL })
+    if (!ENV_KEEP_NETCDF) unlink(f)
+    if (!is.null(rr)) acc[[as.character(y)]] <- rr
+  }
+  if (!length(acc)) next
+  al <- do.call(c, unname(acc)); mo <- as.integer(names(al))
+  pft_share_map <- terra::rast(lapply(1:12, function(m) terra::app(al[[which(mo == m)]], mean, na.rm = TRUE)))
+  names(pft_share_map) <- sprintf("%02d", 1:12)
+  terra::writeRaster(pft_share_map, .pft_cache, overwrite = TRUE, gdal = "COMPRESS=DEFLATE")
+  pft_share_map <- terra::rast(.pft_cache)
+  break
+}
+.pft_on <- function(g) {   # share map (12 layers) on the grid of g, gaps filled
+  if (is.null(pft_share_map)) { r <- terra::rast(g[[1]], nlyrs = 12); terra::values(r) <- 0.55; return(r) }
+  r <- terra::resample(pft_share_map, g[[1]], method = "average")
+  for (i in 1:4) r <- terra::cover(r, terra::focal(r, w = 5, fun = mean, na.rm = TRUE, expand = TRUE))
+  for (m in 1:12) { mu <- terra::global(r[[m]], "mean", na.rm = TRUE)[1, 1]; r[[m]] <- terra::subst(r[[m]], NA, if (is.finite(mu)) mu else 0.55) }
+  terra::clamp(r, 0, 1, values = TRUE)
+}
+.pft_split <- function(x, sh, large = TRUE) {
+  if (is.null(x)) return(NULL)
+  mo <- as.integer(substr(names(x), 6, 7))
+  y <- if (large) x * sh[[mo]] else x * (1 - sh[[mo]])
+  names(y) <- names(x); y
+}
+if (!is.null(env_maps[["phyto_c"]])) {
+  .sh <- .pft_on(env_maps[["phyto_c"]])
+  env_maps[["phyto_large"]] <- .pft_split(env_maps[["phyto_c"]], .sh, TRUE)
+  env_maps[["phyto_small"]] <- .pft_split(env_maps[["phyto_c"]], .sh, FALSE)
+  if (!is.null(env_gap[["phyto_c"]])) {
+    .shg <- .pft_on(env_gap[["phyto_c"]])
+    env_gap[["phyto_large"]] <- .pft_split(env_gap[["phyto_c"]], .shg, TRUE)
+    env_gap[["phyto_small"]] <- .pft_split(env_gap[["phyto_c"]], .shg, FALSE)
+  }
+  .shm <- vapply(1:12, function(m) .env_domain_mean(.sh[[m]]), 0)
+  fwrite(data.table(month = 1:12, micro_share_area_mean = round(.shm, 4),
+                    source = if (is.null(pft_share_map)) "fallback 0.55 (Delgado et al. 1992)" else paste0(ENV_PFT_DATASETS[1], ", ", min(.pft_yr), "-", max(.pft_yr))),
+         file.path(diag_dir, "phytoplankton_size_share_by_month.csv"))
+  .env_msg("[05_environment] Large/Small phytoplankton: micro share per cell and month from ",
+           if (is.null(pft_share_map)) "FALLBACK 0.55 everywhere (no satellite size classes)" else paste0(ENV_PFT_DATASETS[1], " ", min(.pft_yr), "-", max(.pft_yr)),
+           " (area mean ", round(100 * min(.shm)), "-", round(100 * max(.shm)), " % across months), applied to MedBFM carbon of every month and year.")
+}
+.env_tick("size classes")
+
+## =================================================================
 ## STEP 3 - write maps and time series
 ## =================================================================
 ts_rows <- list(); ann_rows <- list()
 for (nm in names(env_maps)) {
-  r <- env_maps[[nm]]; src <- rep(if (nm %in% c("npp", "phyto_c")) "MedBFM reanalysis" else "MedPHY reanalysis", terra::nlyr(r))
+  r <- env_maps[[nm]]; src <- rep(if (nm %in% c("npp", "phyto_c")) "MedBFM reanalysis" else if (nm %in% c("phyto_large", "phyto_small")) "MedBFM x satellite size share" else "MedPHY reanalysis", terra::nlyr(r))
   if (!is.null(env_gap[[nm]])) {
     g <- env_gap[[nm]]
     r <- c(g, terra::resample(r, g[[1]])); src <- c(rep("PISCES scaled to MedBFM", terra::nlyr(g)), src)
@@ -583,7 +685,8 @@ if (nrow(env_ts)) tryCatch({
   suppressPackageStartupMessages(library(ggplot2))
   plot_dir_env <- file.path(out_dir, "plots", "environment"); dir.create(plot_dir_env, recursive = TRUE, showWarnings = FALSE)
   lab <- c(temp_surf = "Surface temperature (deg C)", sal_surf = "Surface salinity", temp_bot = "Bottom temperature (deg C)",
-           npp = paste0("NPP ", .int_lab, " (monthly g C m-2 d-1; annual g C m-2 yr-1 / 365)"), phyto_c = paste0("Phytoplankton C ", .int_lab, " (g C m-2)"))
+           npp = paste0("NPP ", .int_lab, " (monthly g C m-2 d-1; annual g C m-2 yr-1 / 365)"), phyto_c = paste0("Phytoplankton C ", .int_lab, " (g C m-2)"),
+           phyto_large = "Large phytoplankton C (g C m-2)", phyto_small = "Small phytoplankton C (g C m-2)")
   yr_keep <- sort(unique(c(ENV_YEARS, ENV_ECOPATH_PB_YEARS)))
   d <- copy(env_ts)[year %in% yr_keep][, date := as.Date(sprintf("%d-%02d-15", year, month))][, panel := factor(lab[variable], levels = lab)]
   a <- copy(env_annual)[year %in% yr_keep][, date := as.Date(sprintf("%d-07-01", year))][, panel := factor(lab[variable], levels = lab)]
@@ -608,84 +711,36 @@ if (nrow(env_ts)) tryCatch({
 }, error = function(e) .env_msg("[05_environment] plot skipped - ", conditionMessage(e)))
 
 ## =================================================================
-## STEP 4 - Large / Small share from satellite size classes
-## =================================================================
-pft_share <- NULL
-.pft_file <- file.path(diag_dir, "phytoplankton_size_classes_chl.csv")
-if (file.exists(.pft_file)) {   # downloaded on an earlier run: reuse when it covers the same years and has values
-  pft_share <- fread(.pft_file)
-  if (!setequal(pft_share$year, ENV_PFT_YEARS[ENV_PFT_YEARS >= 1997]) ||
-      !all(is.finite(as.matrix(pft_share[, .(MICRO, NANO, PICO)])))) pft_share <- NULL
-}
-for (id in if (is.null(pft_share)) ENV_PFT_DATASETS else character(0)) {
-  rows <- list()
-  for (y in ENV_PFT_YEARS[ENV_PFT_YEARS >= 1997]) {
-    f <- .env_subset(id, c("MICRO", "NANO", "PICO"), sprintf("%d-01-01", y), sprintf("%d-12-31", y), tag = "pft")
-    if (is.null(f)) next
-    rr <- tryCatch(local({
-      nc <- ncdf4::nc_open(f); on.exit(ncdf4::nc_close(nc))
-      lon <- nc$dim[[grep("^lon", names(nc$dim))]]$vals; lat <- nc$dim[[grep("^lat", names(nc$dim))]]$vals
-      vapply(c("MICRO", "NANO", "PICO"), function(v) {
-        a <- ncdf4::ncvar_get(nc, v, collapse_degen = FALSE); dm <- dim(a)
-        if (length(dm) == 4) a <- a[, , 1, , drop = TRUE]              # a depth level of 1: drop it
-        dm <- dim(a); if (length(dm) == 2) { a <- array(a, c(dm, 1)); dm <- dim(a) }
-        vals <- vapply(seq_len(dm[3]), function(k) {
-          mm <- a[, , k]
-          x <- tryCatch(.env_domain_mean(.env_mat2rast(mm, lon, lat)), error = function(e) NA_real_)
-          if (!is.finite(x) && any(is.finite(mm))) x <- mean(mm, na.rm = TRUE)   # model-area mask found no cells: mean of the box
-          x }, numeric(1))
-        if (!any(is.finite(vals))) .env_msg("  [PFT] ", basename(f), " ", v, ": no values (dims ", paste(dim(a), collapse = "x"),
-                                             ", finite cells ", sum(is.finite(a)), ")")
-        mean(vals, na.rm = TRUE)
-      }, numeric(1))
-    }), error = function(e) { .env_msg("  [PFT] ", basename(f), ": ", conditionMessage(e)); NULL })
-    if (!ENV_KEEP_NETCDF) unlink(f)
-    if (!is.null(rr) && all(is.finite(rr))) rows[[as.character(y)]] <- data.table(dataset = id, year = y, MICRO = rr[["MICRO"]], NANO = rr[["NANO"]], PICO = rr[["PICO"]])
-  }
-  if (length(rows)) { pft_share <- rbindlist(rows); break }
-}
-if (!is.null(pft_share)) {
-  share_large <- sum(pft_share$MICRO) / sum(pft_share$MICRO + pft_share$NANO + pft_share$PICO)
-  fwrite(pft_share, .pft_file)
-  .env_msg("[05_environment] Size classes (", pft_share$dataset[1], ", ", min(pft_share$year), "-", max(pft_share$year),
-           "): micro ", round(100 * share_large), " % of chlorophyll -> Large; nano + pico ", round(100 * (1 - share_large)), " % -> Small.")
-} else {
-  share_large <- 0.55
-  .env_msg("[05_environment] No satellite size classes could be downloaded - FALLBACK Large/Small 0.55/0.45 (Delgado et al. 1992).")
-}
-
-## =================================================================
 ## STEP 5 - Ecopath phytoplankton B and P/B
 ## =================================================================
+## B of each group = mean of its annual carbon over the Ecopath years x
+## C:WW; P/B = NPP / total carbon over the same years (same for both).
 tryCatch(if (nrow(env_ts) && all(c("npp", "phyto_c") %in% env_ts$variable)) {
-  b_c  <- env_ts[variable == "phyto_c" & year == ENV_ECOPATH_B_YEAR, mean(value)]
-  b_src <- env_ts[variable == "phyto_c" & year == ENV_ECOPATH_B_YEAR, paste(unique(source), collapse = " + ")]
-  npp_y <- env_annual[variable == "npp" & year %in% ENV_ECOPATH_PB_YEARS & n_months == 12]
-  npp_c <- mean(npp_y$value)
-  if (!is.finite(b_c) || !nrow(npp_y) || !is.finite(npp_c))
-    stop("[05_environment] no phytoplankton carbon for ", ENV_ECOPATH_B_YEAR, " or no full year of NPP in ",
-         paste(range(ENV_ECOPATH_PB_YEARS), collapse = "-"), " (before 1999 these come from the PISCES gap fill,",
-         " which needs at least 3 overlap years; see the [gap fill] lines above) - no Ecopath phytoplankton values.")
-  pb <- npp_c / b_c
-  b_ww <- b_c * PHYTO_C_TO_WW
-  shares <- c(LargePhytoplankton = share_large, SmallPhytoplankton = 1 - share_large)
+  .ep <- ENV_ECOPATH_PB_YEARS
+  .av <- function(v) env_annual[variable == v & year %in% .ep & n_months == 12]
+  npp_y <- .av("npp"); c_y <- .av("phyto_c")
+  if (!nrow(npp_y) || !nrow(c_y))
+    stop("[05_environment] no full year of NPP or phytoplankton carbon in ", paste(range(.ep), collapse = "-"),
+         " (before 1999 these come from the PISCES gap fill, which needs at least 3 overlap years; see the [gap fill] lines above) - no Ecopath phytoplankton values.")
+  npp_c <- mean(npp_y$value); b_c <- mean(c_y$value); pb <- npp_c / b_c
+  bl <- if (nrow(.av("phyto_large"))) mean(.av("phyto_large")$value) else b_c * 0.55
+  bs <- if (nrow(.av("phyto_small"))) mean(.av("phyto_small")$value) else b_c * 0.45
+  shares <- c(LargePhytoplankton = bl / (bl + bs), SmallPhytoplankton = bs / (bl + bs))
   ecopath_phyto <- data.table(
     TargetGroup = names(shares), share = unname(shares),
-    B_gC_m2 = b_c * shares, Biomass_t_km2 = b_ww * shares, PB = pb,
+    B_gC_m2 = c(bl, bs), Biomass_t_km2 = c(bl, bs) * PHYTO_C_TO_WW, PB = pb,
     NPP_gC_m2_yr = npp_c * shares,
-    B_year = ENV_ECOPATH_B_YEAR, PB_npp_years = paste(range(npp_y$year), collapse = "-"),
-    Source_citation = paste0("Copernicus Marine: phytoplankton carbon (phyc) and NPP (nppv) integrated ", .int_lab,
-                             ", area-weighted over ", .area_label, "; ", b_src, " for ", ENV_ECOPATH_B_YEAR,
-                             " (MedBFM MEDSEA_MULTIYEAR_BGC_006_008 level and seasonality, year-to-year change from PISCES",
-                             " GLOBAL_MULTIYEAR_BGC_001_029 before 1999); C:WW 1:", PHYTO_C_TO_WW,
-                             " (Pauly & Christensen 1995); Large/Small = satellite micro vs nano+pico chlorophyll share",
-                             if (!is.null(pft_share)) paste0(" (", pft_share$dataset[1], ", ", min(pft_share$year), "-", max(pft_share$year), ")") else " (fallback 0.55/0.45, Delgado et al. 1992)",
-                             ", same P/B for both (FLAGGED)."))
+    B_year = paste(range(c_y$year), collapse = "-"), PB_npp_years = paste(range(npp_y$year), collapse = "-"),
+    Source_citation = paste0("Copernicus Marine MedBFM (MEDSEA_MULTIYEAR_BGC_006_008): phytoplankton carbon (phyc) and NPP (nppv) integrated ", .int_lab,
+                             ", area-weighted over ", .area_label, ", mean ", paste(range(.ep), collapse = "-"),
+                             " (before 1999: PISCES GLOBAL_MULTIYEAR_BGC_001_029 year-to-year change on the MedBFM level and seasonality); C:WW 1:", PHYTO_C_TO_WW,
+                             " (Pauly & Christensen 1995); Large/Small = satellite micro vs nano+pico chlorophyll share per cell and calendar month",
+                             if (!is.null(pft_share_map)) paste0(" (", ENV_PFT_DATASETS[1], ", ", min(.pft_yr), "-", max(.pft_yr), " climatology, applied to every year)") else " (fallback 0.55, Delgado et al. 1992)",
+                             "; same P/B = NPP / C for both (FLAGGED)."))
   fwrite(ecopath_phyto, file.path(env_dir, "ecopath_phytoplankton_B_PB.csv"))
-  .env_msg("[05_environment] Ecopath phytoplankton: B ", signif(b_ww, 3), " t WW/km2 (", signif(b_c, 3), " g C/m2, ",
-           ENV_ECOPATH_B_YEAR, "), NPP ", signif(npp_c, 3), " g C/m2/yr (", paste(range(npp_y$year), collapse = "-"),
-           "), P/B ", signif(pb, 3), " /yr; Large ", signif(b_ww * share_large, 3), ", Small ", signif(b_ww * (1 - share_large), 3),
-           " t/km2 -> ecopath_phytoplankton_B_PB.csv")
+  .env_msg("[05_environment] Ecopath phytoplankton (", paste(range(.ep), collapse = "-"), "): C ", signif(b_c, 3), " g C/m2 (",
+           signif(b_c * PHYTO_C_TO_WW, 3), " t WW/km2), NPP ", signif(npp_c, 3), " g C/m2/yr, P/B ", signif(pb, 3), " /yr; Large ",
+           signif(bl * PHYTO_C_TO_WW, 3), ", Small ", signif(bs * PHYTO_C_TO_WW, 3), " t WW/km2 -> ecopath_phytoplankton_B_PB.csv")
 } else {
   .env_msg("[05_environment] NPP or phytoplankton carbon missing - no Ecopath phytoplankton values.")
 }, error = function(e) .env_msg(conditionMessage(e)))

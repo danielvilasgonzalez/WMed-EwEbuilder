@@ -257,15 +257,27 @@ source(file.path(git_dir, "scripts", "lib_output_tidy.R")); wmed_restore_interme
   .progress(sprintf("--- Step %d/7 done in %.1f min", i, as.numeric(difftime(Sys.time(), t, units = "mins"))))
 }
 
+## PHYTO_SOURCE = "copernicus" (default): 01 and 03 take the phytoplankton B
+## and P/B from 05 (Copernicus MedBFM, the source of the Ecosim NPP forcing
+## and the Ecospace maps), so 05 runs first - when it is ticked, or when 01
+## or 03 run and its outputs are missing. Without a Copernicus login 05 is
+## skipped and 01 keeps the ISIMIP phytoplankton (with a message).
+if (!exists("PHYTO_SOURCE", envir = .GlobalEnv, inherits = FALSE)) PHYTO_SOURCE <- "copernicus"
+.run05 <- function() tryCatch(.run_step(5, "05_environment.R", "[Copernicus: temperature, salinity, NPP, phytoplankton B and P/B; the first run downloads several GB] "),
+                              error = function(e) message("05_environment.R failed (the other steps are not affected): ", conditionMessage(e)))
+.env_first <- identical(PHYTO_SOURCE, "copernicus") && any(c(1, 3) %in% RUN_STEPS) &&
+  (5 %in% RUN_STEPS || !file.exists(file.path(out_dir, "environment", "environment_timeseries_annual.csv")))
+if (.env_first) {
+  if (!5 %in% RUN_STEPS) message("\nPHYTO_SOURCE = 'copernicus' and no 05 outputs yet: running 05_environment.R first.")
+  .run05()
+}
 if (1 %in% RUN_STEPS) .run_step(1, "01_biomass.R", "[MEDITS/MEDIAS + unsurveyed groups; the first run after a strata change rebuilds the strata areas from NOAA bathymetry - needs internet] ")
 if (.custom_run && any(c(2:4, 7) %in% RUN_STEPS)) .set_custom_catch_gsas()
 if (2 %in% RUN_STEPS) .run_step(2, "02_fisheries.R", "[catch, landings, discards, effort, F] ")
 if (3 %in% RUN_STEPS) .run_step(3, "03_pbqb-traits.R", "[P/B, Q/B, traits; includes the EcoBase query] ")
 if (4 %in% RUN_STEPS) .run_step(4, "04_diets.R", "[diet matrix] ")
 ## 05 never stops the run: a missing Copernicus login or download only skips it
-if (5 %in% RUN_STEPS)
-  tryCatch(.run_step(5, "05_environment.R", "[Copernicus: temperature, salinity, NPP, phytoplankton B and P/B; the first run downloads several GB] "),
-           error = function(e) message("05_environment.R failed (the other steps are not affected): ", conditionMessage(e)))
+if (5 %in% RUN_STEPS && !.env_first) .run05()
 ## 6 = Ecospace drivers: the monthly maps of 05 regridded onto
 ## the Ecospace base map (05b_ecospace_drivers.R; no download, minutes).
 if (6 %in% RUN_STEPS)

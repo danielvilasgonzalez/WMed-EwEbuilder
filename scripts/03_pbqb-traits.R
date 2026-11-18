@@ -4216,6 +4216,37 @@ if (file.exists(.ms_path)) {
 }
 
 ## =================================================================
+## Phytoplankton P/B from Copernicus MedBFM (PHYTO_SOURCE = "copernicus")
+## =================================================================
+## P/B = annual NPP / phytoplankton carbon, both the mean over YEAR_ECOPATH
+## of 05's area series (environment_timeseries_annual.csv; MedBFM, PISCES
+## scaled to MedBFM before 1999) - the same source and years as the
+## Ecopath B of 01b, the Ecosim NPP forcing and the Ecospace maps. MedBFM
+## has no size classes, so Large and Small phytoplankton get the same P/B
+## (FLAGGED). Replaces the EcoBase P/B of those FGs in Ecopath_PBQB.
+if (!exists("PHYTO_SOURCE", envir = .GlobalEnv, inherits = FALSE)) PHYTO_SOURCE <- "copernicus"
+if (identical(PHYTO_SOURCE, "copernicus")) tryCatch({
+  .ea <- file.path(out_dir, "environment", "environment_timeseries_annual.csv")
+  if (!file.exists(.ea)) stop(basename(.ea), " not found - run 05 first")
+  .a <- fread(.ea)[variable %in% c("npp", "phyto_c") & year %in% YEAR_ECOPATH]
+  .npp <- mean(as.numeric(.a[variable == "npp", value])); .bc <- mean(as.numeric(.a[variable == "phyto_c", value]))
+  if (!is.finite(.npp / .bc) || .bc <= 0) stop("no NPP or phytoplankton carbon for ", paste(range(YEAR_ECOPATH), collapse = "-"))
+  .pb <- .npp / .bc
+  .src <- sprintf("Copernicus MedBFM (05): NPP / phytoplankton C, %s mean = %.0f g C m-2 yr-1 / %.3f g C m-2%s; same P/B for Large and Small (FLAGGED)",
+                  paste(range(YEAR_ECOPATH), collapse = "-"), .npp, .bc, if (any(.a$source != "MedBFM reanalysis")) " (PISCES scaled to MedBFM before 1999)" else "")
+  .pq <- as.data.table(openxlsx::read.xlsx(ECOPATH_WORKBOOK_PATH, sheet = "Ecopath_PBQB", check.names = FALSE, sep.names = " "))
+  .h <- which(grepl("^(large|small) phytoplankton$", trimws(tolower(.pq$FG_name))))
+  if (!length(.h)) stop("no Large/Small phytoplankton FG in Ecopath_PBQB")
+  .pq[.h, PB_FG := .pb]
+  if ("PB_source" %in% names(.pq)) .pq[.h, PB_source := .src]
+  upsert_workbook_sheets(list(Ecopath_PBQB = .pq), ECOPATH_WORKBOOK_PATH)
+  .pqc <- file.path(csv_out_dir, "PB_QB.csv")
+  if (file.exists(.pqc)) { .c <- fread(.pqc); .k <- which(grepl("^(large|small) phytoplankton$", trimws(tolower(.c$FG_name))))
+    .c[.k, PB_FG := .pb]; if ("PB_source" %in% names(.c)) .c[.k, PB_source := .src]; fwrite(.c, .pqc) }
+  message("[Phytoplankton P/B] PHYTO_SOURCE = 'copernicus': P/B = ", round(.pb, 1), " /yr for ", paste(.pq$FG_name[.h], collapse = " and "), " (", .src, ").")
+}, error = function(e) message("[Phytoplankton P/B] PHYTO_SOURCE = 'copernicus' but the Copernicus P/B was not set (", conditionMessage(e), ") - EcoBase P/B kept."))
+
+## =================================================================
 ## Total pipeline runtime
 ## =================================================================
 elapsed <- Sys.time() - PIPELINE_START_TIME

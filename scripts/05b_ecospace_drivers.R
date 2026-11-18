@@ -86,7 +86,7 @@ if (!exists("out_dir", envir = .GlobalEnv, inherits = FALSE) || !exists("pcloud_
 .esp_default("ECOSPACE_BATHY_FILE", file.path(pcloud_dir, "data", "Bathymetry", "EMODnet_WMed_1arcmin.tif"))
 .esp_default("ECOSPACE_MIN_WATER_FRACTION", 0.5)
 .esp_default("ECOSPACE_CLIP_MODEL_AREA", TRUE)
-.esp_default("ECOSPACE_DRIVER_VARS", c("temp_surf", "temp_bot", "sal_surf", "npp", "phyto_c"))
+.esp_default("ECOSPACE_DRIVER_VARS", c("temp_surf", "temp_bot", "sal_surf", "npp", "phyto_c", "phyto_large", "phyto_small"))
 .esp_default("ECOSPACE_DRIVER_YEARS", if (exists("ENV_YEARS", envir = .GlobalEnv)) ENV_YEARS else
   if (exists("TS_YEARS", envir = .GlobalEnv)) TS_YEARS else NULL)          # NULL = every month 05 made
 .esp_default("ECOSPACE_DRIVER_STEP", "monthly")                            # "monthly" or "annual"
@@ -96,9 +96,9 @@ if (!exists("out_dir", envir = .GlobalEnv, inherits = FALSE) || !exists("pcloud_
 .esp_default("ENV_BASE_YEAR", if (exists("YEAR_ECOPATH", envir = .GlobalEnv)) as.integer(round(stats::median(YEAR_ECOPATH))) else 1995L)
 .esp_default("ECOSPACE_ENV_DIR", file.path(out_dir, "environment"))       # where 05 wrote <var>_monthly_native.tif
 
-.esp_units <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", npp = "g C m-2 d-1", phyto_c = "g C m-2")
+.esp_units <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", npp = "g C m-2 d-1", phyto_c = "g C m-2", phyto_large = "g C m-2", phyto_small = "g C m-2")
 ## folder and file names of the drivers in the Ecospace maps
-.esp_folder <- c(temp_surf = "sst", temp_bot = "sbt", sal_surf = "sss", npp = "pp", phyto_c = "phyc")
+.esp_folder <- c(temp_surf = "sst", temp_bot = "sbt", sal_surf = "sss", npp = "pp", phyto_c = "phyc", phyto_large = "phyl", phyto_small = "phys")
 .esp_folder_of <- function(v) if (v %in% names(.esp_folder)) .esp_folder[[v]] else v
 .esp_msg <- function(...) message(...)
 

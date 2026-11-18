@@ -195,7 +195,8 @@ observe({
 ## Variables: environmental drivers (spatio-temporal, per month) and
 ## habitat drivers (static: depth and the EUSeaMap habitat layers of 05b)
 .esp_lab <- c(temp_surf = "SST - sea surface temperature", temp_bot = "SBT - sea bottom temperature", sal_surf = "SSS - sea surface salinity",
-              npp = "PP - net primary production", phyto_c = "Phytoplankton carbon")
+              npp = "PP - net primary production", phyto_c = "Phytoplankton carbon", phyto_large = "Large phytoplankton carbon",
+              phyto_small = "Small phytoplankton carbon")
 .esp_hab_lab <- c(depth = "Depth", seagrass = "Seagrass (Posidonia, Cymodocea)", coralligenous = "Coralligenous", rock = "Rock",
                   biogenic = "Other biogenic", gravel = "Gravel (coarse sediment)", mixed = "Mixed sediment", sand = "Sand", mud = "Mud")
 .esp_hab <- reactive({
@@ -1153,7 +1154,7 @@ config_code <- reactive({
     if (!is.null(survey_files()$TC)) sprintf("MEDITS_TC_FILE   <- \"%s\"   # own MEDITS length/maturity", .fwd(survey_files()$TC$path)),
     if (!is.null(survey_files()$MEDIAS_abundance) && !is.null(survey_files()$MEDIAS_biomass))
       sprintf("MEDIAS_DIR       <- \"%s\"   # own MEDIAS abundance.csv + biomass.csv", .fwd(dirname(survey_files()$MEDIAS_biomass$path))),
-    sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (05)", if (is.null(input$phyto_src)) "isimip" else input$phyto_src),
+    sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (05)", if (is.null(input$phyto_src)) "copernicus" else input$phyto_src),
     sprintf("EWE_MODEL_NAME   <- \"%s\"   # EwE import files (ewe_import/): file name start", if (is.null(input$ewe_model) || !nzchar(input$ewe_model)) "Western_Mediterranean_Sea" else input$ewe_model),
     sprintf("EWE_EXPORT_FORMAT <- \"both\"   # csv files and one xlsx"),
     sprintf("EWE_DECIMAL      <- \"%s\"   # decimal separator of the EwE csv files", if (is.null(input$ewe_dec)) "," else input$ewe_dec))

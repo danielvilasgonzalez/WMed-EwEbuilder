@@ -17,7 +17,7 @@ Created by: Daniel Vilas (iMARES, ICM-CSIC)
 - **R** (≥ 4.3) and **RStudio**.
 - **Quarto** (for the interactive page; it comes with recent RStudio versions).
 - **Internet** on the first run: several sources are downloaded once and cached.
-- **A free Copernicus Marine account**, only for step 05 (environmental drivers): <https://data.marine.copernicus.eu/register>.
+- **A free Copernicus Marine account** (<https://data.marine.copernicus.eu/register>): for step 05 (environmental drivers), and by default also for the phytoplankton B and P/B (`PHYTO_SOURCE = "copernicus"`).
 
 ## How to run it
 
@@ -34,12 +34,12 @@ Created by: Daniel Vilas (iMARES, ICM-CSIC)
    ```r
    source("scripts/install_packages.R")
    ```
-5. Only if you will run step 05 (environmental drivers): make a free Copernicus Marine account (<https://data.marine.copernicus.eu/register>). You give the login on the page (card 5); never write it in the code.
+5. Make a free Copernicus Marine account (<https://data.marine.copernicus.eu/register>). It is needed for step 05 and, by default, for the phytoplankton B and P/B (MedBFM, `PHYTO_SOURCE = "copernicus"`; step 05 then runs before 01 if its outputs are missing). You give the login on the page (card 5); never write it in the code.
 
 ### 2a. Run it from the interactive page (recommended)
 
 1. In RStudio open `scripts/WMed-EwEbuilder.qmd`, switch the editor to **Source** (not Visual) and click **Run Document**. Click *Show in new window* to use it in your browser. Keep RStudio open while it runs.
-2. Go through the cards from top to bottom. The defaults reproduce the standard Western Med model, so on a first run you only need cards 0 and 6:
+2. Go through the cards from top to bottom. The defaults reproduce the standard Western Med model, so on a first run you only need cards 0, 5 (Copernicus login) and 6:
 
    | Card | What to do |
    |---|---|
@@ -147,7 +147,7 @@ Each step reads files the earlier ones wrote. `run_pipeline_demo.R` runs the ste
 | Step | Script | What it does |
 |---|---|---|
 | 1 | `01_biomass.R` (sources `01b_biomass_unsurveyed.R`) | **Biomass** from the MEDITS bottom-trawl and MEDIAS acoustic surveys, strata-weighted, with the sampling CV of every index. MEDITS densities are divided by the species catchability q (a species without its own q takes the mean q of its FG; q = 1 outside MEDITS). Gaps in the JRC survey files are filled from `data/extra_data` (`USE_EXTRA_DATA`). AquaMaps depth pseudo-strata cover 0–10 m, 800–1000 m and 1000 m to the seafloor (3,785 m). Stock assessments for assessed single-species FGs and hake stanzas. Small pelagics back-cast to 1994–96. Writes Ecopath_B, the Ecosim biomass series, their weights from the survey CV, and FG_spp. |
-| 1b | `01b_biomass_unsurveyed.R` | **Groups the surveys can't measure.** Seagrass, macroalgae and corals: density × mapped area × occupancy. Plankton: ISIMIP COBALT model, or Copernicus from step 05 (`PHYTO_SOURCE`). Detritus: Pauly et al. 1993. Macrozooplankton: MAREDAT. Cetaceans, seabirds, turtles and monk seal: survey density × body mass. Bluefin tuna and swordfish: ICCAT. Some FGs are left for Ecopath to estimate (EE = 0.95). |
+| 1b | `01b_biomass_unsurveyed.R` | **Groups the surveys can't measure.** Seagrass, macroalgae and corals: density × mapped area × occupancy. Phytoplankton: Copernicus MedBFM from step 05 (`PHYTO_SOURCE`, default), the same source as the Ecosim NPP forcing and the Ecospace maps; zooplankton: ISIMIP COBALT model. Detritus: Pauly et al. 1993. Macrozooplankton: MAREDAT. Cetaceans, seabirds, turtles and monk seal: survey density × body mass. Bluefin tuna and swordfish: ICCAT. Some FGs are left for Ecopath to estimate (EE = 0.95). |
 | 2 | `02_fisheries.R` | **Catch, landings, discards, effort and F** by country, fleet and FG. Catch from GFCM, STECF FDI, Sea Around Us and ICCAT; effort from FishMIP and FDI, with technology creep and cleaning of gaps and of years with an unusual share of unclassified effort (`effort_cleaning_REVIEW.csv`). Landings and discards by the model's 35 EwE fleets (29 commercial, country × gear, and one recreational fleet per country; `EWE_FLEETS`); catch with no gear is shared among the country's fleets (`fleet_*_REVIEW.csv`). Recreational catch = commercial catch × the Sea Around Us recreational:commercial ratio of the country and FG (assumption; `recreational_share_by_country_REVIEW.csv`). Ecosim effort for the same fleets (`effort_to_ewe_fleet_REVIEW.csv`). Off-vessel prices from the FDI landing values (`Ecopath_price`, `offvessel_price_REVIEW.csv`) and fleet cost shares by gear from the STECF Annual Economic Reports (`data/fisheries/fleet_costs_ewe.csv`). F by country, to find where a high F comes from; FGs with F > 1 are reported, not changed (`high_F_REVIEW.csv`). |
 | 3 | `03_pbqb-traits.R` | **P/B and Q/B** per FG from FishBase/SeaLifeBase traits and empirical equations, plus EcoBase. Multi-stanza groups (hake): P/B = Z of each stanza, Q/B of each stanza from von Bertalanffy growth, and the stanza inputs (age at start, Z, K, Wmat/Winf, BA/B) in `Ecopath_multistanza`. |
 | 4 | `04_diets.R` | **Diet matrix.** Sources in order: dietcalcR (the iMARES diet calculator on the Mediterranean diet database; `DIET_ENGINE = "dietcalc"`, `lib_dietcalc.R`) → MAISHA → FishBase/SeaLifeBase → EcoBase (no manual diet entries). FG order follows the FG table. |
@@ -171,7 +171,7 @@ Set these on the page, or at the top of `scripts/run_pipeline_demo.R` (every opt
 | `YEAR_ECOPATH` / `TS_YEARS` | `1994:1996` / `1995:2023` | Ecopath baseline / Ecosim years. |
 | `ECOPATH_B_FILL_MODE`, `ECOPATH_B_FILL_YEARS` | `"window_mean"`, `1995:2000` | FGs with no biomass in the Ecopath years take this mean; "Expanding" FGs get 0.00001. |
 | `F_MAX` | `1` | FGs with F above this (or above their stock-assessment F) are reported with a recommendation each (`high_F_REVIEW.csv`); Ecopath B is not changed. |
-| `PHYTO_SOURCE` | `"isimip"` | Phytoplankton B and P/B: `"isimip"` (COBALT 1995, EcoBase P/B) or `"copernicus"` (from step 05; run 05 first). |
+| `PHYTO_SOURCE` | `"copernicus"` | Phytoplankton B and P/B: `"copernicus"` = Copernicus MedBFM from step 05 (B = phytoplankton carbon, P/B = NPP / carbon, mean of the Ecopath years; 05 runs before 01 when its outputs are missing, so a Copernicus login is needed) or `"isimip"` (COBALT 1995, EcoBase P/B). |
 | `ENV_SCENARIOS`, `ENV_SCEN_END` | none, `2050` | Optional climate scenarios of the drivers (05s, 05b; about 20 min or more the first time; none = historical only): any of `"ssp126"`, `"ssp245"`, `"ssp370"`, `"ssp585"` (ISIMIP3b has 126, 370 and 585; a scenario without files is reported and skipped), until that year. Also `ENV_SCEN_MODELS`, `ENV_SCEN_REF_N` (reference = last 20 hindcast years), `ENV_SCEN_SMOOTH_YEARS` (11-year running mean of the model change), `ENV_SCEN_VAR_SCALE`, `ENV_SCEN_JOIN_YEARS` (1) and `ENV_SCEN_BLEND_YEARS` (10; how fast the last historical year's anomaly fades). |
 | `STOCK_ASSESSMENT_SOURCE` | `"GFCM"` | `"GFCM"` = the newest GFCM Stock Assessment Forms, downloaded and read automatically (check `biomass/gfcm_saf_parse_REVIEW.csv`); `"RAM"` = RAM Legacy. |
 | `STRATA`, `DROP_OUTLIERS`, `NORMALIZE_TS` | `TRUE` | Strata-weighted density; remove flagged outlier hauls; Ecosim series as a relative index. |
