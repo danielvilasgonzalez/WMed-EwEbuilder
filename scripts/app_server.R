@@ -219,10 +219,25 @@ output$esp_view_slider <- renderUI({
   iv <- if (v == "all") ix[variable == ix$variable[1]] else ix[variable == v]; req(nrow(iv) > 0)
   if (identical(input$esp_view_mode, "year")) {
     yrs <- sort(unique(iv$year))
-    sliderInput("esp_view_year", "Year", min = min(yrs), max = max(yrs), value = min(yrs), step = 1, sep = "", width = "100%",
+    sliderInput("esp_view_year", NULL, min = min(yrs), max = max(yrs), value = min(yrs), step = 1, sep = "", width = "100%",
                 animate = animationOptions(interval = 1500, loop = TRUE), ticks = FALSE)
   } else sliderInput("esp_view_step", NULL, min = 1, max = nrow(iv), value = 1, step = 1, width = "100%",
                      animate = animationOptions(interval = 700, loop = TRUE), ticks = FALSE)
+})
+## the year or month shown, written out (the slider has no number labels)
+output$esp_view_when <- renderUI({
+  ix <- .esp_index(); v <- input$esp_view_var; req(v)
+  if (v %in% c("depth", "hab_all") || startsWith(v, "hab:")) return(NULL)
+  iv <- if (v == "all") ix[variable == ix$variable[1]] else ix[variable == v]; req(nrow(iv) > 0)
+  iv <- iv[order(time_step)]
+  txt <- if (identical(input$esp_view_mode, "year")) {
+    y <- input$esp_view_year; if (is.null(y)) y <- min(iv$year)
+    sprintf("%s  (%d\u2013%d)", y, min(iv$year), max(iv$year))
+  } else {
+    k <- input$esp_view_step; if (is.null(k) || k > nrow(iv)) k <- 1
+    sprintf("%s  (%s \u2013 %s)", .esp_when(iv$year[k], iv$month[k]), .esp_when(iv$year[1], iv$month[1]), .esp_when(iv$year[nrow(iv)], iv$month[nrow(iv)]))
+  }
+  tags$div(class = "wm-esp-when", txt)
 })
 output$esp_view_plot_ui <- renderUI({
   v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year")
@@ -541,7 +556,8 @@ output$esp_scen_plot <- renderPlot({
   x[, scenario := factor(scenario, lev)]
   x[, vlab := factor(ifelse(is.na(ulab[variable]), variable, ulab[variable]), levels = unique(ifelse(is.na(ulab[vs]), vs, ulab[vs])))]
   ggplot2::ggplot(x[order(scenario, year)], ggplot2::aes(year, value, colour = scenario)) +
-    { if (is.finite(hy)) ggplot2::annotate("rect", xmin = -Inf, xmax = hy, ymin = -Inf, ymax = Inf, fill = "grey93") } +
+    { if (is.finite(hy)) list(ggplot2::annotate("rect", xmin = -Inf, xmax = hy, ymin = -Inf, ymax = Inf, fill = "grey40", alpha = 0.08),   # see-through: the grid stays visible
+                              ggplot2::annotate("text", x = hy, y = Inf, label = "historical  ", hjust = 1, vjust = 1.5, size = 3.5, colour = "grey35")) } +
     ggplot2::geom_line(linewidth = 1) +
     ggplot2::facet_wrap(~vlab, scales = "free_y", ncol = min(2, length(vs))) +
     ggplot2::scale_colour_manual(values = .esp_scol[lev], labels = .esp_scen_label[lev], name = NULL) +

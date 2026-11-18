@@ -58,6 +58,11 @@ tagList(
                display: inline-flex; align-items: center; justify-content: center; font-size: .9rem; }
     .wm-icon { font-size: 1.1rem; }
     .wm-help { font-size: .82rem; color: #6c757d; margin: .1rem 0 .6rem 0; }
+    /* Ecospace maps explorer: one point in time, not a range - no filled bar, the date shown beside it */
+    .wm-esp-slider .irs--shiny .irs-bar, .wm-esp-slider .irs-bar { background: transparent !important; border-color: transparent !important; }
+    .wm-esp-slider .irs--shiny .irs-line { background: #dee2e6; }
+    .wm-esp-slider .irs-single, .wm-esp-slider .irs-min, .wm-esp-slider .irs-max, .wm-esp-slider .irs-grid-text { display: none !important; }
+    .wm-esp-when { font-weight: 600; font-size: 1.05rem; color: #0b4f6c; margin: -.4rem 0 .5rem 0; }
     #wm-map { height: 430px; border-radius: 10px; border: 1px solid #dfe6ec; }
     #wm-map .leaflet-tooltip { font-weight: 600; }
     .wm-legend { background: rgba(255,255,255,.92); padding: .4rem .6rem; border-radius: 8px; font-size: .75rem;
@@ -143,7 +148,7 @@ tagList(
           var sub = $('<ul></ul>');
           add(sub, '#run_summary', 'Run summary');
           var ex = add(sub, '#wm-results-explorers', 'Results explorers'), exl = $('<ul></ul>');
-          [['#wm-haul-map-box', 'Survey hauls map'], ['#wm-fg-explorer', 'FG explorer'], ['#wm-fleet-explorer', 'Fleet explorer'],
+          [['#wm-haul-map-box', 'Survey hauls explorer'], ['#wm-fg-explorer', 'FG explorer'], ['#wm-fleet-explorer', 'Fleet explorer'],
            ['#wm-diet-explorer', 'Diet explorer'], ['#wm-esp-explorer', 'Ecospace maps explorer'], ['#wm-resp-explorer', 'Responses explorer']
           ].forEach(function (e) { if ($(e[0]).length) add(exl, e[0], e[1], null, true); });
           ex.append(exl);
@@ -418,7 +423,7 @@ tagList(
     tags$h4(id = "wm-results-explorers", class = "mt-3 mb-2", "Results explorers"),
     tags$div(class = "wm-help mb-2", "Each explorer opens on click and closes on its own: survey hauls, FG series, fleets, diets, Ecospace driver maps and response functions of the run shown above."),
     tags$details(class = "card mb-3", id = "wm-haul-map-box",
-      tags$summary(class = "card-header py-2", tags$strong("Survey hauls map")),
+      tags$summary(class = "card-header py-2", tags$strong("Survey hauls explorer")),
       tags$div(class = "wm-help px-3 pt-2", "MEDITS density in each haul, by year: zoom, move and filter."),
       tags$div(class = "card-body py-2",
         div(class = "d-flex flex-wrap align-items-end gap-3",
@@ -436,7 +441,7 @@ tagList(
         uiOutput("hm_info"),
         plotOutput("hm_trend", height = "180px"),
         tags$div(class = "wm-help", "Each circle is a haul: area ∝ density (t/km² swept), colour on one log scale for all years of the FG or species, so the years can be compared (press ▶ under the year slider to play them). Grey dots: hauls without it. Dashed lines: GSA boundaries; land from Natural Earth (shown also without internet). Click a haul for its density and its species. With q = the density used by the estimates (raw / q); without q = what the trawl caught. Outlier hauls removed by the pipeline are not shown. The line below: mean density per haul each year for the hauls in the filter, with the selected year marked. File: biomass/haul_density.rds (01)."))),
-    tags$details(class = "card mb-3", open = NA, id = "wm-fg-explorer",
+    tags$details(class = "card mb-3", id = "wm-fg-explorer",
       tags$summary(class = "card-header py-2", tags$strong("FG explorer")),
       tags$div(class = "wm-help px-3 pt-2", "One group's Ecosim series from the workbook."),
       tags$div(class = "card-body py-2",
@@ -507,7 +512,7 @@ tagList(
                                  choices = c("A year: its 12 months" = "year", "One month" = "month"), selected = "year")),
           column(6, radioButtons("esp_view_values", NULL, inline = TRUE,
                                  choices = c("Values" = "value", "Difference from the average year" = "anom"), selected = "value"))),
-        uiOutput("esp_view_slider"),
+        tags$div(class = "wm-esp-slider", uiOutput("esp_view_slider"), uiOutput("esp_view_when")),
         uiOutput("esp_view_plot_ui"),
         tags$div(class = "mt-2 mb-1",
           downloadButton("dl_esp_fig", "Download this figure (.png)", class = "btn-sm btn-outline-secondary"),
