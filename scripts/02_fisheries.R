@@ -7326,6 +7326,9 @@ if (!exists("EWE_FLEETS", envir = .GlobalEnv, inherits = FALSE)) EWE_FLEETS <- c
   "SPA artisanal", "SPA bottom trawlers", "SPA drifting longliners", "SPA purse seiners", "SPA set longliners",
   "TUN artisanal", "TUN longliners", "TUN purse seiners", "TUN trawlers",
   "ALG recreational", "FRA recreational", "ITA recreational", "MOR recreational", "SPA recreational", "TUN recreational")
+## fleets in order of country, then gear (alphabetical): the recreational
+## fleet of each country sits among its gears, in every sheet and CSV
+EWE_FLEETS <- unique(EWE_FLEETS)[order(tolower(unique(EWE_FLEETS)))]
 EWE_FLEET_COUNTRY_CODE <- c(Algeria = "ALG", France = "FRA", Italy = "ITA", Morocco = "MOR", Spain = "SPA", Tunisia = "TUN")
 ## fleet type (regex) -> candidate fleets, first one the country has wins
 EWE_FLEET_RULES <- list(

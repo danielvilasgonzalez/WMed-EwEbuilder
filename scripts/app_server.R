@@ -585,6 +585,20 @@ output$esp_scen_plot <- renderPlot({
     ggplot2::theme(legend.position = "top", panel.grid.minor = ggplot2::element_blank(), strip.text = ggplot2::element_text(face = "bold", hjust = 0),
                    panel.border = ggplot2::element_rect(colour = "grey70", fill = NA))
 })
+## --- ggplot helpers shared by the explorers --------------------------------
+.gg_th <- function(base = 12, legend = "bottom") ggplot2::theme_minimal(base_size = base) +
+  ggplot2::theme(legend.position = legend, legend.title = ggplot2::element_blank(), legend.text = ggplot2::element_text(size = base * 0.85),
+                 panel.grid.minor = ggplot2::element_blank(), panel.grid.major = ggplot2::element_line(colour = "grey92", linewidth = 0.4),
+                 panel.border = ggplot2::element_rect(colour = "grey80", fill = NA, linewidth = 0.4),
+                 plot.title = ggplot2::element_text(face = "bold", size = base * 1.08), plot.title.position = "plot",
+                 plot.subtitle = ggplot2::element_text(colour = "grey35", size = base * 0.85),
+                 plot.caption = ggplot2::element_text(colour = "grey40", size = base * 0.75, hjust = 0), plot.caption.position = "plot",
+                 strip.text = ggplot2::element_text(face = "bold", hjust = 0, size = base * 0.85),
+                 axis.text = ggplot2::element_text(colour = "grey25"), axis.title = ggplot2::element_text(colour = "grey30", size = base * 0.85),
+                 plot.margin = ggplot2::margin(6, 12, 6, 6))
+.gg_msg <- function(txt) ggplot2::ggplot() + ggplot2::annotate("text", x = 0, y = 0, label = txt, size = 4.6, colour = "grey35", lineheight = 1.1) +
+  ggplot2::xlim(-1, 1) + ggplot2::theme_void()
+.gg_short <- function(v, n = 36) ifelse(nchar(v) > n, paste0(substr(v, 1, n - 1), "…"), v)
 ## --- Ecospace response functions of the FGs (05c) --------------------------
 .resp_dir <- function() file.path(.inputs_run_dir(), "environment", "ecospace_responses")
 .resp_pts <- reactive({
@@ -666,33 +680,27 @@ output$resp_view_ui <- renderUI({
 output$resp_view_caption <- renderText(.resp_caption())
 .resp_draw <- function() {
   p <- .resp_sel()
-  if (is.null(p) || !nrow(p)) {
-    plot.new()
-    text(0.5, 0.5, if (is.null(.resp_pts())) "No response functions yet: run 05c (tick \u201c05b Ecospace maps + 05c responses\u201d in Run)." else
-      "No response function for this driver or FG.", cex = 1.2)
-    return(invisible())
-  }
+  if (is.null(p) || !nrow(p))
+    return(.gg_msg(if (is.null(.resp_pts())) "No response functions yet: run 05c (tick “05b Ecospace maps + 05c responses” in Run)." else
+      "No response function for this driver or FG."))
   h <- .resp_hist()
-  labs <- unique(p[order(FG_num), lab]); n <- length(labs)
-  nc <- min(.resp_ncol, n); nr <- ceiling(n / nc)
-  drv_lab <- c(depth = "Depth (m)", temp_surf = "SST (deg C)", temp_bot = "SBT (deg C)", sal_surf = "Salinity (PSU)", npp = "NPP (g C m-2 d-1)")[input$resp_view_drv]
-  op <- par(mfrow = c(nr, nc), mar = c(4, 4, 2.4, 0.8), oma = c(0, 0, 2, 0), cex.axis = 1.05, cex.lab = 1.1, cex.main = 1.05)
-  on.exit(par(op))
-  for (l in labs) {
-    q <- p[lab == l][order(x)]
-    xr <- range(q$x)
-    plot(xr, c(0, 1.05), type = "n", xlab = drv_lab, ylab = "Relative capacity", main = if (nchar(l) > 34) paste0(substr(l, 1, 33), "\u2026") else l)
-    if (!is.null(h) && nrow(h)) {
-      mx <- max(c(h$share, h$share_scen), na.rm = TRUE)
-      if (any(is.finite(h$share))) rect(h$bin_lo, 0, h$bin_hi, h$share / mx, col = "grey80", border = NA)
-      if (any(is.finite(h$share_scen))) rect(h$bin_lo, 0, h$bin_hi, h$share_scen / mx, col = grDevices::adjustcolor("#d73027", 0.35), border = NA)
-      mm <- attr(h, "means")                                          # mean of each, as a dashed line
-      if (!is.null(mm) && is.finite(mm[["scen"]])) { abline(v = mm[["hist"]], col = "grey35", lty = 2, lwd = 1.5); abline(v = mm[["scen"]], col = "#d73027", lty = 2, lwd = 1.5) }
-    }
-    lines(q$x, q$y, col = "#1f77b4", lwd = 2.2)
-    box()
+  p <- data.table::copy(p); labs <- unique(p[order(FG_num), lab]); p[, lab := factor(lab, levels = labs)]
+  drv_lab <- c(depth = "Depth (m)", temp_surf = "SST (°C)", temp_bot = "SBT (°C)", sal_surf = "Salinity (PSU)", npp = "NPP (g C m⁻² d⁻¹)")[[input$resp_view_drv]]
+  g <- ggplot2::ggplot()
+  if (!is.null(h) && nrow(h)) {
+    h <- as.data.frame(h); mx <- max(c(h$share, h$share_scen), na.rm = TRUE)
+    if (any(is.finite(h$share))) g <- g + ggplot2::geom_rect(data = h[is.finite(h$share), ], ggplot2::aes(xmin = bin_lo, xmax = bin_hi, ymin = 0, ymax = share / mx), fill = "grey82")
+    if (any(is.finite(h$share_scen))) g <- g + ggplot2::geom_rect(data = h[is.finite(h$share_scen), ], ggplot2::aes(xmin = bin_lo, xmax = bin_hi, ymin = 0, ymax = share_scen / mx), fill = "#d73027", alpha = 0.35)
+    mm <- attr(h, "means")
+    if (!is.null(mm) && is.finite(mm[["scen"]]))
+      g <- g + ggplot2::geom_vline(xintercept = mm[["hist"]], colour = "grey35", linetype = "dashed", linewidth = 0.7) +
+        ggplot2::geom_vline(xintercept = mm[["scen"]], colour = "#d73027", linetype = "dashed", linewidth = 0.7)
   }
-  mtext(paste0("Response functions: ", drv_lab), outer = TRUE, cex = 1.15, font = 2)
+  g + ggplot2::geom_line(data = p[order(lab, x)], ggplot2::aes(x, y), colour = "#1f77b4", linewidth = 1.1) +
+    ggplot2::facet_wrap(~lab, ncol = min(.resp_ncol, length(labs)), labeller = ggplot2::labeller(lab = function(v) .gg_short(v, 34))) +
+    ggplot2::scale_y_continuous(limits = c(0, 1.05), breaks = c(0, 0.5, 1), expand = c(0, 0)) +
+    ggplot2::labs(x = drv_lab, y = "Relative capacity", title = paste0("Response functions: ", drv_lab)) +
+    .gg_th(12) + ggplot2::theme(panel.spacing = ggplot2::unit(10, "pt"))
 }
 ## caption under the figure (what the curves and bars are)
 .resp_caption <- reactive({
@@ -710,14 +718,14 @@ output$resp_view_caption <- renderText(.resp_caption())
   } else if (isTRUE(input$resp_view_hist)) " No Ecospace map values for this driver: run 05b with absolute values." else ""
   paste0(base, hl)
 })
-output$resp_view_plot <- renderPlot(.resp_draw())
+output$resp_view_plot <- renderPlot(.resp_draw(), res = 96)
 output$dl_resp_fig <- downloadHandler(
   filename = function() paste0("ecospace_responses_", input$resp_view_drv, ".png"),
   content = function(file) {
     p <- .resp_sel(); n <- if (is.null(p) || !nrow(p)) 1 else data.table::uniqueN(p$FG_num)
     grDevices::png(file, width = 1600, height = max(500, ceiling(n / .resp_ncol) * 380 + 80), res = 130)
     on.exit(grDevices::dev.off())
-    .resp_draw()
+    print(.resp_draw())
   })
 output$dl_resp_zip <- downloadHandler(
   filename = function() "ecospace_response_functions.zip",
@@ -1735,12 +1743,14 @@ output$dl_workbook <- downloadHandler(function() paste0("ecopath_ecosim_inputs_"
 })
 observe({
   d <- .fleet_dat(); if (is.null(d)) return()
-  ch <- if (identical(input$fleet_view_mode, "fg")) rownames(d$L)[rowSums(d$L + d$D) > 0] else colnames(d$L)[colSums(d$L + d$D) > 0]
+  ch <- if (identical(input$fleet_view_mode, "fg")) rownames(d$L)[rowSums(d$L + d$D) > 0] else .fleet_order(colnames(d$L)[colSums(d$L + d$D) > 0])
   cur <- intersect(isolate(input$fleet_explore), ch)
   updateSelectizeInput(session, "fleet_explore", choices = ch, selected = if (length(cur)) cur else ch[1])
 })
+## fleets by country, then gear (alphabetical); the unresolved column last
+.fleet_order <- function(v) v[order(grepl("not resolved", v, ignore.case = TRUE), tolower(v))]
 .fleet_short <- function(v, n = 36) ifelse(nchar(v) > n, paste0(substr(v, 1, n - 1), "\u2026"), v)
-.fleet_pal <- function(n) if (n <= 8) c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#17becf")[seq_len(n)] else grDevices::hcl.colors(n, "Dark 3")
+.fleet_pal <- function(n) if (n <= 8) c("#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#8C6D31", "#7F7F7F")[seq_len(n)] else grDevices::hcl.colors(n, "Dark 3")
 ## selected fleets (or FGs) x the other dimension: matrix of the chosen catch
 .fleet_sel <- reactive({
   d <- .fleet_dat(); k <- input$fleet_explore
@@ -1763,22 +1773,33 @@ observe({
 })
 output$fleet_plot_catch <- renderPlot({
   x <- .fleet_sel()
-  if (is.null(x)) { plot.new(); text(0.5, 0.5, if (is.null(.fleet_dat())) "No workbook yet: run 02 fisheries." else "Pick a fleet or an FG.", cex = 1.2); return(invisible()) }
-  tot <- rowSums(x$L + x$D); o <- order(tot, decreasing = TRUE); o <- o[tot[o] > 0]; n_all <- length(o); o <- rev(head(o, 25))
-  if (!length(o)) { plot.new(); text(0.5, 0.5, "No catch.", cex = 1.2); return(invisible()) }
-  one <- length(x$k) == 1
-  m <- if (one) rbind(x$L[o, 1], x$D[o, 1]) else t((x$L + x$D)[o, , drop = FALSE])
-  cols <- if (one) c("#1f77b4", "#ff7f0e") else .fleet_pal(length(x$k))
-  op <- par(mar = c(4.5, 17, 3.5, 1), cex.axis = 1.05, cex.lab = 1.1, cex.main = 1); on.exit(par(op))
-  barplot(m, horiz = TRUE, las = 1, col = cols, border = NA, names.arg = .fleet_short(names(tot)[o]), xlab = "t/km\u00b2/year (Ecopath years)",
-          main = paste0(if (one) .fleet_short(x$k, 46) else paste0(length(x$k), if (x$byfg) " FGs" else " fleets"), ": ",
-                        if (x$byfg) (if (identical(input$fleet_view_group, "country")) "catch by country (all fleets)" else "catch by fleet") else "catch by FG", if (n_all > 25) paste0(" (top 25 of ", n_all, ")") else "",
-                        "\ntotal ", signif(sum(tot), 3), " t/km\u00b2/year"))
-  legend("bottomright", if (one) c("Landings", "Discards") else .fleet_short(x$k, 30), fill = cols, border = NA, bty = "n", cex = if (length(x$k) > 8) 0.85 else 1.05)
-})
+  if (is.null(x)) return(.gg_msg(if (is.null(.fleet_dat())) "No workbook yet: run 02 fisheries." else "Pick a fleet or an FG."))
+  tot <- rowSums(x$L + x$D); o <- order(tot, decreasing = TRUE); o <- o[tot[o] > 0]; n_all <- length(o); o <- head(o, 25)
+  if (!length(o)) return(.gg_msg("No catch."))
+  one <- length(x$k) == 1; cl <- names(tot)[o]
+  df <- if (one) rbind(data.frame(cat = cl, grp = "Landings", v = x$L[o, 1]), data.frame(cat = cl, grp = "Discards", v = x$D[o, 1])) else
+    do.call(rbind, lapply(seq_along(x$k), function(j) data.frame(cat = cl, grp = x$k[j], v = (x$L + x$D)[o, j])))
+  df <- df[df$v > 0, , drop = FALSE]
+  lev <- if (one) c("Landings", "Discards") else x$k
+  df$cat <- factor(df$cat, levels = rev(cl)); df$grp <- factor(df$grp, levels = lev)
+  cols <- if (one) c(Landings = "#0072B2", Discards = "#E69F00") else setNames(.fleet_pal(length(x$k)), x$k)
+  tt <- data.frame(cat = factor(cl, levels = rev(cl)), v = unname(tot[o]))
+  by <- if (x$byfg) (if (identical(input$fleet_view_group, "country")) "catch by country (all its fleets)" else "catch by fleet") else "catch by FG"
+  ggplot2::ggplot(df, ggplot2::aes(v, cat)) +
+    ggplot2::geom_col(ggplot2::aes(fill = grp), width = 0.72, position = ggplot2::position_stack(reverse = TRUE)) +
+    ggplot2::geom_text(data = tt, ggplot2::aes(v, cat, label = formatC(signif(v, 2), format = "g")), hjust = -0.15, size = 3.2, colour = "grey30") +
+    ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0, 0.14))) +
+    ggplot2::scale_y_discrete(labels = function(v) .gg_short(v, 34)) +
+    ggplot2::scale_fill_manual(values = cols, labels = function(v) .gg_short(v, 28), drop = TRUE) +
+    ggplot2::guides(fill = ggplot2::guide_legend(nrow = if (length(lev) > 3) 2 else 1, byrow = TRUE)) +
+    ggplot2::labs(x = "t/km² per year (mean of the Ecopath years)", y = NULL,
+                  title = if (one) .gg_short(x$k, 46) else paste0(length(x$k), if (x$byfg) " FGs" else " fleets"),
+                  subtitle = paste0(by, if (n_all > 25) paste0(" (top 25 of ", n_all, ")") else "", " · total ", signif(sum(tot), 3), " t/km²/year")) +
+    .gg_th(12) + ggplot2::theme(panel.grid.major.y = ggplot2::element_blank())
+}, res = 96)
 output$fleet_plot_effort <- renderPlot({
   x <- .fleet_sel(); d <- .fleet_dat()
-  if (is.null(x)) { plot.new(); return(invisible()) }
+  if (is.null(x)) return(.gg_msg(""))
   ## fleets to draw: the selected ones, or the (up to 6) fleets that catch most of the selected FGs
   fl <- if (x$byfg) { t <- rowSums(x$Lf + x$Df); names(head(sort(t[t > 0], decreasing = TRUE), 6)) } else x$k
   E <- d$E; vc <- if (!is.null(E)) intersect(c("nom_active_kWdays_effective", "nom_active_kWdays"), names(E))[1] else NA
@@ -1792,16 +1813,20 @@ output$fleet_plot_effort <- renderPlot({
     data.frame(Year = e$Year, y = e$x / ref)
   }) else list()
   ser <- ser[!vapply(ser, is.null, logical(1))]
-  if (!length(ser)) { plot.new(); text(0.5, 0.5, "No effort series for the selected fleets\n(rerun 02 for the effort by EwE fleet)", cex = 1.1); return(invisible()) }
+  if (!length(ser)) return(.gg_msg("No effort series for the selected fleets\n(rerun 02 for the effort by EwE fleet)"))
+  df <- do.call(rbind, lapply(names(ser), function(f) cbind(ser[[f]], Fleet = f))); df$Fleet <- factor(df$Fleet, levels = names(ser))
   cols <- if (!x$byfg && length(x$k) > 1) setNames(.fleet_pal(length(x$k)), x$k)[names(ser)] else setNames(.fleet_pal(length(ser)), names(ser))
   if (length(ser) == 1) cols[] <- "#2c3e50"
-  op <- par(mar = c(4.5, 4.5, 3.5, 1), cex.axis = 1.05, cex.lab = 1.1, cex.main = 1); on.exit(par(op))
-  plot(range(unlist(lapply(ser, `[[`, "Year"))), c(0, max(1.1, max(unlist(lapply(ser, `[[`, "y")), na.rm = TRUE)) * 1.05), type = "n", xlab = "",
-       ylab = "Effort index (Ecopath years = 1)", main = if (x$byfg) "Ecosim effort of the fleets that catch most" else "Ecosim effort")
-  abline(h = 1, lty = 2, col = "grey50")
-  for (f in names(ser)) lines(ser[[f]]$Year, ser[[f]]$y, lwd = 2.2, col = cols[[f]])
-  legend("topleft", .fleet_short(names(ser), 30), col = unname(cols), lwd = 2.2, bty = "n", cex = if (length(ser) > 8) 0.8 else 1)
-})
+  g <- ggplot2::ggplot(df, ggplot2::aes(Year, y, colour = Fleet))
+  if (length(ye) == 2) g <- g + ggplot2::annotate("rect", xmin = ye[1] - 0.5, xmax = ye[2] + 0.5, ymin = -Inf, ymax = Inf, fill = "grey60", alpha = 0.15)
+  g + ggplot2::geom_hline(yintercept = 1, colour = "grey55", linetype = "dashed") +
+    ggplot2::geom_line(linewidth = 1, na.rm = TRUE) + ggplot2::geom_point(size = 1.1, na.rm = TRUE) +
+    ggplot2::scale_colour_manual(values = cols, labels = function(v) .gg_short(v, 26)) +
+    ggplot2::expand_limits(y = 0) + ggplot2::scale_x_continuous(breaks = function(l) unique(round(pretty(l)))) +
+    ggplot2::guides(colour = ggplot2::guide_legend(ncol = 2, override.aes = list(linewidth = 1.4))) +
+    ggplot2::labs(x = NULL, y = "Effort index (Ecopath years = 1)", title = if (x$byfg) "Ecosim effort of the fleets that catch most" else "Ecosim effort",
+                  subtitle = "Shaded: Ecopath years") + .gg_th(12)
+}, res = 96)
 
 ## --- Diet viewer (card 2): the diet of each source, side by side ------------
 .diet_tabs <- reactive({
@@ -1857,34 +1882,39 @@ output$diet_view_ui <- renderUI({
 })
 output$diet_view_plot <- renderPlot({
   t <- .diet_tabs()
-  if (is.null(t) || !length(t)) { plot.new(); text(0.5, 0.5, "No diet outputs yet: run 04 diets.", cex = 1.2); return(invisible()) }
+  if (is.null(t) || !length(t)) return(.gg_msg("No diet outputs yet: run 04 diets."))
   if (identical(input$diet_view_mode, "matrix")) {
     s <- input$diet_view_src1; x <- t[[s]]
-    if (is.null(x)) { plot.new(); text(0.5, 0.5, paste0("No ", s, " diet in the last run:\n", attr(t, "why")[[s]]), cex = 1.15); return(invisible()) }
+    if (is.null(x)) return(.gg_msg(paste0("No ", s, " diet in the last run:\n", attr(t, "why")[[s]])))
     pr <- .diet_fg_order(unique(x$predator_fg)); py <- .diet_fg_order(unique(x$prey_fg))
-    m <- matrix(0, length(py), length(pr), dimnames = list(py, pr))
-    m[cbind(match(x$prey_fg, py), match(x$predator_fg, pr))] <- x$weight
-    sh <- function(v) ifelse(nchar(v) > 28, paste0(substr(v, 1, 27), "\u2026"), v)
-    op <- par(mar = c(13, 13, 2.5, 1)); on.exit(par(op))
-    image(seq_along(pr), seq_along(py), t(m[rev(py), , drop = FALSE]), col = c("white", grDevices::hcl.colors(30, "YlOrRd", rev = TRUE)),
-          breaks = c(-1, seq(1e-9, 1, length.out = 31)), axes = FALSE, xlab = "", ylab = "", main = paste0("Diet matrix: ", s, " (columns = predators, rows = prey)"))
-    axis(1, seq_along(pr), sh(pr), las = 2, cex.axis = 0.75); axis(2, seq_along(py), sh(rev(py)), las = 2, cex.axis = 0.75); box()
-    return(invisible())
+    x <- stats::aggregate(weight ~ predator_fg + prey_fg, data = x, FUN = sum)
+    x$pred <- factor(x$predator_fg, levels = pr); x$prey <- factor(x$prey_fg, levels = rev(py))
+    return(ggplot2::ggplot(x, ggplot2::aes(pred, prey, fill = pmin(weight, 1))) +
+      ggplot2::geom_tile(colour = "white", linewidth = 0.25) +
+      ggplot2::scale_fill_gradientn(colours = grDevices::hcl.colors(30, "YlOrRd", rev = TRUE), limits = c(0, 1), labels = function(v) paste0(round(100 * v), "%"), name = "Share of\nthe diet") +
+      ggplot2::scale_x_discrete(labels = function(v) .gg_short(v, 28), drop = FALSE) + ggplot2::scale_y_discrete(labels = function(v) .gg_short(v, 28), drop = FALSE) +
+      ggplot2::labs(x = "Predator", y = "Prey", title = paste0("Diet matrix: ", s), subtitle = "Columns = predators, rows = prey") +
+      .gg_th(11, "right") +
+      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7), axis.text.y = ggplot2::element_text(size = 7),
+                     legend.title = ggplot2::element_text(size = 9, colour = "grey30"), panel.grid = ggplot2::element_blank()))
   }
   m <- .diet_pred_data()
-  if (is.null(m) || !nrow(m)) { plot.new(); text(0.5, 0.5, "No diet for this predator in the ticked sources.", cex = 1.2); return(invisible()) }
+  if (is.null(m) || !nrow(m)) return(.gg_msg("No diet for this predator in the ticked sources."))
   miss <- setdiff(intersect(names(t), input$diet_view_src), colnames(m))
   prov <- attr(t, "prov"); pl <- if (!is.null(prov) && input$diet_view_pred %in% prov$FG_name) prov$diet_source[match(input$diet_view_pred, prov$FG_name)] else NA
-  op <- par(mar = c(6, 17, 3, 1), cex.axis = 1.05, cex.lab = 1.1); on.exit(par(op))
-  cols <- unname(.diet_cols[colnames(m)])
-  barplot(t(m), beside = TRUE, horiz = TRUE, las = 1, col = cols, border = NA, xlim = c(0, max(0.05, max(m)) * 1.08), xlab = "Share of the diet",
-          names.arg = ifelse(nchar(rownames(m)) > 34, paste0(substr(rownames(m), 1, 33), "\u2026"), rownames(m)),
-          main = paste0(input$diet_view_pred, if (!is.na(pl)) paste0("   (model diet from: ", pl, ")") else ""))
-  legend("bottomright", legend = rev(colnames(m)), fill = rev(cols), border = NA, bty = "n", cex = 1.1)
-  if (length(miss)) mtext(paste0("No diet for this predator from ", paste(miss, collapse = ", "),
-                                 if ("dietcalcR" %in% miss && is.null(t$dietcalcR)) paste0(" (dietcalcR: ", attr(t, "why")[["dietcalcR"]], ")") else ""),
-                          side = 1, line = 4.6, cex = 0.85, col = "grey30", adj = 0)
-})
+  df <- data.frame(prey = rep(rownames(m), ncol(m)), src = rep(colnames(m), each = nrow(m)), v = as.vector(m))
+  df$prey <- factor(df$prey, levels = rownames(m)); df$src <- factor(df$src, levels = colnames(m))
+  ggplot2::ggplot(df, ggplot2::aes(v, prey, fill = src)) +
+    ggplot2::geom_col(position = ggplot2::position_dodge2(reverse = TRUE, padding = 0.1), width = 0.85) +
+    ggplot2::scale_fill_manual(values = .diet_cols) +
+    ggplot2::scale_x_continuous(labels = function(v) paste0(round(100 * v), "%"), expand = ggplot2::expansion(mult = c(0, 0.05)), limits = c(0, max(0.05, max(m)))) +
+    ggplot2::scale_y_discrete(labels = function(v) .gg_short(v, 34)) +
+    ggplot2::labs(x = "Share of the diet", y = NULL, title = input$diet_view_pred,
+                  subtitle = if (!is.na(pl)) paste0("Model diet from: ", pl) else NULL,
+                  caption = if (length(miss)) paste0("No diet for this predator from ", paste(miss, collapse = ", "),
+                                                     if ("dietcalcR" %in% miss && is.null(t$dietcalcR)) paste0(" (dietcalcR: ", attr(t, "why")[["dietcalcR"]], ")") else "") else NULL) +
+    .gg_th(12, "top") + ggplot2::theme(panel.grid.major.y = ggplot2::element_blank())
+}, res = 96)
 
 ## --- dietcalcR outputs (Diet explorer, mode "dc"): the tables of diet/dietcalc/
 .dc_files <- c(pedigree = "dietcalc_diet_pedigree.csv", coverage = "dietcalc_coverage_REVIEW.csv", matching = "dietcalc_species_matching.csv",
@@ -1942,20 +1972,24 @@ output$diet_dc_table <- renderTable({
 }, striped = TRUE, spacing = "xs", na = "")
 output$diet_dc_ped <- renderPlot({
   run_state(); f <- file.path(.dc_dir(), "dietcalc_diet_pedigree.csv")
-  if (!file.exists(f)) { plot.new(); text(0.5, 0.5, "No dietcalcR diet pedigree in the last run.", cex = 1.2); return(invisible()) }
+  if (!file.exists(f)) return(.gg_msg("No dietcalcR diet pedigree in the last run."))
   x <- as.data.frame(fread(f)); x <- x[is.finite(x$diet_pedigree), , drop = FALSE]
-  if (!nrow(x)) { plot.new(); text(0.5, 0.5, "dietcalcR gave no diet pedigree.", cex = 1.2); return(invisible()) }
-  x <- x[match(rev(.diet_fg_order(x$FG_name)), x$FG_name), , drop = FALSE]
+  if (!nrow(x)) return(.gg_msg("dietcalcR gave no diet pedigree."))
+  x <- x[match(rev(unique(.diet_fg_order(x$FG_name))), x$FG_name), , drop = FALSE]
   prov <- attr(.diet_tabs(), "prov"); used <- !is.null(prov) && "diet_source" %in% names(prov)
   usedv <- if (used) x$FG_name %in% prov$FG_name[prov$diet_source == "dietcalc"] else rep(TRUE, nrow(x))
   hl <- !is.null(input$diet_dc_fg) && nzchar(input$diet_dc_fg)
-  col <- ifelse(usedv, "#d62728", "grey75"); if (hl) col[x$FG_name != input$diet_dc_fg] <- adjustcolor(col[x$FG_name != input$diet_dc_fg], 0.35)
-  op <- par(mar = c(4.5, 17, 2.5, 1)); on.exit(par(op))
-  barplot(x$diet_pedigree, horiz = TRUE, las = 1, col = col, border = NA, xlim = c(0, 1), xlab = "Diet pedigree index (0-1)",
-          names.arg = ifelse(nchar(x$FG_name) > 34, paste0(substr(x$FG_name, 1, 33), "…"), x$FG_name), cex.names = 0.8,
-          main = "dietcalcR diet pedigree by predator FG")
-  legend("bottomright", c("used in the model's diet", "not used (another source)"), fill = c("#d62728", "grey75"), border = NA, bty = "n")
-})
+  x$lab <- factor(x$FG_name, levels = unique(x$FG_name))
+  x$use <- factor(ifelse(usedv, "used in the model's diet", "not used (another source)"), levels = c("used in the model's diet", "not used (another source)"))
+  x$a <- if (hl) ifelse(x$FG_name == input$diet_dc_fg, 1, 0.35) else 1
+  ggplot2::ggplot(x, ggplot2::aes(diet_pedigree, lab, fill = use, alpha = a)) +
+    ggplot2::geom_col(width = 0.75) + ggplot2::scale_alpha_identity() +
+    ggplot2::scale_fill_manual(values = c("used in the model's diet" = "#d62728", "not used (another source)" = "grey70"), drop = FALSE) +
+    ggplot2::scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+    ggplot2::scale_y_discrete(labels = function(v) .gg_short(v, 34)) +
+    ggplot2::labs(x = "Diet pedigree index (0-1)", y = NULL, title = "dietcalcR diet pedigree by predator FG") +
+    .gg_th(12, "top") + ggplot2::theme(panel.grid.major.y = ggplot2::element_blank(), axis.text.y = ggplot2::element_text(size = 8))
+}, res = 96)
 
 ## the diet matrix of each source (Metaweb, MAISHA, FishBase, dietcalc), the reference matrix and where each FG's diet came from
 output$dl_diet_src <- downloadHandler(

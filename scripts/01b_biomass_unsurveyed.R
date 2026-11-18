@@ -2904,6 +2904,51 @@ if (identical(PHYTO_SOURCE, "copernicus")) {
   } else message("[Plankton biomass] PHYTO_SOURCE = 'copernicus' but 05_environment.R outputs are not there yet (",
                  basename(.ef), ") - ISIMIP kept. Run 05 first.")
 }
+## --- Zooplankton and detritus matched to the MedBFM primary production --
+## With PHYTO_SOURCE = "copernicus" the phytoplankton comes from MedBFM,
+## while meso+micro zooplankton and detritus come from COBALT, whose NPP
+## is about twice MedBFM's in the Western Med. So the plankton food web
+## rests on one primary production, both are rescaled to MedBFM
+## (PLANKTON_MATCH_MEDBFM = TRUE, default; ASSUMPTION):
+##   k = mean NPP_MedBFM / mean NPP_COBALT over the Ecopath years (the
+##       overlapping years if COBALT, 1961-2010, does not cover them)
+##   meso+micro zooplankton(y) = COBALT(y) x k   (COBALT zooplankton :
+##       NPP ratio kept; COBALT's year-to-year trend kept)
+##   detritus(y) = COBALT-based detritus(y) x k^0.954 (Pauly et al. 1993:
+##       D ~ PP^0.954 E^0.863, same euphotic depth E)
+## Macrozooplankton (MAREDAT field data minus gelatinous) is not changed.
+## Written to plankton_match_medbfm_REVIEW.csv.
+if (!exists("PLANKTON_MATCH_MEDBFM")) PLANKTON_MATCH_MEDBFM <- TRUE
+if (isTRUE(PLANKTON_MATCH_MEDBFM) && identical(PHYTO_SOURCE, "copernicus") && !is.null(plankton_model_rows) &&
+    exists("isimip_draft") && !is.null(isimip_draft) && nrow(isimip_draft) > 0 &&
+    file.exists(file.path(out_dir, "environment", "environment_timeseries_annual.csv"))) {
+  .np_m <- fread(file.path(out_dir, "environment", "environment_timeseries_annual.csv"))[variable == "npp", .(Year = as.integer(year), npp_m = value)]
+  .np_c <- isimip_draft[TargetGroup == "Detritus", .(Year = as.integer(Year), npp_c = suppressWarnings(as.numeric(sub(".*PP = ([0-9.eE+-]+) g C m-2 yr-1.*", "\\1", Source_citation))))]
+  .np <- merge(.np_m, .np_c[is.finite(npp_c)], by = "Year")
+  .yy <- intersect(YEAR_ECOPATH, .np$Year); if (!length(.yy)) .yy <- .np$Year
+  if (length(.yy) && !(exists("ZOO_MESOMICRO_ANCHOR") && identical(ZOO_MESOMICRO_ANCHOR, "field"))) {
+    .k <- mean(.np[Year %in% .yy, npp_m]) / mean(.np[Year %in% .yy, npp_c])
+    .kd <- .k^0.954
+    .lab <- paste0(paste(range(.yy), collapse = "-"), ": NPP MedBFM ", signif(mean(.np[Year %in% .yy, npp_m]), 3), " / COBALT ",
+                   signif(mean(.np[Year %in% .yy, npp_c]), 3), " g C m-2 yr-1")
+    .zi <- tolower(plankton_model_rows$Group) == "mesomicrozooplankton"
+    .di <- tolower(plankton_model_rows$Group) == "detritus" & grepl("COBALT", plankton_model_rows$Source_citation)
+    .b0z <- mean(plankton_model_rows[.zi & Year %in% YEAR_ECOPATH, Biomass_t]) / study_area_km2
+    .b0d <- mean(plankton_model_rows[.di & Year %in% YEAR_ECOPATH, Biomass_t]) / study_area_km2
+    plankton_model_rows[.zi, `:=`(Biomass_t = Biomass_t * .k, Source_citation = paste0("MATCHED TO MEDBFM NPP (PLANKTON_MATCH_MEDBFM; ASSUMPTION): COBALT x ",
+                                  signif(.k, 3), " (", .lab, "). ", Source_citation))]
+    plankton_model_rows[.di, `:=`(Biomass_t = Biomass_t * .kd, Source_citation = paste0("MATCHED TO MEDBFM NPP (PLANKTON_MATCH_MEDBFM; ASSUMPTION): x ",
+                                  signif(.kd, 3), " = (NPP ratio)^0.954 (", .lab, "). ", Source_citation))]
+    .rv <- data.table(group = c("Meso and micro zooplankton", "Detritus"), factor = c(.k, .kd),
+                      COBALT_t_km2 = c(.b0z, .b0d), matched_t_km2 = c(.b0z * .k, .b0d * .kd),
+                      basis = c("COBALT zooplankton x NPP_MedBFM / NPP_COBALT", "Pauly et al. 1993: x (NPP_MedBFM / NPP_COBALT)^0.954"),
+                      years = paste(range(.yy), collapse = "-"))
+    fwrite(.rv, file.path(csv_out_dir, "plankton_match_medbfm_REVIEW.csv"))
+    message("[Plankton biomass] Matched to the MedBFM primary production (", .lab, ", k = ", signif(.k, 3), "): meso+micro zooplankton ",
+            signif(.b0z, 3), " -> ", signif(.b0z * .k, 3), " t/km2; detritus ", signif(.b0d, 3), " -> ", signif(.b0d * .kd, 3),
+            " t/km2 (plankton_match_medbfm_REVIEW.csv).")
+  }
+}
 if (!is.null(plankton_model_rows) && nrow(plankton_model_rows) > 0) {
   plankton_model_rows <- plankton_model_rows[tolower(Group) %in% plankton_missing]
   fwrite(plankton_model_rows, file.path(csv_out_dir, "plankton_detritus_model_biomass_rows.csv"))

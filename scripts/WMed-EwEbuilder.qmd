@@ -429,7 +429,8 @@ The pipeline covers several conceptually distinct problems in sequence:
 #| label: show-fig-flow-overview
 #| eval: true
 #| echo: false
-wm_repo_figure("fig-flow-overview", r"---(Workflow: the species-to-Functional-Group table and the data sources feed five blocks (1 biomass, 2 fisheries, 3 P/B, Q/B and traits, 4 diets, 6 environment), checked by 5 validation, that produce the EwE input. Click to zoom.)---", "ewe_infography.jpg")
+wm_repo_figure("fig-flow-overview", r"---(Workflow: the species-to-Functional-Group table and the data sources feed five blocks (1 biomass, 2 fisheries, 3 P/B, Q/B and traits, 4 diets, 5 environment and Ecospace), checked by 6 diagnostics, that produce the EwE input. Click to zoom.)---",
+               if (file.exists(file.path(git_dir, "ewe_infography.png"))) "ewe_infography.png" else "ewe_infography.jpg")   # PNG when there (sharper text), else the JPG
 ```
 
 Some density steps are conditional: catchability correction only runs if
@@ -1746,11 +1747,11 @@ whole GSA area); they change with the model area and years chosen.
 | Macroalgae | $B = D_{DW} \times [f_{calc}/0.7405 + (1-f_{calc})/0.1376] \times A_{map} \times occ / A_{model}$; $D_{DW}$ = mean of shallow (1,650) and deep (1,600) coralligenous algal biomass = 1,625 g DW/m²; $f_{calc}$ 0.7; 325.05 km²; occ 0.4; no depth factor | 0.79 | [@ballesteros2006] (pp. 140, 143); DW:WW [@haberman2023]; EMODnet macroalgae EOV [@emodnetmacroalgae2025] | calcareous share 0.7 (conservative; \~90% coralline cover); occupancy 0.4; area is the ICES ecoregion |
 | Corals and gorgonians | $B = \overline{\sum(N_{col} \times AFDM_{col})} \div 0.143 \times f_z \times A_{map} / A_{model}$; mean of Cap de Creus (4.87) and Gulf of Naples (3.09) = 3.98 g AFDM/m² → 27.8 g WW/m² (living tissue) × $f_z$ × 1,442.4 km² | ≈ 0.048 × $f_z$ | [@coppari2019; @ferrigno2026] (ROV, \~1.8 km²); AFDM:WW 0.143 [@ricciardi1998]; EUSeaMap MC151/MC251 | both sites partly protected; *E. cavolini* uses the *E. singularis* AFDM per colony; skeleton not counted |
 | Large / small phytoplankton | ISIMIP3a GFDL-MOM6-COBALT2 obsclim, vertically integrated, mean over the domain; C:WW 1:9 (0.111) | ≈ 8.2 / 9.1 (5.70 / 6.30 with the earlier C:WW 0.16) | [@isimip3a_cobalt; @stock2020]; C:WW [@pauly1995] | model, not observation; C:WW 1:9 is the EwE convention, phytoplankton C:WW varies with cell size |
-| Meso and micro zooplankton | COBALT zmicro-vint + zmeso-vint, whole water column, level and trend; C:WW 0.07 micro, 0.09 meso | 29.6 | [@stock2020; @fenchel1983; @kiorboe2013]; field reference in `zooplankton_mesomicro_cobalt_vs_field_REVIEW.csv` | the net value (0.87 t DM/km², 0–100 m, ≥ 250 µm; [@fernandez2023]) is a different quantity: COBALT integrates the whole column (mean 290 m) and includes microzooplankton |
+| Meso and micro zooplankton | COBALT zmicro-vint + zmeso-vint, whole water column, level and trend; C:WW 0.07 micro, 0.09 meso; × $k = \overline{NPP}_{MedBFM} / \overline{NPP}_{COBALT}$ over the Ecopath years (`PLANKTON_MATCH_MEDBFM`, default, ASSUMPTION), so the COBALT zooplankton:NPP ratio sits on the MedBFM production of the phytoplankton (k ≈ 0.48) | 29.6 before matching (≈ 15 after; `plankton_match_medbfm_REVIEW.csv`) | [@stock2020; @fenchel1983; @kiorboe2013]; field reference in `zooplankton_mesomicro_cobalt_vs_field_REVIEW.csv` | the net value (0.87 t DM/km², 0–100 m, ≥ 250 µm; [@fernandez2023]) is a different quantity: COBALT integrates the whole column (mean 290 m) and includes microzooplankton |
 | Macro zooplankton | MAREDAT macrozooplankton (23 cells, 67 values in the Western Med box): median mg C/m³ (0–350 m) × $z_{eff}$ 214.5 m / 0.04 (C:WW) / 1000 | 3.15 | [@moriarty2013]; C:WW from [@molina2015] | C:WW 0.04 (krill would be 0.086, `MACRO_C_FRACTION_WW`); 1990s–2000s nets, sparse cells |
 | Suprabenthos | literature density × depth band (10–388 m and 389–1,255 m), plus the literature AquaMaps extension (+35.1 t, 9 species) | 0.0205 (reference only; Ecopath estimates B from EE = 0.95) | [@cartes2007; @cartes1999] | figure hand-read; 1991/2003 data |
 | Salps and other gelatinous zooplankton; Jellyfish | no B: Ecopath estimates it from EE = 0.95 | — | [@luo2020] (*ESSD* 12:1047) cell values are computed and written to `gelatinous_macrozoo_biomass_REVIEW.csv` for review only (`GEL_LUO_USE_FOR_B = FALSE`); salp upper bound 10.8 t/km² from the field check (@sec-validation) | Luo data are few, patchy and dominated by bloom samples |
-| Detritus | [@pauly1993] equation from COBALT intpp and euphotic depth; C:WW 1:9 | ≈ 288 | [@pauly1995; @morel1989] | — |
+| Detritus | [@pauly1993] equation from COBALT intpp and euphotic depth; C:WW 1:9; × $k^{0.954}$ (the same NPP ratio, `PLANKTON_MATCH_MEDBFM`) | ≈ 288 before matching (≈ 140 after) | [@pauly1995; @morel1989] | — |
 | Bluefin tuna | GBYP aerial survey density, Balearic A-core block, 2017–2021 mean | 0.153 | ICCAT GBYP Phase 11 [@creem2021] | spawning snapshot; 2017–21 ≠ 1995 |
 | Swordfish | $B_{2018} = 0.72 \times B_{MSY}$ (JABBA) on the Mediterranean stock | 0.0205 | ICCAT SWO-MED assessment [@iccat2020swo] | 2018 ≠ 1995 |
 | Cetaceans, monk seal, seabirds, loggerhead turtle | survey density (ind/km²) × mean body mass, applied to the whole $A_{model}$ (`Model_area_density_t_km2`); `Scale_to_1995` multiplies by a trend ratio when one is published; monk seal and fin whale are counts | see `marine_megafauna_biomass.csv` | striped dolphin: 1991 survey, [@forcada1998]; fin whale: 1991 survey, [@forcada1996]; bottlenose dolphin, Risso's dolphin, pilot and beaked whales: ACCOBAMS ASI 2018–2019 [@panigada2024]; sperm whale: [@boisseau2024]; body mass of bottlenose, striped and Risso's dolphins: [@carlucci2024]; monk seal: [@johnson2006] (Monk Seal Fact Files); seabirds: [@pettex2017] (SAMM 2011–12) with the Scopoli's shearwater detection correction (× 3.89) from [@lambert2024]; loggerhead: [@dimatteo2022], summer 2018 count not corrected for turtles underwater (343,321 for the basin; a minimum) | striped dolphin and fin whale are 1991 surveys; the others are 2003–2019 surveys with no published trend to 1995 (`Scale_to_1995` = 1, flagged); seabird and turtle masses not from a primary source; little gull, gannet and auks excluded (not in the FG species list) |
@@ -2575,10 +2576,17 @@ inputs:
 |---|---|---|
 | `temp_surf`, `sal_surf` | Mediterranean physics reanalysis (MEDSEA_MULTIYEAR_PHY_006_004), first level (\~1 m) | °C, PSU |
 | `temp_bot` | same, `bottomT` | °C |
-| `npp` | Mediterranean biogeochemistry reanalysis (MedBFM, MEDSEA_MULTIYEAR_BGC_006_008), `nppv` integrated over the water column | g C m⁻² d⁻¹ |
-| `phyto_c` | same, `phyc` integrated over the water column | g C m⁻² |
+| `npp` | Mediterranean biogeochemistry reanalysis (MedBFM, MEDSEA_MULTIYEAR_BGC_006_008), `nppv` integrated over the euphotic zone | g C m⁻² d⁻¹ |
+| `phyto_c` | same, `phyc` integrated over the euphotic zone | g C m⁻² |
 
-Water column (`ENV_INTEGRATION = "column"`, the default): per cell and
+Euphotic zone (`ENV_INTEGRATION = "euphotic"`, the default): per cell
+and month, the depth above which 99 % of the column NPP happens
+(`ENV_EU_FRACTION`, from MedBFM's NPP profile); NPP is that 99 % and
+phytoplankton carbon is integrated down to the same depth, so B and P/B
+describe the same layer (phytoplankton below it does not produce). The
+Ecopath B and P/B, the Ecosim NPP forcing and the Ecospace NPP and
+phytoplankton maps all use these euphotic totals.
+Water column (`ENV_INTEGRATION = "column"`): per cell and
 month, every MedBFM level from the surface to the seafloor is summed with
 its layer thickness, down to 200 m (`ENV_INTEGRATION_DEPTH`) where the sea
 is deeper: $X = \sum_k c_k\,\Delta z_k$. MedBFM's NPP is light-limited
@@ -2586,11 +2594,9 @@ and ends above about 150 m, so the column NPP is complete; for
 phytoplankton carbon, the share in the deepest 50 m read is logged and
 written to `diagnostics/netcdf_units_and_levels.csv`
 (`share_last_50m_pct`) as a check that 200 m holds the column (raise
-`ENV_INTEGRATION_DEPTH` if it is not small). The Ecopath B and P/B, the
-Ecosim NPP forcing and the Ecospace NPP and phytoplankton maps all use
-these column totals. `ENV_INTEGRATION = "euphotic"` keeps only the
-euphotic zone (99 % of the column NPP; phytoplankton carbon above that
-depth), which gives about a third less phytoplankton carbon. The PISCES
+`ENV_INTEGRATION_DEPTH` if it is not small). It gives the same NPP and
+about 1.45 times the euphotic phytoplankton carbon (cells deeper than the
+euphotic zone keep sinking and deep-chlorophyll-maximum cells). The PISCES
 gap fill (1994–1998) uses the same depth range; only its year-to-year
 ratio is used.
 

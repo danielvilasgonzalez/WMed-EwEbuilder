@@ -14,16 +14,17 @@
 ##   temp_surf  sea surface temperature, deg C   MedPHY reanalysis, thetao, first level (~1 m)
 ##   sal_surf   sea surface salinity             MedPHY reanalysis, so, first level
 ##   temp_bot   sea bottom temperature, deg C    MedPHY reanalysis, bottomT
-##   npp        net primary production, g C m-2 d-1, integrated over the water column
-##   phyto_c    phytoplankton carbon, g C m-2, integrated over the water column
-##  Water column (ENV_INTEGRATION = "column", default): every MedBFM level
+##   npp        net primary production, g C m-2 d-1, integrated over the euphotic zone
+##   phyto_c    phytoplankton carbon, g C m-2, integrated over the euphotic zone
+##  Euphotic zone (ENV_INTEGRATION = "euphotic", default): see below.
+##  Water column (ENV_INTEGRATION = "column"): every MedBFM level
 ##  from the surface to the seafloor, or to ENV_INTEGRATION_DEPTH (200 m)
 ##  where the sea is deeper, summed with its layer thickness. MedBFM's NPP
 ##  is light-limited and ends above ~150 m; the share of phytoplankton
 ##  carbon in the deepest 50 m read is logged and written to
 ##  diagnostics/netcdf_units_and_levels.csv (share_last_50m_pct) - if it is
 ##  not small, raise ENV_INTEGRATION_DEPTH (a new download).
-##  ENV_INTEGRATION = "euphotic": per cell and month the depth above which
+##  ENV_INTEGRATION = "euphotic" (default): per cell and month the depth above which
 ##  ENV_EU_FRACTION (99%) of the column NPP happens (from MedBFM's NPP
 ##  profile); NPP = that 99% and phytoplankton carbon only down to it.
 ##  The PISCES gap fill keeps 0-ENV_INTEGRATION_DEPTH m: only its
@@ -124,7 +125,7 @@ source(file.path(git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"))   # c
 .env_default("ENV_GAP_RATIO_MAX", 4)
 .env_default("ENV_PFT_YEARS", 2002:2004)   # size classes exist from 2002
 .env_default("ENV_INTEGRATION_DEPTH", 200)                            # m, deepest level read for NPP and phytoplankton carbon
-.env_default("ENV_INTEGRATION", "column")                             # "column" (surface to seafloor, at most ENV_INTEGRATION_DEPTH) or "euphotic" (depth with 99% of the column NPP)
+.env_default("ENV_INTEGRATION", "euphotic")                           # "euphotic" (default: depth with 99% of the column NPP) or "column" (surface to seafloor, at most ENV_INTEGRATION_DEPTH)
 if (identical(ENV_INTEGRATION, "fixed")) ENV_INTEGRATION <- "column"
 .env_default("ENV_EU_FRACTION", 0.99)                                 # share of the column NPP above the euphotic depth
 .int_lab <- if (identical(ENV_INTEGRATION, "euphotic")) paste0("over the euphotic zone (", round(100 * ENV_EU_FRACTION), "% of the 0-", ENV_INTEGRATION_DEPTH, " m NPP)") else
