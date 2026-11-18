@@ -32,7 +32,7 @@ Items marked **[verify]** are cited in the code by author, year and journal, but
 
 ## 1b — Groups the surveys can't measure
 
-1. Stock, C.A., Dunne, J.P., Fan, S., et al. (2020). Ocean biogeochemistry in GFDL's Earth System Model 4.1 and its response to increasing atmospheric CO2. Journal of Advances in Modeling Earth Systems, 12, e2019MS002043. — COBALT phytoplankton and zooplankton (ISIMIP3a).
+1. Stock, C.A., Dunne, J.P., Fan, S., et al. (2020). Ocean biogeochemistry in GFDL's Earth System Model 4.1 and its response to increasing atmospheric CO2. Journal of Advances in Modeling Earth Systems, 12, e2019MS002043. — COBALT meso- and microzooplankton (ISIMIP3a); phytoplankton only with `PHYTO_SOURCE = "isimip"` (default: Copernicus MedBFM, see 6-2).
 2. Morel, A., Berthon, J.-F. (1989). Surface pigments, algal biomass profiles, and potential production of the euphotic layer: relationships reinvestigated in view of remote-sensing applications. Limnology and Oceanography, 34(8), 1545-1562. — chlorophyll to biomass.
 3. Kiørboe, T. (2013). Zooplankton body composition. Limnology and Oceanography, 58(5), 1843-1850. — zooplankton carbon to wet weight.
 4. Ikeda, T., Kirkwood, R. (1989). Metabolism and body composition of two euphausiids (Euphausia superba and E. crystallorophias) collected from under the pack-ice off Enderby Land, Antarctica. Marine Biology, 100, 301-308. — macrozooplankton conversion factors.
@@ -88,8 +88,14 @@ Items marked **[verify]** are cited in the code by author, year and journal, but
 11. Ricard et al. 2012, RAM Legacy (see Biomass 4) — catch cross-check.
 
 12. Watson, R.A. (2017). A database of global marine commercial, small-scale, illegal and unreported fisheries catch 1950-2014. Scientific Data, 4, 170039. doi:10.1038/sdata.2017.39 — discard ratio (reported vs total catch), via the ISIMIP3a fishing data.
+13. STECF (2023). The 2023 Annual Economic Report on the EU Fishing Fleet (STECF 23-07); STECF (2024). The 2024 Annual Economic Report on the EU Fishing Fleet (STECF 24-07). Publications Office of the European Union, Luxembourg. — fleet cost shares by gear (fixed, effort-related, sailing-related, profit).
+14. STECF FDI (see 2-2), landing values — off-vessel prices by FG and fleet.
+15. Pauly et al. (2020), Sea Around Us (see 2-3), recreational sector — recreational catch ratio and effort index of the recreational fleets (one per country).
 
 ## 3 — P/B, Q/B and traits
+
+Phytoplankton P/B: Copernicus MedBFM NPP / phytoplankton carbon (see 6-2), same for Large and Small.
+
 
 1. Pauly, D. (1980). On the interrelationships between natural mortality, growth parameters, and mean environmental temperature in 175 fish stocks. Journal du Conseil International pour l'Exploration de la Mer, 39(2), 175-192. — M (P/B = Z = M + F).
 2. Then, A.Y., Hoenig, J.M., Hall, N.G., Hewitt, D.A. (2015). Evaluating the predictive performance of empirical estimators of natural mortality rate using information on over 200 fish species. ICES Journal of Marine Science, 72(1), 82-92. — M.
@@ -116,18 +122,19 @@ Items marked **[verify]** are cited in the code by author, year and journal, but
 2. Froese, R., Pauly, D. (Eds). FishBase, diet tables. [www.fishbase.org](https://www.fishbase.org) — diet proportions for fish.
 3. Colléter, M., Valls, A., Guitton, J., Gascuel, D., Pauly, D., Christensen, V. (2015). Global overview of the applications of the Ecopath with Ecosim modeling approach using the EcoBase models repository. Ecological Modelling, 302, 42-53. — EcoBase diet fallback.
 4. Hyslop, E.J. (1980). Stomach contents analysis - a review of methods and their application. Journal of Fish Biology, 17, 411-429. — weighting of diet measures.
-5. Ribes, M., Coma, R., Gili, J.M. (1999). Natural diet and grazing rate of the temperate sweet gorgonian Paramuricea clavata (Cnidaria: Octocorallia) in a western Mediterranean ecosystem. Marine Ecology Progress Series, 183, 125-137. — corals and gorgonians diet (literature fallback).
-6. Coll, M., Palomera, I., Tudela, S., Sardà, F. (2006). Trophic flows, ecosystem structure and fishing impacts in the South Catalan Sea, Northwestern Mediterranean. Journal of Marine Systems, 59, 63-96. — zooplankton diet (literature fallback).
-7. Bănaru, D., Mellon-Duval, C., Roos, D., et al. (2013). Trophic structure in the Gulf of Lions marine ecosystem (north-western Mediterranean Sea) and fishing impacts. Journal of Marine Systems, 111-112, 45-68. — suprabenthos diet (literature fallback).
 
 ## 6 — Environment
 
 1. Copernicus Marine Service. Mediterranean Sea Physics Reanalysis, MEDSEA_MULTIYEAR_PHY_006_004. [marine.copernicus.eu](https://marine.copernicus.eu) — sea surface and bottom temperature, salinity.
-2. Copernicus Marine Service. Mediterranean Sea Biogeochemistry Reanalysis (MedBFM), MEDSEA_MULTIYEAR_BGC_006_008. — net primary production and phytoplankton carbon, integrated over the euphotic zone (depth with 99% of the column NPP).
+2. Copernicus Marine Service. Mediterranean Sea Biogeochemistry Reanalysis (MedBFM), MEDSEA_MULTIYEAR_BGC_006_008. — net primary production and phytoplankton carbon integrated over the water column (surface to seafloor, at most 200 m); Ecosim NPP forcing, Ecospace maps, and (default) the Ecopath phytoplankton B and P/B (NPP / carbon, mean of the Ecopath years).
 3. Aumont, O., Ethé, C., Tagliabue, A., Bopp, L., Gehlen, M. (2015). PISCES-v2: an ocean biogeochemical model for carbon and ecosystem studies. Geoscientific Model Development, 8, 2465-2513. — global hindcast GLOBAL_MULTIYEAR_BGC_001_029, 1994-1998 gap fill scaled to MedBFM.
-4. Copernicus Marine Service. Mediterranean Sea ocean colour, multi-year L4 plankton (cmems_obs-oc_med_bgc-plankton_my_l4-multi-1km_P1M). **[verify product ID]** — phytoplankton size classes for the large/small split.
-5. Di Cicco, A., Sammartino, M., Marullo, S., Santoleri, R. (2017). Regional empirical algorithms for an improved identification of phytoplankton functional types and size classes in the Mediterranean Sea using satellite data. Frontiers in Marine Science, 4, 126. doi:10.3389/fmars.2017.00126 — size-class algorithm.
+4. Copernicus Marine Service. Global Ocean Colour (Copernicus-GlobColour), multi-year L4 plankton, monthly 4 km (OCEANCOLOUR_GLO_BGC_L4_MY_009_104, dataset cmems_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M). — micro-, nano- and picophytoplankton chlorophyll; microphytoplankton share per cell and calendar month (2002-2004) for the Large/Small split, applied to every year back to 1994.
+5. Di Cicco, A., Sammartino, M., Marullo, S., Santoleri, R. (2017). Regional empirical algorithms for an improved identification of phytoplankton functional types and size classes in the Mediterranean Sea using satellite data. Frontiers in Marine Science, 4, 126. doi:10.3389/fmars.2017.00126 — Mediterranean size-class algorithm. **[verify: the global product of item 4 uses its own size-class algorithm; cite the one in its user manual]**
 6. Pauly, D., Christensen, V. (1995) (see 1b-22) — carbon to wet weight 1:9.
+7. Frieler, K., Volkholz, J., Lange, S., Schewe, J., et al. (2024). Scenario setup and forcing data for impact model evaluation and impact attribution within the third round of the Inter-Sectoral Model Intercomparison Project (ISIMIP3a). Geoscientific Model Development, 17, 1-51. doi:10.5194/gmd-17-1-2024 — ISIMIP protocol; ISIMIP3b GFDL-ESM4 and IPSL-CM6A-LR ocean fields for the climate scenarios (SSP1-2.6, SSP3-7.0, SSP5-8.5).
+8. Lange, S. (2019). Trend-preserving bias adjustment and statistical downscaling with ISIMIP3BASD (v1.0). Geoscientific Model Development, 12, 3055-3070. doi:10.5194/gmd-12-3055-2019 — trend-preserving bias adjustment of the scenarios to the Copernicus hindcast.
+9. EMODnet Seabed Habitats, EUSeaMap (see 1b-9) — Ecospace habitat drivers (share of each cell covered by seagrass, coralligenous, rock, other biogenic, gravel, mixed sediment, sand, mud; EUNIS 2019).
+10. Kaschner et al. (2019), AquaMaps (see 1-7) — Ecospace response functions of every FG to depth, temperature, salinity and NPP.
 
 ## 5 — Validation
 
