@@ -303,7 +303,7 @@ scripts/
 gsa_export/                        # GFCM GSA shapefile and GeoJSON (used by the helpers)
 config.R.example                   # template for config.local.R (your folders; git-ignored)
 CITATION.cff                       # how to cite the code
-ewe_infography.png                 # workflow figure (the page uses the .png, else ewe_infography.jpg)
+ewe_infography.png                 # workflow figure
 ewe_infography_references.md       # references by block of the workflow figure
 ```
 

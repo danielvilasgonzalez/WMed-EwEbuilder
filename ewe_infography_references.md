@@ -32,7 +32,7 @@ Items marked **[verify]** are cited in the code by author, year and journal, but
 
 ## 1b — Groups the surveys can't measure
 
-1. Stock, C.A., Dunne, J.P., Fan, S., et al. (2020). Ocean biogeochemistry in GFDL's Earth System Model 4.1 and its response to increasing atmospheric CO2. Journal of Advances in Modeling Earth Systems, 12, e2019MS002043. — COBALT meso- and microzooplankton (ISIMIP3a), and the primary production of the detritus equation, both rescaled to the MedBFM NPP (6-2) so phytoplankton, zooplankton and detritus share one production; phytoplankton only with `PHYTO_SOURCE = "isimip"` (default: Copernicus MedBFM, see 6-2).
+1. Stock, C.A., Dunne, J.P., Fan, S., et al. (2020). Ocean biogeochemistry in GFDL's Earth System Model 4.1 and its response to increasing atmospheric CO2. Journal of Advances in Modeling Earth Systems, 12, e2019MS002043. — COBALT meso- and microzooplankton (ISIMIP3a), and the primary production of the detritus equation, both rescaled to the MedBFM NPP (5-2) so phytoplankton, zooplankton and detritus share one production; phytoplankton only with `PHYTO_SOURCE = "isimip"` (default: Copernicus MedBFM, see 5-2).
 2. Morel, A., Berthon, J.-F. (1989). Surface pigments, algal biomass profiles, and potential production of the euphotic layer: relationships reinvestigated in view of remote-sensing applications. Limnology and Oceanography, 34(8), 1545-1562. — chlorophyll to biomass.
 3. Kiørboe, T. (2013). Zooplankton body composition. Limnology and Oceanography, 58(5), 1843-1850. — zooplankton carbon to wet weight.
 4. Ikeda, T., Kirkwood, R. (1989). Metabolism and body composition of two euphausiids (Euphausia superba and E. crystallorophias) collected from under the pack-ice off Enderby Land, Antarctica. Marine Biology, 100, 301-308. — macrozooplankton conversion factors.
@@ -94,7 +94,7 @@ Items marked **[verify]** are cited in the code by author, year and journal, but
 
 ## 3 — P/B, Q/B and traits
 
-Phytoplankton P/B: Copernicus MedBFM NPP / phytoplankton carbon (see 6-2), same for Large and Small.
+Phytoplankton P/B: Copernicus MedBFM NPP / phytoplankton carbon (see 5-2), same for Large and Small.
 
 
 1. Pauly, D. (1980). On the interrelationships between natural mortality, growth parameters, and mean environmental temperature in 175 fish stocks. Journal du Conseil International pour l'Exploration de la Mer, 39(2), 175-192. — M (P/B = Z = M + F).
@@ -122,8 +122,9 @@ Phytoplankton P/B: Copernicus MedBFM NPP / phytoplankton carbon (see 6-2), same 
 2. Froese, R., Pauly, D. (Eds). FishBase, diet tables. [www.fishbase.org](https://www.fishbase.org) — diet proportions for fish.
 3. Colléter, M., Valls, A., Guitton, J., Gascuel, D., Pauly, D., Christensen, V. (2015). Global overview of the applications of the Ecopath with Ecosim modeling approach using the EcoBase models repository. Ecological Modelling, 302, 42-53. — EcoBase diet fallback.
 4. Hyslop, E.J. (1980). Stomach contents analysis - a review of methods and their application. Journal of Fish Biology, 17, 411-429. — weighting of diet measures.
+5. Steenbeek, J., Coll, M., Mestre-Tomás, J., Leon, J.E. dietcalcR: the iMARES diet calculator (R). [github.com/iMARES-group/dietcalcR](https://github.com/iMARES-group/dietcalcR) — scoring, selection and merging of the IMARES diet database records, FG diet matrix and diet pedigree (stages 2-3). **[verify: citation or version]**
 
-## 6 — Environment
+## 5 — Environment and Ecospace
 
 1. Copernicus Marine Service. Mediterranean Sea Physics Reanalysis, MEDSEA_MULTIYEAR_PHY_006_004. [marine.copernicus.eu](https://marine.copernicus.eu) — sea surface and bottom temperature, salinity.
 2. Copernicus Marine Service. Mediterranean Sea Biogeochemistry Reanalysis (MedBFM), MEDSEA_MULTIYEAR_BGC_006_008. — net primary production and phytoplankton carbon integrated over the euphotic zone (depth holding 99 % of the NPP, per cell and month); Ecosim NPP forcing, Ecospace maps, and (default) the Ecopath phytoplankton B and P/B (NPP / carbon, mean of the Ecopath years).
@@ -136,7 +137,7 @@ Phytoplankton P/B: Copernicus MedBFM NPP / phytoplankton carbon (see 6-2), same 
 9. EMODnet Seabed Habitats, EUSeaMap (see 1b-9) — Ecospace habitat drivers (share of each cell covered by seagrass, coralligenous, rock, other biogenic, gravel, mixed sediment, sand, mud; EUNIS 2019).
 10. Kaschner et al. (2019), AquaMaps (see 1-7) — Ecospace response functions of every FG to depth, temperature, salinity and NPP.
 
-## 5 — Validation
+## 6 — Diagnostics
 
 1. Christensen, V., Walters, C.J., Pauly, D. (2005). Ecopath with Ecosim: a user's guide. Fisheries Centre, University of British Columbia, Vancouver. — P/Q 0.05-0.3, diet sums, cannibalism and EE checks.
 2. Western Mediterranean 1995 Ecopath model (Coll, M., Steenbeek, J.), "estimates" sheet of WMed_EwE.xlsx. **[verify: published citation]** — group-by-group comparison of B, catch, P/B and Q/B.

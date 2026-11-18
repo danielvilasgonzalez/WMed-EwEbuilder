@@ -224,7 +224,7 @@ local({
   "16_pedigree.png"                                   = "plots/validation/16_pedigree.png",
   "survey_outlier_before_after.png"                   = "plots/biomass/survey_outlier_before_after.png")
 
-## A figure kept in the repo (e.g. ewe_infography.jpg at the repo root),
+## A figure kept in the repo (e.g. ewe_infography.png at the repo root),
 ## also loaded live, so an edited image shows without re-rendering.
 wm_repo_figure <- function(id, caption, rel) {
   blank <- "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
@@ -430,7 +430,7 @@ The pipeline covers several conceptually distinct problems in sequence:
 #| eval: true
 #| echo: false
 wm_repo_figure("fig-flow-overview", r"---(Workflow: the species-to-Functional-Group table and the data sources feed five blocks (1 biomass, 2 fisheries, 3 P/B, Q/B and traits, 4 diets, 5 environment and Ecospace), checked by 6 diagnostics, that produce the EwE input. Click to zoom.)---",
-               if (file.exists(file.path(git_dir, "ewe_infography.png"))) "ewe_infography.png" else "ewe_infography.jpg")   # PNG when there (sharper text), else the JPG
+               "ewe_infography.png")
 ```
 
 Some density steps are conditional: catchability correction only runs if
