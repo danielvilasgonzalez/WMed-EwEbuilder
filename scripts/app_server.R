@@ -197,6 +197,11 @@ observe({
 .esp_lab <- c(temp_surf = "SST - sea surface temperature", temp_bot = "SBT - sea bottom temperature", sal_surf = "SSS - sea surface salinity",
               npp = "PP - net primary production", phyto_c = "Phytoplankton carbon", phyto_large = "Large phytoplankton carbon",
               phyto_small = "Small phytoplankton carbon")
+## variables of the two "all" views
+.esp_group <- list(all_phys = c("temp_surf", "temp_bot", "sal_surf"), all_prod = c("npp", "phyto_c", "phyto_large", "phyto_small"))
+.esp_group_title <- c(all_phys = "Physical drivers", all_prod = "Primary production drivers")
+.esp_is_all <- function(v) !is.null(v) && v %in% names(.esp_group)
+.esp_vars_of <- function(ix, v) intersect(.esp_group[[v]], unique(ix$variable))
 .esp_hab_lab <- c(depth = "Depth", seagrass = "Seagrass (Posidonia, Cymodocea)", coralligenous = "Coralligenous", rock = "Rock",
                   biogenic = "Other biogenic", gravel = "Gravel (coarse sediment)", mixed = "Mixed sediment", sand = "Sand", mud = "Mud")
 .esp_hab <- reactive({
@@ -207,16 +212,19 @@ observe({
 observe({
   ix <- .esp_index(); env <- unique(ix$variable); hab <- .esp_hab(); cur <- isolate(input$esp_view_var)
   hl <- if (!is.null(hab) && nrow(hab)) hab$layer else "depth"
-  env_ch <- c("All environmental drivers" = "all", setNames(env, ifelse(is.na(.esp_lab[env]), env, .esp_lab[env])))
+  ## two "all" views, so each holds fewer, larger maps
+  grp <- c(if (any(env %in% .esp_group$all_phys)) c("All physical drivers (SST, SBT, SSS)" = "all_phys"),
+           if (any(env %in% .esp_group$all_prod)) c("All primary production drivers (PP, phytoplankton)" = "all_prod"))
+  env_ch <- c(grp, setNames(env, ifelse(is.na(.esp_lab[env]), env, .esp_lab[env])))
   hab_ch <- setNames(ifelse(hl == "depth", "depth", paste0("hab:", hl)), ifelse(is.na(.esp_hab_lab[hl]), hl, .esp_hab_lab[hl]))
   if (length(hl) > 1) hab_ch <- c("All habitat drivers" = "hab_all", hab_ch)
   ch <- list("Environmental drivers (spatio-temporal)" = as.list(env_ch), "Habitat drivers (static)" = as.list(hab_ch))   # as.list: a one-item group stays a group
-  updateSelectInput(session, "esp_view_var", choices = ch, selected = if (!is.null(cur) && cur %in% c(env_ch, hab_ch)) cur else "all")
+  updateSelectInput(session, "esp_view_var", choices = ch, selected = if (!is.null(cur) && cur %in% c(env_ch, hab_ch)) cur else unname(env_ch[1]))
 })
 output$esp_view_slider <- renderUI({
   ix <- .esp_index(); v <- input$esp_view_var; req(v)
   if (v %in% c("depth", "hab_all") || startsWith(v, "hab:")) return(NULL)
-  iv <- if (v == "all") ix[variable == ix$variable[1]] else ix[variable == v]; req(nrow(iv) > 0)
+  iv <- if (.esp_is_all(v)) ix[variable == .esp_vars_of(ix, v)[1]] else ix[variable == v]; req(nrow(iv) > 0)
   if (identical(input$esp_view_mode, "year")) {
     yrs <- sort(unique(iv$year))
     sliderInput("esp_view_year", NULL, min = min(yrs), max = max(yrs), value = min(yrs), step = 1, sep = "", width = "100%",
@@ -240,7 +248,7 @@ output$esp_view_slider <- renderUI({
 output$esp_view_when <- renderUI({
   ix <- .esp_index(); v <- input$esp_view_var; req(v)
   if (v %in% c("depth", "hab_all") || startsWith(v, "hab:")) return(NULL)
-  iv <- if (v == "all") ix[variable == ix$variable[1]] else ix[variable == v]; req(nrow(iv) > 0)
+  iv <- if (.esp_is_all(v)) ix[variable == .esp_vars_of(ix, v)[1]] else ix[variable == v]; req(nrow(iv) > 0)
   iv <- iv[order(time_step)]
   txt <- if (identical(input$esp_view_mode, "year")) {
     y <- input$esp_view_year; if (is.null(y)) y <- min(iv$year)
@@ -259,7 +267,7 @@ output$esp_view_plot_ui <- renderUI({
 ## height / width of each view, so the maps fill the width whatever the window size
 .esp_hratio <- function() {
   v <- input$esp_view_var; yr <- identical(input$esp_view_mode, "year"); if (is.null(v)) return(0.6)
-  if (identical(v, "all")) return(if (yr) 0.31 * length(unique(.esp_index()$variable)) + 0.05 else 0.62)
+  if (.esp_is_all(v)) { n <- length(.esp_vars_of(.esp_index(), v)); return(if (yr) 0.31 * n + 0.05 else (if (n > 2) 0.78 else 0.42)) }
   if (identical(v, "hab_all")) return(0.98)
   if (identical(v, "depth") || startsWith(v, "hab:")) return(0.62)
   if (yr) 0.72 else 0.78
@@ -439,8 +447,8 @@ output$esp_view_plot_ui <- renderUI({
   scl <- if (!is.null(input$esp_view_scen) && !input$esp_view_scen %in% c("historical", "hindcast")) .esp_scen_label[[input$esp_view_scen]] else "Historical"
   .lim <- function(rs, vv, iy) if (anom) .esp_sym(rs) else if (fixed) .esp_qlim_all(base, ix, vv) else .esp_q(rs)
   .stack_df <- function(rows, lab) data.table::rbindlist(lapply(seq_len(nrow(rows)), function(i) { z <- .esp_df(.esp_get(base, ix, rows[i], anom)); z$panel <- lab[i]; z }))
-  if (v == "all") {
-    vars <- unique(ix$variable); i1 <- ix[variable == vars[1]][order(time_step)]
+  if (.esp_is_all(v)) {
+    vars <- .esp_vars_of(ix, v); i1 <- ix[variable == vars[1]][order(time_step)]
     if (identical(input$esp_view_mode, "year")) {
       y <- input$esp_view_year; if (is.null(y) || !y %in% i1$year) y <- min(i1$year)
       ps <- lapply(seq_along(vars), function(j) {
@@ -457,7 +465,7 @@ output$esp_view_plot_ui <- renderUI({
                          legend.position = "bottom", legend.justification = "right", legend.margin = ggplot2::margin(0, 0, 0, 0),
                          legend.text = ggplot2::element_text(size = 8), legend.title = ggplot2::element_text(size = 9))
       })
-      return(.pr(patchwork::wrap_plots(ps, ncol = 1) + patchwork::plot_annotation(title = paste("All environmental drivers,", y, "-", scl),
+      return(.pr(patchwork::wrap_plots(ps, ncol = 1) + patchwork::plot_annotation(title = paste0(.esp_group_title[[v]], ", ", y, " - ", scl),
         caption = if (anom) "Difference from the mean of the same month over all years." else NULL,
         theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15)))))
     }
@@ -469,7 +477,7 @@ output$esp_view_plot_ui <- renderUI({
       .esp_gg(.esp_df(r), dep, .esp_fill(vv, anom, .lim(list(r), vv, row), name = ulab(vv, row$unit), bar = 5), base = 11) +
         ggplot2::labs(title = .esp_vlab(vv))
     })
-    return(.pr(patchwork::wrap_plots(ps, ncol = min(3, length(ps))) + patchwork::plot_annotation(title = paste("All environmental drivers,", .esp_when(y, mo), "-", scl),
+    return(.pr(patchwork::wrap_plots(ps, ncol = 2) + patchwork::plot_annotation(title = paste0(.esp_group_title[[v]], ", ", .esp_when(y, mo), " - ", scl),
       theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15)))))
   }
   iv <- ix[variable == v][order(time_step)]
