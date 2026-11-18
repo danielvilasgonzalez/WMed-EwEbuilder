@@ -1964,7 +1964,11 @@ year.
     replaces $r$ with a survey figure where one exists; $r \le$
     `RECREATIONAL_RATIO_MAX`. Landings = catch (released fish not
     estimated). The recreational catch is added on top of the commercial
-    total (it is not part of the GFCM/FDI catch). Check
+    total (it is not part of the GFCM/FDI catch), every year of the
+    series: it enters `Catches_Ecopath`/`Catches_Ecosim` (so their FG
+    totals match the Ecopath_L/Ecopath_Di row sums) and, for the EU
+    countries, the Ecosim catch series. ICCAT and stock-assessment
+    corrections replace or rescale the commercial rows only. Check
     `recreational_share_by_country_REVIEW.csv` against the
     Mediterranean-wide order of magnitude (recreational catch about 10 %
     of commercial landings; FAO-GFCM SoMFi). Effort (ASSUMPTION): index

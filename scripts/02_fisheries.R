@@ -6068,17 +6068,8 @@ if (nrow(species_fg_crosswalk_all) > 0) {
 ## separate reimplementation that could drift from it. Total catch
 ## (landings + discards where FishMIP's ratio is available), full West
 ## Med scope. Writes directly into the workbook.
-add_catches_to_ecopath_workbook(  # write Catches_Ecopath/Catches_Ecosim sheets into the workbook
-  fg_catch        = catches_discards_fg[, .(Year, FG_num, Catch_t = Catch_t * .kc(FG_num))],  # .kc: overlap weighting for custom regions (1 otherwise)
-  fg_lookup       = full_fg_list,
-  out_path        = ECOPATH_WORKBOOK_PATH,
-  year_ecopath    = YEAR_ECOPATH,
-  area_km2        = Total_Area_km2,
-  ts_years        = START_YEAR:END_YEAR,
-  fleet_structure = NULL,
-  csv_out_dir     = csv_out_dir,      # this block's own native CSVs (Catches_Ecopath/Catches_Ecosim/Fleet_Structure) go under output/fisheries/
-  biomass_csv_dir = BIOMASS_CSV_DIR   # ts_years is passed explicitly above so this isn't actually used this call, but set for correctness if that ever changes
-)
+## (written further down, after the recreational fleets: the FG totals
+## include the recreational catch, so they match the Ecopath_L row sums)
 
 ## =================================================================
 ## # any percentage of unreported
@@ -6599,7 +6590,7 @@ if (nrow(stecf_discard_ratio_by_fleet) > 0 && all(c("Landed_t", "Discarded_t") %
 ## clearly as an estimate, not a measurement. Everywhere SAU has no
 ## sector field (or no Recreational row for that cell), stays
 ## explicitly "not estimated", same as before this change. -------------
-recreational_rows <- CJ(Country = unique(FLEET_REGISTER[Sector == "Recreational"]$Country), FG_num = unique(gfcm_country_fg$FG_num), Year = YEAR_ECOPATH)  # every country x FG x Ecopath-year combination
+recreational_rows <- CJ(Country = unique(FLEET_REGISTER[Sector == "Recreational"]$Country), FG_num = unique(gfcm_country_fg$FG_num), Year = sort(unique(c(fleet_split$Year, YEAR_ECOPATH))))  # every country x FG x year: Ecopath years (Ecopath_L) and the whole series (Catches_Ecosim, Ecosim_ts)
 recreational_rows <- merge(recreational_rows, FLEET_REGISTER[Sector == "Recreational", .(Country, GSA, FleetType, Comment)], by = "Country")  # attach the Recreational fleet's metadata
 recreational_rows[, `:=`(Sector = "Recreational", Catch_t_by_fleet = NA_real_, Discard_t_by_fleet = NA_real_,
                          Landings_t_by_fleet = NA_real_,
@@ -6695,6 +6686,29 @@ if (isTRUE(INCLUDE_RECREATIONAL_FLEET)) {
 ## happened to compute to NaN. Fixed by carrying Landings_t_by_fleet
 ## through as its own column and using it directly further down,
 ## instead of re-deriving it from two separately-averaged columns.
+## --- Catches_Ecopath / Catches_Ecosim: commercial + recreational -------
+## FG total catch of the whole model area per year = the commercial FG
+## series (catches_discards_fg) + the recreational catch of every country
+## (recreational_rows, all years), so Catches_Ecopath matches the sum of
+## the Ecopath_L/Ecopath_Di columns, recreational fleets included.
+.rec_fg_y <- recreational_rows[is.finite(Catch_t_by_fleet), .(Catch_rec = sum(Catch_t_by_fleet)), by = .(FG_num, Year)]
+.fg_catch_all <- merge(catches_discards_fg[, .(Year, FG_num, Catch_t)], .rec_fg_y, by = c("FG_num", "Year"), all.x = TRUE)
+.fg_catch_all[, Catch_t := (Catch_t + fifelse(is.na(Catch_rec), 0, Catch_rec)) * .kc(FG_num)][, Catch_rec := NULL]
+add_catches_to_ecopath_workbook(  # write Catches_Ecopath/Catches_Ecosim sheets into the workbook
+  fg_catch        = .fg_catch_all,  # commercial + recreational; .kc: overlap weighting for custom regions (1 otherwise)
+  fg_lookup       = full_fg_list,
+  out_path        = ECOPATH_WORKBOOK_PATH,
+  year_ecopath    = YEAR_ECOPATH,
+  area_km2        = Total_Area_km2,
+  ts_years        = START_YEAR:END_YEAR,
+  fleet_structure = NULL,
+  csv_out_dir     = csv_out_dir,      # this block's own native CSVs (Catches_Ecopath/Catches_Ecosim/Fleet_Structure) go under output/fisheries/
+  biomass_csv_dir = BIOMASS_CSV_DIR   # ts_years is passed explicitly above so this isn't actually used this call, but set for correctness if that ever changes
+)
+if (nrow(.rec_fg_y)) message("\n[Recreational] Recreational catch added to Catches_Ecopath/Catches_Ecosim: ",
+                             round(sum(.rec_fg_y[Year %in% YEAR_ECOPATH]$Catch_rec) / length(YEAR_ECOPATH)), " t/year in the Ecopath years, ",
+                             min(.rec_fg_y$Year), "-", max(.rec_fg_y$Year), ".")
+
 fleet_split_out <- rbindlist(list(
   fleet_split[, .(Country, FG_num, FG_name, Year, Sector, FleetType, GSA, Comment,
                   Catch_t = Catch_t_by_fleet, Discard_t = Discard_t_by_fleet,
@@ -6733,7 +6747,11 @@ message("\n[Fleet split] fleet_split_out: ", nrow(fleet_split_out), " Country x 
 if (nrow(iccat_country_fleet_catch) > 0) {
   iccat_cells <- unique(iccat_country_fleet_catch[, .(Country, FG_num, Year)])
   n_replaced_rows <- nrow(fleet_split_out[iccat_cells, on = c("Country", "FG_num", "Year"), nomatch = 0])
-  fleet_split_out <- fleet_split_out[!iccat_cells, on = c("Country", "FG_num", "Year")]  # drop every GFCM-derived fleet row for a cell ICCAT now covers
+  ## commercial rows of a cell ICCAT covers are replaced; the recreational
+  ## estimate is kept unless ICCAT reports recreational catch for that cell
+  .ic_rec <- unique(iccat_country_fleet_catch[FleetType == "Recreational", .(Country, FG_num, Year)])
+  fleet_split_out <- rbindlist(list(fleet_split_out[!Sector %in% "Recreational"][!iccat_cells, on = c("Country", "FG_num", "Year")],
+                                    fleet_split_out[Sector %in% "Recreational"][!.ic_rec, on = c("Country", "FG_num", "Year")]), use.names = TRUE)
   
   iccat_fleet_meta <- unique(FLEET_REGISTER[, .(Country, FleetType, GSA, Comment)])
   iccat_fleet_rows <- merge(iccat_country_fleet_catch, iccat_fleet_meta, by = c("Country", "FleetType"), all.x = TRUE)
@@ -6802,8 +6820,8 @@ if (nrow(star_overridden_fg_years) == 0) {
           " nothing to correct in fleet_split_out.")
 } else {
   star_fix_log <- data.table()
-  current_totals <- fleet_split_out[, .(Catch_t_current = sum(Catch_t, na.rm = TRUE)),
-                                    by = .(FG_num, Year)]
+  current_totals <- fleet_split_out[!Sector %in% "Recreational", .(Catch_t_current = sum(Catch_t, na.rm = TRUE)),
+                                    by = .(FG_num, Year)]  # commercial only: the stock-assessment total is a commercial catch
   target_totals <- catches_discards_fg[star_overridden_fg_years, on = c("FG_num", "Year"),
                                        .(FG_num, Year, Catch_t_target = Catch_t)]
   fix_cells <- merge(target_totals, current_totals, by = c("FG_num", "Year"), all.x = TRUE)
@@ -6821,7 +6839,7 @@ if (nrow(star_overridden_fg_years) == 0) {
     for (i in seq_len(nrow(scale_cells))) {
       fg_i <- scale_cells$FG_num[i]; yr_i <- scale_cells$Year[i]
       factor_i <- scale_cells$Catch_t_target[i] / scale_cells$Catch_t_current[i]
-      fleet_split_out[FG_num == fg_i & Year == yr_i, `:=`(
+      fleet_split_out[FG_num == fg_i & Year == yr_i & !Sector %in% "Recreational", `:=`(
         Catch_t = Catch_t * factor_i,
         Discard_t = Discard_t * factor_i,
         Landings_t = Landings_t * factor_i,
@@ -6841,7 +6859,7 @@ if (nrow(star_overridden_fg_years) == 0) {
   ## the STAR/RAM total equally across the target countries and their
   ## own named FleetTypes, as an explicitly flagged last resort.
   if (nrow(zero_base_cells) > 0) {
-    fleet_meta <- unique(FLEET_REGISTER[Country %in% TARGET_COUNTRIES, .(Country, FleetType, GSA, Comment)])
+    fleet_meta <- unique(FLEET_REGISTER[Country %in% TARGET_COUNTRIES & !Sector %in% "Recreational", .(Country, FleetType, GSA, Comment)])
     n_fleets_by_country <- fleet_meta[, .N, by = Country]
     for (i in seq_len(nrow(zero_base_cells))) {
       fg_i <- zero_base_cells$FG_num[i]; yr_i <- zero_base_cells$Year[i]
@@ -6871,7 +6889,7 @@ if (nrow(star_overridden_fg_years) == 0) {
       ## for this cell (Catch_t_current == 0 doesn't guarantee zero ROWS,
       ## just zero total) before adding the flat placeholder, so the two
       ## never coexist for the same Country x FleetType.
-      fleet_split_out <- fleet_split_out[!(FG_num == fg_i & Year == yr_i)]
+      fleet_split_out <- fleet_split_out[!(FG_num == fg_i & Year == yr_i & !Sector %in% "Recreational")]
       fleet_split_out <- rbindlist(list(fleet_split_out, flat_rows[, .(
         Country, FG_num, FG_name, Year, Sector, FleetType, GSA, Comment, Catch_t, Discard_t, Landings_t,
         Catch_t_incl_unreported, discard_source, discard_split_source, fleet_split_source
@@ -8419,6 +8437,14 @@ if (exists("catch_with_discards") && nrow(catch_with_discards) > 0) {
   .cw <- catch_with_discards[, .(L = sum(Landings_t, na.rm = TRUE), D = sum(Discard_t, na.rm = TRUE),
                                   L_eu = sum(Landings_t[Country %in% ECOSIM_CATCH_COUNTRIES], na.rm = TRUE),
                                   D_eu = sum(Discard_t[Country %in% ECOSIM_CATCH_COUNTRIES], na.rm = TRUE)), by = .(FG_num, Year)]
+  ## recreational catch of the EU countries joins the EU series (the FG
+  ## series of Catches_Discards_FG_ts is commercial only): s_L = (EU
+  ## commercial + EU recreational) / all commercial
+  if (exists("recreational_rows") && nrow(recreational_rows)) {
+    .rcu <- recreational_rows[Country %in% ECOSIM_CATCH_COUNTRIES & is.finite(Catch_t_by_fleet), .(R = sum(Catch_t_by_fleet)), by = .(FG_num, Year)]
+    .cw <- merge(.cw, .rcu, by = c("FG_num", "Year"), all.x = TRUE)
+    .cw[!is.na(R), L_eu := L_eu + R][, R := NULL]
+  }
   .sh <- CJ(FG_num = unique(catches_discards_fg$FG_num), Year = unique(catches_discards_fg$Year))
   .sh <- merge(.sh, .cw[, .(FG_num, Year, share_L = fifelse(L > 0, L_eu / L, NA_real_), share_D = fifelse(D > 0, D_eu / D, NA_real_))],
                by = c("FG_num", "Year"), all.x = TRUE)
