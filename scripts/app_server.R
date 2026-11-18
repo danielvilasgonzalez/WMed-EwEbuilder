@@ -220,11 +220,23 @@ output$esp_view_slider <- renderUI({
   if (identical(input$esp_view_mode, "year")) {
     yrs <- sort(unique(iv$year))
     sliderInput("esp_view_year", NULL, min = min(yrs), max = max(yrs), value = min(yrs), step = 1, sep = "", width = "100%",
-                animate = animationOptions(interval = 1500, loop = TRUE), ticks = FALSE)
-  } else sliderInput("esp_view_step", NULL, min = 1, max = nrow(iv), value = 1, step = 1, width = "100%",
-                     animate = animationOptions(interval = 700, loop = TRUE), ticks = FALSE)
+                animate = animationOptions(interval = 1500, loop = TRUE), ticks = TRUE)
+  } else {
+    ## a date slider: one step = one month on average (30.44 days), labelled "Jan 1995"; .esp_k() picks the month
+    iv <- iv[order(time_step)]
+    d <- as.Date(sprintf("%d-%02d-15", iv$year, ifelse(is.na(iv$month), 7L, iv$month)))
+    tags$div(class = "wm-esp-month",
+             sliderInput("esp_view_step", NULL, min = d[1], max = d[length(d)], value = d[1], step = 365.25 / 12, width = "100%",
+                         timeFormat = "%b %Y", animate = animationOptions(interval = 700, loop = TRUE), ticks = TRUE))
+  }
 })
-## the year or month shown, written out (the slider has no number labels)
+## row of the index picked by the month slider (nearest month to its date)
+.esp_k <- function(iv) {
+  t <- input$esp_view_step; if (is.null(t) || !nrow(iv)) return(1L)
+  t <- as.Date(t); tt <- as.Date(sprintf("%d-%02d-15", iv$year, ifelse(is.na(iv$month), 7L, iv$month)))
+  which.min(abs(as.numeric(tt - t)))
+}
+## the year or month shown, written out
 output$esp_view_when <- renderUI({
   ix <- .esp_index(); v <- input$esp_view_var; req(v)
   if (v %in% c("depth", "hab_all") || startsWith(v, "hab:")) return(NULL)
@@ -234,7 +246,7 @@ output$esp_view_when <- renderUI({
     y <- input$esp_view_year; if (is.null(y)) y <- min(iv$year)
     sprintf("%s  (%d\u2013%d)", y, min(iv$year), max(iv$year))
   } else {
-    k <- input$esp_view_step; if (is.null(k) || k > nrow(iv)) k <- 1
+    k <- .esp_k(iv)
     sprintf("%s  (%s \u2013 %s)", .esp_when(iv$year[k], iv$month[k]), .esp_when(iv$year[1], iv$month[1]), .esp_when(iv$year[nrow(iv)], iv$month[nrow(iv)]))
   }
   tags$div(class = "wm-esp-when", txt)
@@ -449,7 +461,7 @@ output$esp_view_plot_ui <- renderUI({
         caption = if (anom) "Difference from the mean of the same month over all years." else NULL,
         theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15)))))
     }
-    k <- input$esp_view_step; if (is.null(k) || k > nrow(i1)) k <- 1
+    k <- .esp_k(i1)
     y <- i1$year[k]; mo <- i1$month[k]
     ps <- lapply(vars, function(vv) {
       iv2 <- ix[variable == vv]; row <- iv2[year == y & (is.na(month) | month == mo)][1]
@@ -472,7 +484,7 @@ output$esp_view_plot_ui <- renderUI({
                    ggplot2::labs(title = paste0(.esp_vlab(v), ", ", y, " - ", scl),
                                  caption = if (anom) "Difference from the mean of the same month over all years (red = warmer / higher)." else "Monthly maps; one colour scale for all panels.")))
   }
-  k <- input$esp_view_step; if (is.null(k) || k > nrow(iv)) k <- 1
+  k <- .esp_k(iv)
   r <- .esp_get(base, ix, iv[k], anom)
   rng <- .lim(list(r), v, iv[k])
   pm <- .esp_gg(.esp_df(r), dep, .esp_fill(v, anom, rng, name = ulab(v, iv$unit[k]))) +

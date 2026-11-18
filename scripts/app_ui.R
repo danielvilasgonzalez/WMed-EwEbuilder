@@ -61,7 +61,8 @@ tagList(
     /* Ecospace maps explorer: one point in time, not a range - no filled bar, the date shown beside it */
     .wm-esp-slider .irs--shiny .irs-bar, .wm-esp-slider .irs-bar { background: transparent !important; border-color: transparent !important; }
     .wm-esp-slider .irs--shiny .irs-line { background: #dee2e6; }
-    .wm-esp-slider .irs-single, .wm-esp-slider .irs-min, .wm-esp-slider .irs-max, .wm-esp-slider .irs-grid-text { display: none !important; }
+    .wm-esp-slider .irs-min, .wm-esp-slider .irs-max { display: none !important; }   /* the tick labels show the range */
+    .wm-esp-slider .irs-grid-text { color: #495057; font-size: .75rem; }
     .wm-esp-when { font-weight: 600; font-size: 1.05rem; color: #0b4f6c; margin: -.4rem 0 .5rem 0; }
     #wm-map { height: 430px; border-radius: 10px; border: 1px solid #dfe6ec; }
     #wm-map .leaflet-tooltip { font-weight: 600; }
