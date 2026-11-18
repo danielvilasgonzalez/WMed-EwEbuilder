@@ -3621,6 +3621,13 @@ fwrite(fg_index_regional_combined, file.path(csv_out_dir, "survey_fg_annual_inde
   if (!"density_t_km2" %in% names(x) && length(.alias)) setnames(x, .alias[1], "density_t_km2")
   if (!"species" %in% names(x)) { .sp_alias <- intersect(c("scientificname", "scientific_name", "species_name", "taxon"), names(x))
     if (length(.sp_alias)) setnames(x, .sp_alias[1], "species") }
+  .fg_alias <- intersect(c("fg_name", "fg", "fg_name_biomass"), names(x))
+  if (length(.fg_alias) && .fg_alias[1] != "fg_name") setnames(x, .fg_alias[1], "fg_name")
+  if ("fg_name" %in% names(x)) {                     # FG-level rows: no species, an FG name
+    x[, fg_name := trimws(as.character(fg_name))]
+    if (!"species" %in% names(x)) x[, species := NA_character_]
+    x[(is.na(species) | !nzchar(trimws(species))) & !is.na(fg_name) & nzchar(fg_name), species := fg_name]
+  }
   if (!all(c("species", "density_t_km2") %in% names(x))) {
     message("[Manual density] ", basename(p), " needs columns species, density_t_km2 - ignored."); return(NULL) }
   x[, species := trimws(species)][, density_t_km2 := suppressWarnings(as.numeric(density_t_km2))]
@@ -3634,46 +3641,59 @@ if (!exists("MANUAL_DENSITY_ECOSIM_PATH", envir = .GlobalEnv, inherits = FALSE))
 if (!is.null(.md_es) && !"year" %in% names(.md_es)) { message("[Manual density] Ecosim CSV has no 'year' column - ignored."); .md_es <- NULL }
 if (!is.null(.md_es)) .md_es[, year := as.integer(year)]
 ## --- Other survey (your own species x year x density) -------------------
-## OTHER_SURVEY_FILE (page: card 2b "Biomass data: surveys"): any survey
-## and any species, e.g. a coastal trammel-net survey, a visual census or
-## an ROV survey. Columns:
-##   species        scientific name in the FG file (or an FG name)
+## OTHER_SURVEY_FILE (page: card 4 "Upload biomass from any survey"): any
+## survey and any species, e.g. a coastal trammel-net survey, a visual
+## census, an ROV survey or a literature value. Columns:
+##   species        scientific name (blank = the row is for the whole FG in fg_name)
+##   fg_name        optional: FG of the row (FG name of the FG table). With a
+##                  species: the FG it goes to (a species not in the FG table,
+##                  or a species in several FGs); without: the whole FG
 ##   year
 ##   density_t_km2  biomass, t (wet weight) per km2 (also read as
 ##                  biomass, biomass_t_km2 or density)
+##   overwrite      optional, per row (TRUE/FALSE, yes/no, 1/0; default TRUE):
+##                  TRUE  = the value replaces the species' (or FG's) biomass
+##                          of that year, whatever its source (MEDITS/MEDIAS,
+##                          stock assessment, acoustic series, literature);
+##                  FALSE = the value is used only if the species (or FG) has
+##                          no biomass from another source that year (fills gaps)
 ##   area_km2       optional: the area the density applies to; then the
 ##                  model-area density = density_t_km2 x area_km2 / A_model
 ##                  (no area_km2 = the density holds for the whole model area)
 ##   reference      optional
 ## Several rows of a species and year (e.g. per site) are averaged; with
-## area_km2 they are summed as density x area. A species in this file
-## takes its biomass ONLY from it, in every year: its MEDITS/MEDIAS (or
-## other) value is removed from its FG in all years, and the file's
-## values are added in the years it gives (years it does not give: the
-## species contributes 0; an FG name: the FG is left blank). Ecopath B =
-## the mean of its YEAR_ECOPATH rows (also used for the Ecopath years it
-## does not give); with none, the mean of its first three years (flagged). It wins over the manual density files.
+## area_km2 they are summed as density x area. Years not in the file keep
+## the other sources. A species' part of its FG = the FG value x the
+## species' share of the FG's survey biomass that year (the whole FG for a
+## species alone in its FG); the change is applied to the FG. Ecopath B
+## follows from the years: with no row and no other biomass in the Ecopath
+## years, Ecopath B = the mean of the species' first three years (flagged).
+## It wins over the manual density files. Applied changes:
+## manual_density_override_applied.csv (column source).
 if (!exists("OTHER_SURVEY_FILE", envir = .GlobalEnv, inherits = FALSE)) OTHER_SURVEY_FILE <- ""
 .os_all <- NULL
 if (nzchar(OTHER_SURVEY_FILE) && file.exists(OTHER_SURVEY_FILE)) {
   .os <- .md_read(OTHER_SURVEY_FILE)
   if (!is.null(.os) && "year" %in% names(.os)) {
     .os[, year := as.integer(year)]
+    .ow <- if ("overwrite" %in% names(.os)) tolower(trimws(as.character(.os$overwrite))) else rep("true", nrow(.os))
+    .os[, overwrite := !(.ow %in% c("false", "f", "no", "n", "0"))]
+    if (!"fg_name" %in% names(.os)) .os[, fg_name := NA_character_]
     .A_mod <- if (exists("MODEL_AREA_KM2") && is.finite(MODEL_AREA_KM2)) MODEL_AREA_KM2 else sum(strata_area_by_area$area_km2, na.rm = TRUE)
     if ("area_km2" %in% names(.os)) {
       .os[, area_km2 := suppressWarnings(as.numeric(area_km2))]
       .os <- .os[, .(density_t_km2 = if (all(is.finite(area_km2))) sum(density_t_km2 * area_km2) / .A_mod else mean(density_t_km2),
                      reference = if ("reference" %in% names(.SD)) paste(unique(na.omit(reference)), collapse = "; ") else NA_character_),
-                 by = .(species, year)]
+                 by = .(species, fg_name, year, overwrite)]
     } else {
       .os <- .os[, .(density_t_km2 = mean(density_t_km2),
                      reference = if ("reference" %in% names(.SD)) paste(unique(na.omit(reference)), collapse = "; ") else NA_character_),
-                 by = .(species, year)]
+                 by = .(species, fg_name, year, overwrite)]
     }
     .os[, reference := paste0("Other survey (", basename(OTHER_SURVEY_FILE), ")", fifelse(is.na(reference) | !nzchar(reference), "", paste0(": ", reference)))]
     .os_all <- .os
-    message("[Other survey] ", basename(OTHER_SURVEY_FILE), ": ", uniqueN(.os$species), " species, ", paste(range(.os$year), collapse = "-"),
-            " - their biomass comes only from this file, in every year.")
+    message("[Other survey] ", basename(OTHER_SURVEY_FILE), ": ", uniqueN(.os$species), " species/FG(s), ", paste(range(.os$year), collapse = "-"),
+            "; ", sum(.os$overwrite), " row(s) replace the other sources of their year, ", sum(!.os$overwrite), " only fill years without them.")
   } else message("[Other survey] ", OTHER_SURVEY_FILE, " needs columns species, year, density_t_km2 - ignored.")
 }
 manual_density_log <- data.table()
@@ -3685,6 +3705,11 @@ if (!is.null(.md_ep) || !is.null(.md_es) || !is.null(.os_all)) {
   for (.t in .targets) {
     .is_fg <- .t %in% .fgl$FG_name
     .fgs <- if (.is_fg) .fgl[FG_name == .t, FG_num] else .spl[ScientificName == .t, FG_num]
+    .os_fg <- if (!is.null(.os_all) && .t %in% .os_all$species) unique(na.omit(.os_all[species == .t & fg_name != .t, fg_name])) else character(0)
+    if (!.is_fg && length(.os_fg)) {                    # fg_name given for a species: that FG (also for a species not in the FG table)
+      .fgs2 <- .fgl[FG_name == .os_fg[1], FG_num]
+      if (length(.fgs2)) .fgs <- .fgs2 else message("[Other survey] '", .t, "': fg_name '", .os_fg[1], "' is not an FG name - ignored.")
+    }
     if (!length(.fgs)) { message("[Manual density] '", .t, "' is neither a species nor an FG name in the FG file - skipped."); next }
     .ep  <- if (!is.null(.md_ep)) .md_ep[species == .t, density_t_km2][1] else NA_real_
     .es  <- if (!is.null(.md_es)) .md_es[species == .t, .(Year = year, v = density_t_km2)] else data.table(Year = integer(), v = numeric())
@@ -3696,7 +3721,7 @@ if (!is.null(.md_ep) || !is.null(.md_es) || !is.null(.os_all)) {
     .src <- paste0("Manual density (", if (.is_fg) "FG" else "species", " override", if (!is.na(.ref)) paste0(": ", .ref), ")")
     .fg <- .fgs[1]   # a multistanza species is applied to its first FG only
     if (length(.fgs) > 1) message("[Manual density] '", .t, "' is in FGs ", paste(.fgs, collapse = ", "), " - applied to FG ", .fg, " only.")
-    .osv <- if (.is_os) .os_all[species == .t, .(Year = year, v = density_t_km2)] else data.table(Year = integer(), v = numeric())
+    .osv <- if (.is_os) .os_all[species == .t, .(Year = year, v = density_t_km2, ow = overwrite)] else data.table(Year = integer(), v = numeric(), ow = logical())
     .yrs <- sort(unique(c(fg_index_regional_combined[FG_num == .fg, Year], YEAR_ECOPATH, .es$Year, .osv$Year)))
     ## the species' (or FG's) current contribution per year
     ## A species' part of its FG = the FG value now (survey, stock assessment,
@@ -3722,20 +3747,16 @@ if (!is.null(.md_ep) || !is.null(.md_es) || !is.null(.os_all)) {
     }
     if (nrow(.es)) .new[.es, new := i.v, on = "Year"]
     .os_ep_filled <- FALSE
-    if (.is_os) {   # other survey: the only source of this species / FG, in every year
-      .new[, new := .osv$v[match(Year, .osv$Year)]]
-      if (any(.osv$Year %in% YEAR_ECOPATH))           # Ecopath B = mean of the Ecopath years it gives
-        .new[Year %in% YEAR_ECOPATH & !is.finite(new), new := mean(.osv[Year %in% YEAR_ECOPATH, v])]
-      if (!any(.osv$Year %in% YEAR_ECOPATH)) {      # no Ecopath-year rows: mean of the first three years
+    if (.is_os) {   # other survey: per row, replace (overwrite = TRUE) or fill a year without other biomass (FALSE)
+      .w <- .osv[ow == TRUE]; .f <- .osv[ow == FALSE]
+      if (nrow(.w)) .new[.w, new := i.v, on = "Year"]
+      if (nrow(.f)) .new[.f, new := fifelse(is.na(cur) | cur <= 0, i.v, new), on = "Year"]
+      if (!any(is.finite(.new[Year %in% YEAR_ECOPATH, new]) & .new[Year %in% YEAR_ECOPATH, new] > 0)) {   # nothing for the Ecopath years
         .new[Year %in% YEAR_ECOPATH, new := mean(head(.osv[order(Year)], 3)$v)]
         .os_ep_filled <- TRUE
-        message("[Other survey] '", .t, "': no rows for ", paste(range(YEAR_ECOPATH), collapse = "-"), " - Ecopath B = mean of its first three years (",
+        message("[Other survey] '", .t, "': no biomass for ", paste(range(YEAR_ECOPATH), collapse = "-"), " - Ecopath B = mean of its first three years (",
                 paste(head(sort(.osv$Year), 3), collapse = ", "), ").")
       }
-      if (.is_fg) {
-        fg_index_regional_combined[FG_num == .fg & !Year %in% .new[is.finite(new), Year], `:=`(mean_density = NA_real_,
-                                   biomass_source = paste0(.src, " - year not in the other survey (blank)"))]
-      } else .new[!is.finite(new), new := 0]
     }
     .new[, delta := new - fifelse(is.na(cur), 0, cur)]
     .chg <- .new[is.finite(new) & (is.na(cur) | abs(delta) > 0) & !(is.na(cur) & new == 0)]

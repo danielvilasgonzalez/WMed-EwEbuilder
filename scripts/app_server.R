@@ -738,10 +738,11 @@ observeEvent(input$other_survey_upload, {
   file.copy(input$other_survey_upload$datapath, dest, overwrite = TRUE)
   x <- tryCatch(fread(dest), error = function(e) NULL)
   if (!is.null(x)) data.table::setnames(x, tolower(trimws(names(x))))
-  if (is.null(x) || !all(c("species", "year") %in% names(x)) || !any(c("biomass_t_km2", "biomass", "density_t_km2", "density") %in% names(x))) {
-    showNotification("The survey csv needs columns species (scientific name), year and biomass_t_km2.", type = "error"); return() }
+  if (is.null(x) || !"year" %in% names(x) || !any(c("species", "fg_name") %in% names(x)) || !any(c("biomass_t_km2", "biomass", "density_t_km2", "density") %in% names(x))) {
+    showNotification("The survey csv needs columns species (or fg_name), year and biomass_t_km2 (optional: overwrite, area_km2, reference).", type = "error"); return() }
   other_survey(normalizePath(dest))
-  showNotification(sprintf("Survey biomass: %d rows, %d species, %s.", nrow(x), data.table::uniqueN(x$species),
+  .ow <- if ("overwrite" %in% names(x)) !(tolower(trimws(as.character(x$overwrite))) %in% c("false", "f", "no", "n", "0")) else rep(TRUE, nrow(x))
+  showNotification(sprintf("Survey biomass: %d rows (%d replace, %d fill gaps), %s.", nrow(x), sum(.ow), sum(!.ow),
                            paste(range(x$year, na.rm = TRUE), collapse = "-")), duration = 6)
 })
 output$other_survey_info <- renderUI({
@@ -752,7 +753,9 @@ output$other_survey_info <- renderUI({
 })
 observeEvent(input$other_survey_reset, other_survey(NA_character_))
 output$dl_other_survey_template <- downloadHandler("survey_biomass_template.csv", function(file)
-  writeLines(c("species,year,biomass_t_km2,area_km2,reference"), file))
+  writeLines(c("species,fg_name,year,biomass_t_km2,overwrite,area_km2,reference",
+               "Diplodus sargus,,1995,0.12,TRUE,,visual census (example: replaces this species in 1995)",
+               ",Groupers,2000,0.05,FALSE,,literature (example: whole FG; only if no other biomass in 2000)"), file))
 observeEvent(input$fg_upload, {   # an uploaded csv is kept next to the run files so the run can read it
   dest <- file.path(.run_dir, paste0("uploaded_", gsub("[^A-Za-z0-9_.-]", "_", input$fg_upload$name)))
   file.copy(input$fg_upload$datapath, dest, overwrite = TRUE)
