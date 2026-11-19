@@ -2609,6 +2609,19 @@ MedBFM and PISCES, and $P(y,m)$ is PISCES in year $y$ (the ratio is kept
 within 1/4–4). So the level and seasonal cycle are MedBFM's and only the
 year-to-year change comes from PISCES.
 
+Every coarser field goes through the same chain before it is used
+(PISCES here, ISIMIP3b in the scenarios, any map on the Ecospace base
+map): **read** the source; **regrid** to the reference grid, first
+filling its empty coastal cells from their neighbours (3 × 3 mean of the
+valid cells, `ENV_COAST_FILL_PASSES` = 5 passes) so the interpolation
+reaches the coast, then bilinear interpolation; **bias-correct** with the
+monthly statistics of the overlap period (per cell and calendar month:
+the reference climatology times, or plus, the source's change on its own
+climatology); **target grid**: interpolate again to the output grid
+(the MedBFM grid, or the Ecospace base map in 05b) and apply its land
+mask; **write**. A MedBFM cell still without a PISCES value keeps the
+MedBFM climatology (ratio 1).
+
 **Large and Small phytoplankton.** MedBFM gives total phytoplankton only.
 The share of microphytoplankton in the chlorophyll of the satellite size
 classes (`cmems_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M`,

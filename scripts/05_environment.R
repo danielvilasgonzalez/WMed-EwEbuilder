@@ -49,8 +49,11 @@
 ##    cmems_mod_glo_bgc_my_0.25deg_P1M-m (nppv, phyc), SCALED TO MedBFM:
 ##      X_gap(y, m, cell) = MedBFM_clim(m, cell) x PISCES(y, m, cell) / PISCES_clim(m, cell)
 ##    where m = calendar month, the climatologies are the means over
-##    ENV_OVERLAP_YEARS (1999-2010) and PISCES is resampled to the MedBFM
-##    grid. So the level and seasonal cycle are MedBFM's; only the
+##    ENV_OVERLAP_YEARS (1999-2010). PISCES is regridded to the MedBFM grid
+##    after filling its empty coastal cells from their neighbours (3 x 3
+##    mean, ENV_COAST_FILL_PASSES = 5 passes), bilinear; a MedBFM cell
+##    still without a PISCES value keeps the MedBFM climatology (ratio 1);
+##    land is MedBFM's (its climatology is NA there). So the level and seasonal cycle are MedBFM's; only the
 ##    year-to-year change comes from PISCES. The ratio is kept within
 ##    [1/ENV_GAP_RATIO_MAX, ENV_GAP_RATIO_MAX] (4) so a near-zero PISCES
 ##    climatology cannot blow up a cell. These months are marked
@@ -499,6 +502,17 @@ for (nm in names(ENV_DATASETS)) {
 ## =================================================================
 ## STEP 2 - 1994-1998 for npp and phyto_c: PISCES scaled to MedBFM
 ## =================================================================
+## fill the cells next to the coast that the coarser grid leaves empty
+## (3 x 3 mean of the valid neighbours, ENV_COAST_FILL_PASSES passes), so
+## the regridding to the finer grid reaches the coast
+.env_default("ENV_COAST_FILL_PASSES", 5)
+.env_fill_coast <- function(r, passes = ENV_COAST_FILL_PASSES) {
+  for (p in seq_len(passes)) {
+    if (!any(is.na(terra::values(r[[1]], mat = FALSE)))) break
+    r <- terra::cover(r, terra::focal(r, w = 3, fun = "mean", na.rm = TRUE, na.policy = "only"))
+  }
+  r
+}
 .env_gap_fill <- function(nm, var) {
   med <- env_maps[[nm]]
   if (is.null(med)) return(NULL)
@@ -513,7 +527,7 @@ for (nm in names(ENV_DATASETS)) {
     .env_year(nm, y, ENV_GLOBAL_BGC, var, c(0, ENV_INTEGRATION_DEPTH), TRUE, tag = paste0(nm, "_pisces")))
   glo <- do.call(c, Filter(Negate(is.null), glo))
   if (is.null(glo)) { .env_msg("[gap fill] ", nm, ": PISCES download failed - not filled."); return(NULL) }
-  glo <- terra::resample(glo, med[[1]], method = "bilinear")
+  glo <- terra::resample(.env_fill_coast(glo), med[[1]], method = "bilinear")   # fill the coast, then interpolate to the MedBFM grid
   mo <- function(x) as.integer(substr(names(x), 6, 7)); yr <- function(x) as.integer(substr(names(x), 1, 4))
   out <- list(); ratios <- data.table()
   for (m in 1:12) {
@@ -523,6 +537,7 @@ for (nm in names(ENV_DATASETS)) {
       k <- which(mo(glo) == m & yr(glo) == y); if (!length(k)) next
       ratio <- glo[[k]] / glo_clim
       ratio <- terra::clamp(ratio, 1 / ENV_GAP_RATIO_MAX, ENV_GAP_RATIO_MAX)
+      ratio <- terra::ifel(is.na(ratio), 1, ratio)                          # still no PISCES value: MedBFM climatology
       x <- med_clim * ratio; names(x) <- sprintf("%d-%02d", y, m)
       out[[names(x)]] <- x
       ratios <- rbind(ratios, data.table(variable = nm, month = names(x),
