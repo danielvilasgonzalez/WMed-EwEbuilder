@@ -2622,8 +2622,8 @@ Every coarser field goes through the same chain before it is used
 (PISCES here, ISIMIP3b in the scenarios, any map on the Ecospace base
 map): **read** the source; **regrid** to the reference grid, first
 filling its empty coastal cells from their neighbours (3 × 3 mean of the
-valid cells, `ENV_COAST_FILL_PASSES` = 5 passes) so the interpolation
-reaches the coast, then bilinear interpolation; **bias-correct** with the
+valid cells, `ENV_COAST_FILL_PASSES` = 5 passes, then the nearest ocean
+cell for any cell still empty) so the interpolation reaches the coast, then bilinear interpolation; **bias-correct** with the
 monthly statistics of the overlap period (per cell and calendar month:
 the reference climatology times, or plus, the source's change on its own
 climatology); **target grid**: interpolate again to the output grid
@@ -2651,7 +2651,11 @@ their own files); the coast is filled before interpolating and the land
 mask applied after; the corrections are per calendar month, multiplicative
 for NPP; each correction is validated on years it was not calibrated on
 (gap fill: 1999, `diagnostics/<variable>_gapfill_validation.csv`;
-scenarios: the hindcast years after 2014, before the join,
+scenarios: a split sample inside the calibration period, statistics from
+2000–2009 tested on 2010–2014 for each ISIMIP3b historical run, raw vs
+corrected, with bias, RMSE, correlation and std ratio,
+`scenarios/environment_scenarios_split_validation.csv`; and the hindcast
+years after 2014, before the join,
 `scenarios/environment_scenarios_validation.csv`); the projected change
 is printed before and after the correction
 (`environment_scenarios_change_check.csv`); and method, reference,

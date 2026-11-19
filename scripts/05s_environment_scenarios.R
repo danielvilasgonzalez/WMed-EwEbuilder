@@ -220,7 +220,7 @@ dir.create(ISIMIP3B_CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
     f <- terra::focal(r, w = 3, fun = "mean", na.rm = TRUE, na.policy = "only")
     r <- terra::cover(r, f)
   }
-  r
+  if (exists(".nn_fill")) .nn_fill(r) else r                       # nearest ocean cell for the rest (05)
 }
 .scn_ym <- function(r) list(y = as.integer(substr(names(r), 1, 4)), m = as.integer(substr(names(r), 6, 7)))
 
@@ -229,7 +229,7 @@ dir.create(ISIMIP3B_CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
 ## =================================================================
 .scn_native <- function(v) { f <- file.path(env_dir, paste0(v, "_monthly_native.tif")); if (file.exists(f)) f else NA_character_ }
 scn_vars <- ENV_SCEN_VARS[!is.na(vapply(ENV_SCEN_VARS, .scn_native, ""))]
-scn_used <- list(); scn_ts <- list(); scn_join <- list(); scn_chk <- list(); scn_val <- list(); scn_native <- list()
+scn_used <- list(); scn_ts <- list(); scn_join <- list(); scn_chk <- list(); scn_val <- list(); scn_native <- list(); scn_split <- list()
 if (!length(scn_vars)) {
   .scn_msg("No monthly maps of 05 to continue - scenarios skipped.")
 } else for (v in scn_vars) {
@@ -244,6 +244,47 @@ if (!length(scn_vars)) {
   hist_fields <- setNames(lapply(ENV_SCEN_MODELS, function(mod) .scn_get(mod, "historical", v)), ENV_SCEN_MODELS)
   for (mod in names(hist_fields)) if (!is.null(hist_fields[[mod]])) scn_native[[paste0(v, " ", mod, " (model units)")]] <- hist_fields[[mod]]
   vv <- setdiff(intersect(tw, full_y), ref)                          # validation years: in the hindcast, not calibrated on
+  ## Split-sample validation inside the calibration period: statistics from
+  ## the first two thirds of the reference years (2000-2009), tested on the
+  ## rest (2010-2014); each ISIMIP3b historical run (no SSP, not smoothed),
+  ## coast filled and regridded, raw vs corrected per calendar month (the
+  ## same correction: monthly mean, NPP monthly ratio). Scores per cell over
+  ## all validation months, then their area-weighted mean: bias, RMSE,
+  ## correlation, std ratio (prediction / hindcast; 1 = same spread).
+  .cal <- sort(ref)[seq_len(ceiling(length(ref) * 2 / 3))]; .val <- setdiff(ref, .cal)
+  if (length(.val) >= 3) for (mod in names(hist_fields)) {
+    Gh <- hist_fields[[mod]]; if (is.null(Gh)) next
+    gh <- .scn_ym(Gh); acc <- list(); yy <- sort(ref)
+    for (m in 1:12) {
+      kg <- which(gh$m == m & gh$y %in% ref); kh <- which(hym$m == m & hym$y %in% ref)
+      if (length(kg) != length(ref) || length(kh) != length(ref)) next
+      kg <- kg[order(gh$y[kg])]; kh <- kh[order(hym$y[kh])]
+      Gm <- terra::values(terra::resample(.scn_fill(Gh[[kg]]), H[[1]], method = "bilinear"), mat = TRUE)
+      Hm <- terra::values(H[[kh]], mat = TRUE)
+      ic <- yy %in% .cal; iv <- yy %in% .val
+      mc <- rowMeans(Gm[, ic, drop = FALSE], na.rm = TRUE); oc <- rowMeans(Hm[, ic, drop = FALSE], na.rm = TRUE)
+      P <- list(raw = Gm[, iv, drop = FALSE],
+                corrected = if (.scn_type[[v]] == "ratio") Gm[, iv, drop = FALSE] * pmin(pmax(oc / mc, 1 / ENV_SCEN_RATIO_MAX), ENV_SCEN_RATIO_MAX)
+                            else Gm[, iv, drop = FALSE] - mc + oc)
+      O <- Hm[, iv, drop = FALSE]
+      for (k in names(P)) {
+        p <- P[[k]]; o <- O; ok <- is.finite(p) & is.finite(o); p[!ok] <- 0; o[!ok] <- 0
+        add <- list(n = rowSums(ok), sp = rowSums(p), so = rowSums(o), spp = rowSums(p^2), soo = rowSums(o^2), spo = rowSums(p * o))
+        acc[[k]] <- if (is.null(acc[[k]])) add else Map(`+`, acc[[k]], add)
+      }
+    }
+    wl <- cos(terra::yFromCell(H[[1]], seq_len(terra::ncell(H[[1]]))) * pi / 180)
+    for (k in names(acc)) {
+      a <- acc[[k]]; n <- a$n; mp <- a$sp / n; mo <- a$so / n
+      vp <- a$spp / n - mp^2; vo <- a$soo / n - mo^2
+      sc_ <- list(bias = mp - mo, rmse = sqrt(pmax(a$spp - 2 * a$spo + a$soo, 0) / n),
+                  corr = (a$spo / n - mp * mo) / sqrt(vp * vo), std_ratio = sqrt(vp / vo))
+      f <- function(x) { ok <- n > 1 & is.finite(x); if (!any(ok)) NA_real_ else sum(x[ok] * wl[ok]) / sum(wl[ok]) }
+      scn_split[[length(scn_split) + 1]] <- data.table(variable = v, model = mod, method = k,
+        calibration = paste(range(.cal), collapse = "-"), validation = paste(range(.val), collapse = "-"), unit = ENV_UNITS_OUT[[v]],
+        bias = f(sc_$bias), rmse = f(sc_$rmse), corr = f(sc_$corr), std_ratio = f(sc_$std_ratio))
+    }
+  }
   for (sc in ENV_SCENARIOS) {
     anoms <- list()
     nsm <- max(0L, as.integer(ENV_SCEN_SMOOTH_YEARS)); half <- nsm %/% 2L
@@ -439,6 +480,14 @@ if (length(scn_ts)) {
     .scn_msg("Validation on years not calibrated on (bias-corrected model vs hindcast, before the join): ",
              paste(sprintf("%s %s bias %+.2f, RMSE %.2f (%+.1f%%)", .va$variable, .va$scenario, .va$bias, .va$rmse, .va$bias_pct), collapse = "; "),
              " - environment_scenarios_validation.csv.")
+  }
+  if (length(scn_split)) {
+    .sp <- rbindlist(scn_split)
+    fwrite(.sp, file.path(scen_dir, "environment_scenarios_split_validation.csv"), sep = ";", dec = ",")
+    .scn_msg("Split-sample validation (calibration ", .sp$calibration[1], ", test ", .sp$validation[1], "; raw -> corrected): ",
+             paste(.sp[, .(t = sprintf("%s %s bias %+.3g -> %+.3g, RMSE %.3g -> %.3g", variable[1], model[1], bias[method == "raw"], bias[method == "corrected"],
+                                       rmse[method == "raw"], rmse[method == "corrected"])), by = .(variable, model)]$t, collapse = "; "),
+             " - environment_scenarios_split_validation.csv.")
   }
   if (length(scn_native) && exists(".env_plot_native"))
     .env_plot_native(scn_native, file.path(out_dir, "plots", "environment", "scenario_inputs_native_grids.png"))

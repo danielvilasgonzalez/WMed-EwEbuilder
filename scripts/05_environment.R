@@ -553,12 +553,31 @@ for (nm in names(ENV_DATASETS)) {
 ## (3 x 3 mean of the valid neighbours, ENV_COAST_FILL_PASSES passes), so
 ## the regridding to the finer grid reaches the coast
 .env_default("ENV_COAST_FILL_PASSES", 5)
+## nearest ocean cell for every cell still without a value (all layers):
+## after the neighbour passes, so no coastal cell is left empty before
+## interpolating (the land values are removed again by the mask after).
+## Skipped on very large grids (only coarse source grids are filled here).
+.nn_fill <- function(r, max_cells = 2e5) {
+  if (terra::ncell(r) > max_cells) return(r)
+  v <- terra::values(r, mat = TRUE)
+  ok <- rowSums(is.finite(v)) > 0
+  if (all(ok) || !any(ok)) return(r)
+  xy <- terra::xyFromCell(r, seq_len(nrow(v))); kx <- cos(mean(xy[, 2]) * pi / 180)
+  oc <- which(ok); ld <- which(!ok); nn <- integer(length(ld))
+  for (ch in split(seq_along(ld), ceiling(seq_along(ld) / 500))) {
+    d2 <- outer(xy[ld[ch], 1], xy[oc, 1], "-")^2 * kx^2 + outer(xy[ld[ch], 2], xy[oc, 2], "-")^2
+    nn[ch] <- oc[max.col(-d2, ties.method = "first")]
+  }
+  v[ld, ] <- v[nn, , drop = FALSE]
+  terra::values(r) <- v
+  r
+}
 .env_fill_coast <- function(r, passes = ENV_COAST_FILL_PASSES) {
   for (p in seq_len(passes)) {
     if (!any(is.na(terra::values(r[[1]], mat = FALSE)))) break
     r <- terra::cover(r, terra::focal(r, w = 3, fun = "mean", na.rm = TRUE, na.policy = "only"))
   }
-  r
+  .nn_fill(r)
 }
 .env_gap_fill <- function(nm, var) {
   med <- env_maps[[nm]]
