@@ -8,7 +8,13 @@ WMed-EwEbuilder is an R pipeline that turns survey, fisheries, literature and oc
 
 Created by: Daniel Vilas (iMARES, ICM-CSIC)
 
-**Contents:** [What you need](#what-you-need) · [How to run it](#how-to-run-it) · [Interactive page](#interactive-page) · [Pipeline steps](#pipeline-steps) · [Main options](#main-options) · [First run](#first-run-downloads-and-time) · [Outputs](#outputs-under-out_dir) · [Reproducibility](#reproducibility) · [Troubleshooting](#troubleshooting) · [Repository structure](#repository-structure) · [Known limitations](#known-limitations) · [How to cite](#how-to-cite)
+**Contents:** [Workflow](#workflow) · [What you need](#what-you-need) · [How to run it](#how-to-run-it) · [Interactive page](#interactive-page) · [Pipeline steps](#pipeline-steps) · [Main options](#main-options) · [First run](#first-run-downloads-and-time) · [Outputs](#outputs-under-out_dir) · [Reproducibility](#reproducibility) · [Troubleshooting](#troubleshooting) · [Repository structure](#repository-structure) · [Known limitations](#known-limitations) · [How to cite](#how-to-cite)
+
+## Workflow
+
+[![WMed-EwEbuilder workflow](ewe_infography.png)](ewe_infography.png)
+
+*The species-to-functional-group table and the data sources feed five blocks (1 biomass, 2 fisheries, 3 P/B, Q/B and traits, 4 diets, 5 environment and Ecospace), checked by 6 diagnostics, which produce the EwE input. Click the figure to open it full size. References by block: [`ewe_infography_references.md`](ewe_infography_references.md).*
 
 ## What you need
 
