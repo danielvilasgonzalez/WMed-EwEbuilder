@@ -2574,8 +2574,7 @@ inputs:
 
 | Variable | Source | Units |
 |---|---|---|
-| `temp_surf` | Copernicus Mediterranean L4 SST analysis (SST_MED_SST_L4_REP_OBSERVATIONS_010_021, satellite, daily 0.05° averaged to months; `ENV_SST_SOURCE = "satellite"`, default; `"reanalysis"` = the physics reanalysis below) | °C |
-| `sal_surf` | Mediterranean physics reanalysis (MEDSEA_MULTIYEAR_PHY_006_004), first level (\~1 m) | PSU |
+| `temp_surf`, `sal_surf` | Mediterranean physics reanalysis (MEDSEA_MULTIYEAR_PHY_006_004), first level (\~1 m) (`ENV_SST_SOURCE = "reanalysis"`, default; `"reanalysis_corrected"` corrects the SST to the Copernicus Mediterranean L4 satellite SST per cell and month over 2000–2014) | °C, PSU |
 | `temp_bot` | same, `bottomT` | °C |
 | `npp` | Mediterranean biogeochemistry reanalysis (MedBFM, MEDSEA_MULTIYEAR_BGC_006_008), `nppv` integrated over the euphotic zone | g C m⁻² d⁻¹ |
 | `phyto_c` | same, `phyc` integrated over the euphotic zone | g C m⁻² |
@@ -2623,6 +2622,19 @@ climatology); **target grid**: interpolate again to the output grid
 mask; **write**. A MedBFM cell still without a PISCES value keeps the
 MedBFM climatology (ratio 1).
 
+**One model for the physics.** SST, salinity and bottom temperature all
+come from the MedPHY reanalysis: one grid, one coastline, one water
+column and the same year-to-year dynamics, so SST and SBT stay
+physically consistent (mixing a satellite SST with a model SBT could put
+a bottom warmer than the surface in shallow, mixed cells, and the two
+products differ in grid, coast and interannual signal). MedPHY already
+assimilates satellite SST. Optionally (`ENV_SST_SOURCE =
+"reanalysis_corrected"`) the MedPHY SST is shifted to the satellite L4
+SST per cell and month: $SST(y,m) = MedPHY(y,m) +
+[\overline{SAT}(m) - \overline{MedPHY}(m)]_{2000–2014}$ (offsets in
+`diagnostics/sst_satellite_correction.csv`; downloads 2000–2014 of the
+satellite record).
+
 **The reference decides what "correct" means.** Each variable rests on
 one reference, the best available for it, and every other source of that
 variable is corrected toward it with the monthly statistics (per cell and
@@ -2635,7 +2647,7 @@ called bias-corrected: its scenario is a stated assumption, labelled so
 
 | Variable | Reference | Corrected toward it | Overlap | Label |
 |---|---|---|---|---|
-| SST | Copernicus Med L4 SST analysis (satellite, daily 0.05° → monthly, from 1982; `ENV_SST_SOURCE = "satellite"`) | ISIMIP3b scenarios | 2000–2014 | bias-adjusted toward observations (a gap-filled analysis, not raw data) |
+| SST | MEDSEA MedPHY reanalysis (assimilates satellite SST); optional: the Copernicus Med L4 satellite analysis (`ENV_SST_SOURCE`) | ISIMIP3b scenarios | 2000–2014 | bias-adjusted toward a reanalysis |
 | NPP, phytoplankton carbon | MedBFM regional biogeochemical reanalysis (~4 km, from 1999) | PISCES 1994–1998; ISIMIP3b scenarios | 2000–2014 | bias-adjusted toward a regional model's view (3-D, short period) |
 | Salinity | MedPHY reanalysis (assimilates profiles) | ISIMIP3b scenarios | 2000–2014 | bias-adjusted toward a reanalysis |
 | Bottom temperature | none observation-based; MedPHY `bottomT` (model) | ISIMIP3b change added to the reanalysis | 2000–2014 | not bias-corrected toward observations: model change on the reanalysis (stated assumption) |
@@ -2760,7 +2772,15 @@ the last observed years; the continuity step below makes each scenario
 start from the last hindcast year. The running mean removes the
 year-to-year noise of the two model runs (which can otherwise put
 SSP5-8.5 below SSP1-2.6 in a given year), keeping their trend and the
-change of the seasonal cycle. The result keeps the level, spatial pattern
+change of the seasonal cycle. This is linear scaling per calendar month
+(trend-preserving). The smoothed change is the forced change only, so the
+observed year-to-year variability is added back as in the delta-change
+method (`ENV_SCEN_VARIABILITY = "observed"`, default): the detrended
+anomalies of the last 20 hindcast years, per cell and month, are replayed
+in order (NPP: as ratios), coming in as the last hindcast year's anomaly
+fades out, so the future varies like the observed record without
+changing the trend. The join trend lines are fitted over the same last 20
+years, which end at the join. The result keeps the level, spatial pattern
 and seasonal cycle of the recent hindcast and adds the climate models'
 change; the scenarios start the year after the last hindcast year, so
 historical and future join in one series. Up to 2050 the SSPs differ by

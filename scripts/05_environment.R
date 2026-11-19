@@ -11,8 +11,8 @@
 ##
 ## WHAT IT MAKES
 ##  Monthly, for the run's years (TS_YEARS, plus the Ecopath years):
-##   temp_surf  sea surface temperature, deg C   satellite L4 SST analysis (ENV_SST_SOURCE = "satellite",
-##              default; "reanalysis" = MedPHY thetao, first level ~1 m)
+##   temp_surf  sea surface temperature, deg C   MedPHY reanalysis, thetao, first level (~1 m)
+##              (optional: corrected to the satellite L4 SST, ENV_SST_SOURCE, STEP 1b)
 ##   sal_surf   sea surface salinity             MedPHY reanalysis, so, first level
 ##   temp_bot   sea bottom temperature, deg C    MedPHY reanalysis, bottomT
 ##   npp        net primary production, g C m-2 d-1, integrated over the euphotic zone
@@ -42,19 +42,24 @@
 ##  every other source of that variable (the PISCES gap fill, the ISIMIP3b
 ##  scenarios of 05s) is corrected toward it over the overlap years
 ##  2000-2014 (ISIMIP3b historical runs end in 2014):
-##    SST                   satellite L4 analysis (observation-based)
+##    SST, salinity,        MEDSEA MedPHY reanalysis (one model for the
+##    bottom T              physics, so SST and SBT stay consistent; SST
+##                          assimilates satellite SST). Optional
+##                          (ENV_SST_SOURCE): MedPHY SST corrected to the
+##                          satellite L4 analysis, or the satellite alone
 ##    NPP, phytoplankton    MedBFM regional biogeochemical reanalysis (a
 ##                          model: corrected toward its view)
-##    salinity, bottom T    MedPHY reanalysis; bottom T has no
-##                          observation-based reference, so its scenarios
-##                          are a delta on the reanalysis (stated
-##                          assumption, labelled so)
+##                          Bottom T has no observation-based reference,
+##                          so its scenarios are a delta on the reanalysis
+##                          (stated assumption, labelled so)
 ##  - SST: SST_MED_SST_L4_REP_OBSERVATIONS_010_021 (dataset
 ##    cmems_SST_MED_SST_L4_REP_OBSERVATIONS_010_021, analysed_sst, K),
 ##    gap-filled L4 analysis of satellite SST, daily, 0.05 deg, night-time,
 ##    from 1982; averaged to monthly means (an analysis, not raw data).
+##    Not used by default; only with ENV_SST_SOURCE = "reanalysis_corrected"
+##    (downloads ENV_SST_REF_YEARS, 2000-2014) or "satellite".
 ##  - Physics: MEDSEA_MULTIYEAR_PHY_006_004 (Med reanalysis, 1/24 deg,
-##    from 1987; SST only with ENV_SST_SOURCE = "reanalysis"), datasets cmems_mod_med_phy-temp_my_4.2km_P1M-m (thetao,
+##    from 1987; SST, SSS, SBT), datasets cmems_mod_med_phy-temp_my_4.2km_P1M-m (thetao,
 ##    bottomT) and cmems_mod_med_phy-sal_my_4.2km_P1M-m (so); the most
 ##    recent months from the "myint" (interim) datasets.
 ##  - Biogeochemistry: MEDSEA_MULTIYEAR_BGC_006_008 (MedBFM, 1/24 deg,
@@ -141,7 +146,8 @@ source(file.path(git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"))   # c
 .env_default("ENV_ECOPATH_PB_YEARS", if (exists("YEAR_ECOPATH", envir = .GlobalEnv)) YEAR_ECOPATH else 1994:1996)   # NPP of the Ecopath years
 .env_default("ENV_BASE_YEAR", ENV_ECOPATH_B_YEAR)                     # Ecosim forcing = value / mean of this year
 .env_default("ENV_OVERLAP_YEARS", 2000:2014)                          # MedBFM vs PISCES, for the gap fill (same overlap as the scenarios)
-.env_default("ENV_SST_SOURCE", "satellite")                          # SST: "satellite" (Copernicus Med L4 SST analysis, observation-based; reference) or "reanalysis" (MedPHY thetao)
+.env_default("ENV_SST_SOURCE", "reanalysis")                         # SST: "reanalysis" (MEDSEA MedPHY thetao, like SSS and SBT; default), "reanalysis_corrected" (MedPHY corrected to the satellite L4 SST) or "satellite" (satellite L4 only)
+.env_default("ENV_SST_REF_YEARS", 2000:2014)                          # overlap of MedPHY and the satellite SST for the correction
 .env_default("ENV_GAP_RATIO_MAX", 4)
 .env_default("ENV_PFT_YEARS", 2002:2004)   # size classes exist from 2002
 .env_default("ENV_INTEGRATION_DEPTH", 200)                            # m, deepest level read for NPP and phytoplankton carbon
@@ -184,7 +190,7 @@ cat("Run started: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n", sep = "", fi
 
 ## --- Datasets (my = reanalysis, myint = interim for the latest months) --
 ENV_DATASETS <- list(
-  temp_surf = if (identical(ENV_SST_SOURCE, "satellite"))
+  temp_surf = if (identical(ENV_SST_SOURCE, "satellite"))   # "reanalysis" and "reanalysis_corrected": MedPHY, like SSS and SBT
                 list(ids = "cmems_SST_MED_SST_L4_REP_OBSERVATIONS_010_021", var = "analysed_sst", depth = NULL,
                      integrate = FALSE, tag = "temp_surf_satL4")   # daily 0.05 deg, from 1982; monthly means
               else list(ids = c("cmems_mod_med_phy-temp_my_4.2km_P1M-m", "cmems_mod_med_phy-temp_myint_4.2km_P1M-m"),
@@ -572,6 +578,50 @@ for (nm in names(ENV_DATASETS)) {
   fwrite(ratios, file.path(diag_dir, paste0(nm, "_gapfill_ratios.csv")))
   r <- do.call(c, unname(out)); r[[order(names(r))]]
 }
+## =================================================================
+## STEP 1b - SST: MedPHY bias-corrected to the satellite L4 SST
+## =================================================================
+## SST, SSS and SBT all come from the same MedPHY reanalysis (one model:
+## the same grid, coast, water column and year-to-year dynamics, so SST
+## and SBT stay physically consistent, e.g. no bottom warmer than the
+## surface from mixing two products). The satellite L4 SST analysis is the
+## observation-based reference: MedPHY SST is corrected toward it by linear
+## scaling per cell and calendar month over ENV_SST_REF_YEARS (2000-2014):
+##   SST(y,m) = MedPHY(y,m) + [SAT_clim(m) - MedPHY_clim(m)]
+## the satellite fields put on the MedPHY grid (coast filled, bilinear).
+## Only the reference years of the satellite are downloaded. The monthly
+## offset over the model area is written to sst_satellite_correction.csv;
+## the share of cell-months with SBT above the corrected SST (> 0.5 deg C)
+## is logged as a consistency check.
+if (identical(ENV_SST_SOURCE, "reanalysis_corrected") && !is.null(env_maps[["temp_surf"]])) {
+  .sat <- lapply(ENV_SST_REF_YEARS, function(y) .env_year("temp_surf", y, "cmems_SST_MED_SST_L4_REP_OBSERVATIONS_010_021",
+                                                          "analysed_sst", NULL, FALSE, tag = "temp_surf_satL4"))
+  .sat <- Filter(Negate(is.null), .sat)
+  .med <- env_maps[["temp_surf"]]
+  .mo <- function(x) as.integer(substr(names(x), 6, 7)); .yr <- function(x) as.integer(substr(names(x), 1, 4))
+  if (length(.sat) >= 5) {
+    .sat <- terra::resample(.env_fill_coast(do.call(c, .sat)), .med[[1]], method = "bilinear")
+    .off <- lapply(1:12, function(m) {
+      d <- terra::app(.sat[[which(.mo(.sat) == m)]], mean, na.rm = TRUE) -
+        terra::app(.med[[which(.mo(.med) == m & .yr(.med) %in% ENV_SST_REF_YEARS)]], mean, na.rm = TRUE)
+      terra::ifel(is.na(d), 0, d)
+    })
+    .tab <- data.table(month = 1:12, mean_offset_degC = vapply(.off, .env_domain_mean, numeric(1)))
+    fwrite(.tab, file.path(diag_dir, "sst_satellite_correction.csv"))
+    env_maps[["temp_surf"]] <- terra::mask(.med + terra::rast(.off[.mo(.med)]), .med)
+    names(env_maps[["temp_surf"]]) <- names(.med)
+    .env_msg("[SST] MedPHY SST bias-corrected to the satellite L4 SST (per cell and month, ", min(ENV_SST_REF_YEARS), "-", max(ENV_SST_REF_YEARS),
+             "): mean offset over the model area ", sprintf("%+.2f", mean(.tab$mean_offset_degC)), " deg C (",
+             sprintf("%+.2f", min(.tab$mean_offset_degC)), " to ", sprintf("%+.2f", max(.tab$mean_offset_degC)), " by month; sst_satellite_correction.csv).")
+    if (!is.null(env_maps[["temp_bot"]]) && terra::compareGeom(env_maps[["temp_bot"]][[1]], .med[[1]], stopOnError = FALSE)) {
+      .k <- intersect(names(env_maps[["temp_bot"]]), names(.med))
+      .inv <- terra::global(env_maps[["temp_bot"]][[.k]] - env_maps[["temp_surf"]][[.k]] > 0.5, "mean", na.rm = TRUE)$mean
+      .env_msg("[SST] Consistency: bottom temperature above the corrected SST by > 0.5 deg C in ", round(100 * mean(.inv, na.rm = TRUE), 2),
+               "% of the cell-months (", length(.k), " months).")
+    }
+  } else .env_msg("[SST] Satellite L4 SST not available for ", min(ENV_SST_REF_YEARS), "-", max(ENV_SST_REF_YEARS), " - MedPHY SST left uncorrected.")
+}
+
 env_gap <- list()
 for (nm in c("npp", "phyto_c")) {
   g <- .env_gap_fill(nm, ENV_DATASETS[[nm]]$var)
@@ -663,7 +713,7 @@ if (!is.null(env_maps[["phyto_c"]])) {
 ## =================================================================
 ts_rows <- list(); ann_rows <- list()
 for (nm in names(env_maps)) {
-  r <- env_maps[[nm]]; src <- rep(if (nm %in% c("npp", "phyto_c")) "MedBFM reanalysis" else if (nm %in% c("phyto_large", "phyto_small")) "MedBFM x satellite size share" else if (nm == "temp_surf" && identical(ENV_SST_SOURCE, "satellite")) "Satellite L4 SST analysis" else "MedPHY reanalysis", terra::nlyr(r))
+  r <- env_maps[[nm]]; src <- rep(if (nm %in% c("npp", "phyto_c")) "MedBFM reanalysis" else if (nm %in% c("phyto_large", "phyto_small")) "MedBFM x satellite size share" else if (nm == "temp_surf" && identical(ENV_SST_SOURCE, "satellite")) "Satellite L4 SST analysis" else if (nm == "temp_surf" && identical(ENV_SST_SOURCE, "reanalysis_corrected")) "MedPHY reanalysis, corrected to satellite SST" else "MedPHY reanalysis", terra::nlyr(r))
   if (!is.null(env_gap[[nm]])) {
     g <- env_gap[[nm]]
     r <- c(g, terra::resample(r, g[[1]])); src <- c(rep("PISCES scaled to MedBFM", terra::nlyr(g)), src)

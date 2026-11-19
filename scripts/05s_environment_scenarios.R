@@ -117,6 +117,7 @@
 .scn_default("ENV_SCEN_JOIN", TRUE)                               # continuity adjustment at the hindcast -> scenario join
 .scn_default("ENV_SCEN_JOIN_YEARS", 1L)                           # last hindcast years the join is matched on (1 = the scenario continues from the last hindcast year)
 .scn_default("ENV_SCEN_BLEND_YEARS", 10L)                         # years over which the join offset fades out; 0 = kept throughout
+.scn_default("ENV_SCEN_VARIABILITY", "observed")                  # with the smoothed change: "observed" replays the hindcast's detrended year-to-year anomalies (delta change); "none" = forced change only
 .scn_default("ISIMIP3B_CACHE_DIR", file.path(out_dir, "isimip3b_cache"))
 .scn_default("ISIMIP_FILES_API", "https://files.isimip.org/api/v2")
 .scn_default("ISIMIP_FILES_URL", "https://files.isimip.org")
@@ -233,6 +234,7 @@ if (!length(scn_vars)) {
   H <- terra::rast(.scn_native(v)); hym <- .scn_ym(H)
   full_y <- as.integer(names(which(table(hym$y) == 12)))           # complete hindcast years
   ref <- if (is.null(ENV_SCEN_REF_YEARS)) utils::tail(sort(full_y), ENV_SCEN_REF_N) else intersect(ENV_SCEN_REF_YEARS, full_y)
+  tw <- utils::tail(sort(full_y), ENV_SCEN_REF_N)                    # recent window: join trends and the observed year-to-year anomalies
   if (length(ref) < 5) { .scn_msg(v, ": the hindcast covers only ", length(ref), " year(s) of the reference period - skipped."); next }
   yrs_f <- (max(hym$y) + 1L):as.integer(ENV_SCEN_END)
   if (max(hym$y) >= ENV_SCEN_END) { .scn_msg(v, ": the hindcast already reaches ", ENV_SCEN_END, " - nothing to add."); next }
@@ -241,7 +243,7 @@ if (!length(scn_vars)) {
   for (sc in ENV_SCENARIOS) {
     anoms <- list()
     nsm <- max(0L, as.integer(ENV_SCEN_SMOOTH_YEARS)); half <- nsm %/% 2L
-    yrs_out <- sort(unique(c(ref, yrs_f)))                             # reference years (bias check) + scenario years
+    yrs_out <- sort(unique(c(ref, tw, yrs_f)))                         # reference years + join window + scenario years
     yrs_calc <- if (nsm > 1) (min(yrs_out) - half):(max(yrs_out) + half) else yrs_out   # margin so the running mean is centred
     for (mod in ENV_SCEN_MODELS) {
       Gh <- hist_fields[[mod]]; Gs <- .scn_get(mod, sc, v)
@@ -285,9 +287,10 @@ if (!length(scn_vars)) {
       fit <- mu + outer(b, xc)
       list(fit = fit, sd = sqrt(rowSums((Y - fit)^2) / max(1, length(x) - 2)), at = function(x0) mu + b * (mean(x0) - mean(x)))
     }
-    jy <- utils::tail(sort(intersect(full_y, ay)), ENV_SCEN_JOIN_YEARS)
+    jy <- utils::tail(sort(intersect(full_y, ay)), ENV_SCEN_JOIN_YEARS)   # the last hindcast year(s): ay holds the join window tw
+    do_obs <- identical(ENV_SCEN_VARIABILITY, "observed") && nsm > 1
     do_var <- isTRUE(ENV_SCEN_VAR_SCALE) && nsm <= 1 && !ratio
-    var_note <- if (do_var) ", variance scaled" else ""
+    var_note <- if (do_var) ", variance scaled" else if (do_obs) paste0(", observed year-to-year variability (", min(tw), "-", max(tw), ", detrended) replayed") else ""
     kf <- which(ay %in% yrs_f); out <- vector("list", 12)
     for (m in 1:12) {
       ka <- which(mo == m); xa <- ay[ka]
@@ -305,15 +308,17 @@ if (!length(scn_vars)) {
       hc <- terra::values(Hclim[[m]], mat = FALSE)
       Xm <- if (ratio) Am * hc else Am + hc
       kfm <- which(xa %in% yrs_f)
+      w <- if (isTRUE(ENV_SCEN_JOIN) && length(jy) && ENV_SCEN_BLEND_YEARS > 0) pmax(0, 1 - (xa[kfm] - max(jy)) / ENV_SCEN_BLEND_YEARS) else
+        rep(if (isTRUE(ENV_SCEN_JOIN) && length(jy)) 1 else 0, length(kfm))   # 1 at the last hindcast year
       if (isTRUE(ENV_SCEN_JOIN) && length(jy)) {
         hm <- rowMeans(terra::values(H[[which(hym$m == m & hym$y %in% jy)]], mat = TRUE), na.rm = TRUE)
         xm <- rowMeans(Xm[, xa %in% jy, drop = FALSE], na.rm = TRUE)
         ## systematic part: hindcast trend line vs adjusted-model trend line over the reference
         ## years, both at the join (kept); the rest is the last years' weather (fades out)
-        kh <- which(hym$m == m & hym$y %in% ref); kr <- which(xa %in% ref)
+        ## trend lines over the recent window tw (it ends at the join), not over the bias reference
+        kh <- which(hym$m == m & hym$y %in% tw); kr <- which(xa %in% tw)
         th <- .trend(terra::values(H[[kh]], mat = TRUE), hym$y[kh])$at(jy)
         tx <- .trend(Xm[, kr, drop = FALSE], xa[kr])$at(jy)
-        w <- if (ENV_SCEN_BLEND_YEARS > 0) pmax(0, 1 - (xa[kfm] - max(jy)) / ENV_SCEN_BLEND_YEARS) else rep(1, length(kfm))   # 1 at the last hindcast year
         if (ratio) {
           .cl <- function(z, d) { z <- pmin(pmax(z, 1 / ENV_SCEN_RATIO_MAX), ENV_SCEN_RATIO_MAX); z[!is.finite(z)] <- d; z }
           D <- .cl(hm / xm, 1); Ds <- .cl(th / tx, 1)
@@ -322,6 +327,20 @@ if (!length(scn_vars)) {
           D <- hm - xm; D[!is.finite(D)] <- 0
           Ds <- th - tx; Ds[!is.finite(Ds)] <- 0
           Xm[, kfm] <- Xm[, kfm, drop = FALSE] + Ds + outer(D - Ds, w)
+        }
+      }
+      ## Observed year-to-year variability (delta change): the smoothed change is the forced
+      ## change only, so the detrended anomalies of the hindcast's recent window tw are replayed
+      ## in order, year after year; they come in as the last year's anomaly fades (weight 1 - w).
+      if (do_obs && length(kfm)) {
+        kw <- which(hym$m == m & hym$y %in% tw); kw <- kw[order(hym$y[kw])]
+        if (length(kw) >= 5) {
+          Hw <- terra::values(H[[kw]], mat = TRUE); fw <- .trend(Hw, hym$y[kw])$fit
+          E <- if (ratio) pmin(pmax(Hw / fw, 1 / ENV_SCEN_RATIO_MAX), ENV_SCEN_RATIO_MAX) else Hw - fw
+          E[!is.finite(E)] <- if (ratio) 1 else 0
+          Er <- E[, ((seq_along(kfm) - 1L) %% ncol(E)) + 1L, drop = FALSE]
+          wr <- matrix(1 - w, nrow(Er), ncol(Er), byrow = TRUE)
+          Xm[, kfm] <- if (ratio) Xm[, kfm, drop = FALSE] * Er^wr else Xm[, kfm, drop = FALSE] + Er * wr
         }
       }
       r <- terra::rast(H[[1]], nlyrs = length(kfm)); terra::values(r) <- Xm[, kfm, drop = FALSE]
@@ -358,12 +377,14 @@ if (length(scn_ts)) {
   fwrite(rbindlist(scn_used), file.path(scen_dir, "environment_scenarios_models.csv"))
   .ref_tab <- data.table(
     variable  = c("temp_surf", "sal_surf", "temp_bot", "npp"),
-    reference = c(if (exists("ENV_SST_SOURCE") && identical(ENV_SST_SOURCE, "reanalysis")) "MedPHY reanalysis (model, assimilates satellite SST)" else
-                    "Copernicus Med L4 SST analysis (satellite, observation-based, gap-filled)",
+    reference = c(if (!exists("ENV_SST_SOURCE") || identical(ENV_SST_SOURCE, "reanalysis")) "MedPHY reanalysis (model, assimilates satellite SST)" else
+                    if (exists("ENV_SST_SOURCE") && identical(ENV_SST_SOURCE, "satellite")) "Copernicus Med L4 SST analysis (satellite, observation-based, gap-filled)" else
+                    "MedPHY reanalysis corrected to the Copernicus Med L4 satellite SST (per cell and month, 2000-2014)",
                   "MedPHY reanalysis (model, assimilates profiles)", "MedPHY reanalysis bottomT (model; no observation-based reference)",
                   "MedBFM regional biogeochemical reanalysis (model)"),
     overlap_years = paste(range(if (is.null(ENV_SCEN_REF_YEARS)) NA else ENV_SCEN_REF_YEARS), collapse = "-"),
-    label = c("bias-adjusted toward satellite observations", "bias-adjusted toward a reanalysis",
+    label = c(if (!exists("ENV_SST_SOURCE") || identical(ENV_SST_SOURCE, "reanalysis")) "bias-adjusted toward a reanalysis (assimilates satellite SST)" else "bias-adjusted toward satellite observations",
+              "bias-adjusted toward a reanalysis",
               "not bias-corrected toward observations: model change added to the reanalysis (stated assumption)",
               "bias-adjusted toward a regional model's view"))
   fwrite(.ref_tab[variable %in% scn_vars], file.path(scen_dir, "environment_scenarios_reference.csv"), sep = ";", dec = ",")
