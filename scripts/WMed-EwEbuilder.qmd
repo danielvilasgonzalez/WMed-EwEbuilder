@@ -2583,7 +2583,15 @@ Euphotic zone (`ENV_INTEGRATION = "euphotic"`, the default): per cell
 and month, the depth above which 99 % of the column NPP happens
 (`ENV_EU_FRACTION`, from MedBFM's NPP profile); NPP is that 99 % and
 phytoplankton carbon is integrated down to the same depth, so B and P/B
-describe the same layer (phytoplankton below it does not produce). The
+describe the same layer (phytoplankton below it does not produce). Layer
+thickness is the bottom minus the top interface of each level (the file's
+depth bounds when it has them, else the interfaces halfway between level
+centres; `diagnostics/netcdf_units_and_levels.csv`, column
+`layer_thickness_from`); in shallow cells only the levels that exist are
+summed, and land stays missing, not zero. Units: mg C m⁻³ d⁻¹ × m →
+g C m⁻² d⁻¹. The scenarios use the ISIMIP3b full-column NPP (`intpp`)
+only as a ratio to its own climatology, so its units and depth cancel;
+the change of the euphotic NPP is assumed to be that of the column. The
 Ecopath B and P/B, the Ecosim NPP forcing and the Ecospace NPP and
 phytoplankton maps all use these euphotic totals.
 Water column (`ENV_INTEGRATION = "column"`): per cell and
@@ -2780,7 +2788,15 @@ anomalies of the last 20 hindcast years, per cell and month, are replayed
 in order (NPP: as ratios), coming in as the last hindcast year's anomaly
 fades out, so the future varies like the observed record without
 changing the trend. The join trend lines are fitted over the same last 20
-years, which end at the join. The result keeps the level, spatial pattern
+years, which end at the join. NPP, a positive variable, is corrected multiplicatively at
+every step (monthly ratio for the mean, ratio anomalies for the
+variability, ratio offset for the join, no variance scaling), so it stays
+positive and a −20 % change in a calendar month stays −20 % (the annual
+change can differ slightly); temperature and salinity are additive.
+`scenarios/environment_scenarios_change_check.csv` checks both, per
+scenario and variable: the share of negative cell-months and the change
+of the last 20 scenario years against the reference period, the models'
+own (mean monthly) change next to the corrected annual change. The result keeps the level, spatial pattern
 and seasonal cycle of the recent hindcast and adds the climate models'
 change; the scenarios start the year after the last hindcast year, so
 historical and future join in one series. Up to 2050 the SSPs differ by

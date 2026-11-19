@@ -227,7 +227,7 @@ dir.create(ISIMIP3B_CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
 ## =================================================================
 .scn_native <- function(v) { f <- file.path(env_dir, paste0(v, "_monthly_native.tif")); if (file.exists(f)) f else NA_character_ }
 scn_vars <- ENV_SCEN_VARS[!is.na(vapply(ENV_SCEN_VARS, .scn_native, ""))]
-scn_used <- list(); scn_ts <- list(); scn_join <- list()
+scn_used <- list(); scn_ts <- list(); scn_join <- list(); scn_chk <- list()
 if (!length(scn_vars)) {
   .scn_msg("No monthly maps of 05 to continue - scenarios skipped.")
 } else for (v in scn_vars) {
@@ -354,6 +354,23 @@ if (!length(scn_vars)) {
     hl <- terra::global(H[[which(hym$y %in% jy)]], "mean", na.rm = TRUE)$mean
     fy <- utils::head(yrs_f, length(jy))
     sl <- terra::global(X[[which(as.integer(substr(names(X), 1, 4)) %in% fy)]], "mean", na.rm = TRUE)$mean
+    ## Check of the correction: negatives (a positive variable must stay > 0)
+    ## and the change of the last 20 scenario years against the reference,
+    ## model's own change (mean of its monthly change) vs the corrected
+    ## annual change; positive variables (NPP) are corrected by a monthly
+    ## ratio, so a -20 % month stays -20 %, the annual % can differ a little.
+    .fy <- utils::tail(yrs_f, 20)
+    .kx <- which(as.integer(substr(names(X), 1, 4)) %in% .fy); .ka <- which(ay %in% .fy)
+    if (length(.kx) && length(.ka)) {
+      .hc <- terra::app(Hclim, mean, na.rm = TRUE); .xf <- terra::app(X[[.kx]], mean, na.rm = TRUE); .af <- terra::app(A[[.ka]], mean, na.rm = TRUE)
+      scn_chk[[length(scn_chk) + 1]] <- data.table(scenario = sc, variable = v,
+        method = if (ratio) "monthly ratio (multiplicative)" else "monthly additive (linear scaling)",
+        years = paste(range(.fy), collapse = "-"), reference = paste(range(ref), collapse = "-"),
+        unit = if (ratio) "%" else ENV_UNITS_OUT[[v]],
+        model_change = if (ratio) 100 * (.env_domain_mean(.af) - 1) else .env_domain_mean(.af),
+        corrected_change = if (ratio) 100 * (.env_domain_mean(.xf / .hc) - 1) else .env_domain_mean(.xf - .hc),
+        negative_cell_months_pct = 100 * mean(terra::global(X < 0, "mean", na.rm = TRUE)$mean, na.rm = TRUE))
+    }
     scn_join[[length(scn_join) + 1]] <- data.table(scenario = sc, variable = v, unit = ENV_UNITS_OUT[[v]],
       hindcast_years = paste(range(jy), collapse = "-"), hindcast_mean = mean(hl), scenario_years = paste(range(fy), collapse = "-"),
       scenario_mean = mean(sl), step = mean(sl) - mean(hl))
@@ -389,6 +406,13 @@ if (length(scn_ts)) {
               "bias-adjusted toward a regional model's view"))
   fwrite(.ref_tab[variable %in% scn_vars], file.path(scen_dir, "environment_scenarios_reference.csv"), sep = ";", dec = ",")
   if (length(scn_join)) fwrite(rbindlist(scn_join), file.path(scen_dir, "environment_scenarios_continuity.csv"), sep = ";", dec = ",")
+  if (length(scn_chk)) {
+    .ck <- rbindlist(scn_chk)
+    fwrite(.ck, file.path(scen_dir, "environment_scenarios_change_check.csv"), sep = ";", dec = ",")
+    .scn_msg("Change check (last 20 years vs reference; model vs corrected): ",
+             paste(sprintf("%s %s %+.2f vs %+.2f %s (negatives %.2f%%)", .ck$variable, .ck$scenario, .ck$model_change, .ck$corrected_change,
+                           .ck$unit, .ck$negative_cell_months_pct), collapse = "; "), " - environment_scenarios_change_check.csv.")
+  }
   hind <- if (exists("env_ts") && nrow(env_ts)) env_ts else fread(file.path(env_dir, "environment_timeseries_monthly.csv"))
   base <- hind[year == ENV_BASE_YEAR, .(base = mean(value, na.rm = TRUE)), by = variable]
   S <- merge(S, base, by = "variable", all.x = TRUE)

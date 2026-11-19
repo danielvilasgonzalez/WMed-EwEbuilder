@@ -305,6 +305,21 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
   z <- if (length(i_dep)) dimvals[[i_dep]] else 0
   th <- .env_thickness(z, ENV_INTEGRATION_DEPTH)
   edges_lo <- c(0, head(cumsum(th), -1)); edges_hi <- cumsum(th)
+  ## layer thickness = bottom - top interface: from the file's depth bounds
+  ## when it has them (depth_bnds), else the interfaces halfway between the
+  ## level centres (.env_thickness); capped at ENV_INTEGRATION_DEPTH
+  bnds_from <- "midpoints between level centres"
+  bn <- intersect(c("depth_bnds", "depth_bounds", "lev_bnds", "deptht_bounds"), names(nc$var))
+  if (integrate && length(i_dep) && length(bn)) {
+    b <- tryCatch(ncdf4::ncvar_get(nc, bn[1]), error = function(e) NULL)
+    if (is.matrix(b) && any(dim(b) == 2)) {
+      if (nrow(b) != 2) b <- t(b)
+      if (ncol(b) == length(z)) {
+        edges_lo <- pmin(pmin(b[1, ], b[2, ]), ENV_INTEGRATION_DEPTH); edges_hi <- pmin(pmax(b[1, ], b[2, ]), ENV_INTEGRATION_DEPTH)
+        th <- pmax(edges_hi - edges_lo, 0); bnds_from <- bn[1]
+      }
+    }
+  }
   ## euphotic depth: computed from the NPP profile (name == "npp") and kept
   ## per month in zeu_file; phytoplankton carbon (name == "phyto_c") reads it
   zeu_store <- list()
@@ -377,7 +392,7 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
              " m (10-90%: ", round(zq[[1]]), "-", round(zq[[3]]), " m).")
   attr(r, "diag") <- data.table(variable = name, file = basename(f), units = units, per_second_converted = per_second,
                                 n_levels = length(z), top_m = min(z), bottom_m = max(z),
-                                thickness_sum_m = if (integrate) sum(th) else NA_real_,
+                                thickness_sum_m = if (integrate) sum(th) else NA_real_, layer_thickness_from = if (integrate) bnds_from else NA_character_,
                                 integration = if (integrate) (if (length(zeu_vals)) "euphotic" else paste0("0-", ENV_INTEGRATION_DEPTH, " m")) else "surface/bottom",
                                 zeu_p10_m = zq[[1]], zeu_median_m = zq[[2]], zeu_p90_m = zq[[3]],
                                 share_last_50m_pct = if (length(deep_share)) round(100 * mean(unlist(deep_share)), 2) else NA_real_)

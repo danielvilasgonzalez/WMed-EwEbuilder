@@ -959,7 +959,16 @@ output$fg_table_view <- renderUI({
 ## run). Until a script has run here, the times of the Windows run of
 ## 2026-10-29 are used. 01 is slower the first time after a change of GSAs
 ## (bathymetry download).
-.step_min_default <- c(6.8, 11.7, 4.9, 5.1, 15, 2, 1.6)   # 05: a rerun with the years cached; the first run takes hours; 05b: minutes
+.step_min_default <- c(6.8, 11.7, 4.9, 5.1, 15, 2, 1.6, 45)   # 05: a rerun with the years cached; the first run takes hours; 05b: minutes; 8 = 05 with climate scenarios (05s runs inside 05)
+## 05 runs FIRST (before 01) when the phytoplankton comes from it
+## (PHYTO_SOURCE = "copernicus") and 01 or 03 runs and its outputs are
+## missing, even if it is not ticked (run_pipeline_demo.R does the same)
+.with_auto05 <- function(steps, phyto = "copernicus") {
+  if (identical(phyto, "copernicus") && any(c(1, 3) %in% steps) && !5 %in% steps && !is.na(.out_dir) &&
+      !file.exists(file.path(.out_dir, "environment", "environment_timeseries_annual.csv"))) c(5, steps) else steps
+}
+## the scenarios of a run (settings file of that run): 05 takes much longer with them
+.scen_in_settings <- function() any(grepl('^ENV_SCENARIOS\\s*<-\\s*c\\(\\s*"', .settings_lines()))
 .step_names <- c("01 biomass", "02 fisheries", "03 P/B, Q/B", "04 diets", "05 environment", "05b Ecospace maps + 05c responses", "06 diagnostics")
 
 ## --- Custom region from an uploaded shapefile / polygon file ---------------
@@ -1284,9 +1293,10 @@ run_note <- reactiveVal("")
   old <- if (!file.exists(.times_file)) NULL else tryCatch(utils::read.csv(.times_file, stringsAsFactors = FALSE), error = function(e) NULL)
   if (!is.null(old) && run %in% old$run) return(invisible())
   new <- data.frame(run = run, step = as.integer(names(m)), minutes = unname(m))
+  if (.scen_in_settings()) new$step[new$step == 5] <- 8L   # 05 with scenarios timed apart
   tryCatch(utils::write.csv(rbind(old, new), .times_file, row.names = FALSE), error = function(e) NULL)
 }
-.step_min_now <- function() {
+.step_min_now <- function(scen = FALSE) {
   d <- .step_min_default
   h <- if (!file.exists(.times_file)) NULL else tryCatch(utils::read.csv(.times_file, stringsAsFactors = FALSE), error = function(e) NULL)
   if (!is.null(h) && nrow(h)) for (k in seq_along(d)) {
@@ -1294,7 +1304,8 @@ run_note <- reactiveVal("")
     if (length(x)) d[k] <- stats::median(x)
   }
   d[!is.finite(d)] <- 2   # a script with no timing yet
-  d
+  if (isTRUE(scen)) d[5] <- d[8]
+  d[1:7]
 }
 
 ## Reopened page: pick up the last run started from here (finished, failed,
@@ -1450,7 +1461,7 @@ observeEvent(input$pre_run, { removeModal(); .run_after_checks() })
   system2(file.path(R.home("bin"), "Rscript"), shQuote(.fwd(.run_script)), wait = FALSE, stdout = .out_file, stderr = .out_file)
   run_state("running"); run_started(Sys.time()); run_finished(NULL); run_note(""); step_seen(list())
   run_target(isolate(.inputs_run_dir()))
-  run_steps(isolate(steps_sel()))
+  run_steps(isolate(.with_auto05(steps_sel(), input$phyto_src)))
   showNotification(paste0("Pipeline started - outputs in ", .run_label(isolate(run_target())), ". Progress is shown below the button."), duration = 8)
 }
 
@@ -1552,9 +1563,9 @@ output$run_progress <- renderUI({
   invalidateLater(3000)
   st <- run_state()
   if (identical(st, "idle")) {
-    steps <- steps_sel()
+    steps <- .with_auto05(steps_sel(), input$phyto_src)
     if (!length(steps)) return(tags$small(class = "text-danger", "Tick at least one script."))
-    sm <- .step_min_now()
+    sm <- .step_min_now(length(input$env_scen) > 0 && 5 %in% steps)
     return(tags$small(class = "text-muted", sprintf("Expected run time about %.0f min (%s; from the last runs on this laptop).",
                                                    sum(sm[steps]), paste(sprintf("%s %.0f", .step_names[steps], sm[steps]), collapse = ", "))))
   }
@@ -1566,8 +1577,8 @@ output$run_progress <- renderUI({
   isolate(step_seen(seen))
   ## time left = expected minutes of the scripts not started yet + what is
   ## left of the expected time of the running one (at least 5 % of it)
-  sm <- .step_min_now(); took <- .step_done_min()
-  steps <- run_steps()
+  sm <- .step_min_now(.scen_in_settings()); took <- .step_done_min()
+  steps <- unique(c(started, run_steps()))   # in the order they run (05 first when the phytoplankton needs it)
   current <- setdiff(started, finished); current <- if (length(current)) max(current) else NA
   done_min <- sum(took[as.character(intersect(finished, steps))], na.rm = TRUE)
   cur_min <- if (!is.na(current)) as.numeric(difftime(Sys.time(), seen[[as.character(current)]], units = "mins")) else 0
@@ -1578,7 +1589,9 @@ output$run_progress <- renderUI({
   label <- switch(st,
     running = paste0(if (!is.na(current)) paste0("Running ", .step_names[current]) else "Starting",
                      " - ", length(intersect(finished, steps)), " of ", length(steps), " script(s) done - ",
-                     sprintf("%.1f", elapsed), " min elapsed, about ", sprintf("%.0f", left_min), " min left"),
+                     sprintf("%.1f", elapsed), " min elapsed, about ", sprintf("%.0f", left_min), " min left",
+                     if (!is.na(current) && cur_min > sm[current] * 1.2) paste0(" (", .step_names[current], " is taking longer than in the last runs",
+                       if (current == 5) ": downloads of new years or the climate scenarios" else "", ")") else ""),
     done = sprintf("Finished %s, in %.1f min", format(run_finished(), "%d %b %H:%M"), elapsed),
     error = if (.stopped_by_user()) "Stopped with the Stop button" else "Stopped with an error - see below")
   colour <- switch(st, running = "bg-info", done = "bg-success", error = "bg-danger")
