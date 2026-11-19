@@ -2643,6 +2643,20 @@ SST per cell and month: $SST(y,m) = MedPHY(y,m) +
 `diagnostics/sst_satellite_correction.csv`; downloads 2000–2014 of the
 satellite record).
 
+**Checks written by every run** (05 and 05s): every input is drawn on its
+own grid before any regridding, with its real value range
+(`plots/environment/inputs_native_grids.png`, PISCES and ISIMIP3b in
+their own files); the coast is filled before interpolating and the land
+mask applied after; the corrections are per calendar month, multiplicative
+for NPP; each correction is validated on years it was not calibrated on
+(gap fill: 1999, `diagnostics/<variable>_gapfill_validation.csv`;
+scenarios: the hindcast years after 2014, before the join,
+`scenarios/environment_scenarios_validation.csv`); the projected change
+is printed before and after the correction
+(`environment_scenarios_change_check.csv`); and method, reference,
+period, depth and units are written into each GeoTIFF (metadata tags) and
+into `environment/environment_metadata.csv`.
+
 **The reference decides what "correct" means.** Each variable rests on
 one reference, the best available for it, and every other source of that
 variable is corrected toward it with the monthly statistics (per cell and

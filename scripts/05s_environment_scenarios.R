@@ -123,6 +123,8 @@
 .scn_default("ISIMIP_FILES_URL", "https://files.isimip.org")
 
 .scn_msg <- function(...) message("[05s] ", ...)
+.ref_label <- function(v) switch(v, npp = "MedBFM reanalysis", temp_bot = "MedPHY reanalysis bottomT, no observation-based reference",
+  sal_surf = "MedPHY reanalysis", temp_surf = if (!exists("ENV_SST_SOURCE") || identical(ENV_SST_SOURCE, "reanalysis")) "MedPHY reanalysis" else "satellite L4 SST", v)
 .scn_isimip_var <- list(temp_surf = c("tos"), temp_bot = c("tob"), sal_surf = c("so-surf", "sos"), npp = c("intpp"))
 .scn_type <- c(temp_surf = "add", temp_bot = "add", sal_surf = "add", npp = "ratio")
 .scn_label <- c(ssp126 = "SSP1-2.6", ssp245 = "SSP2-4.5", ssp370 = "SSP3-7.0", ssp585 = "SSP5-8.5")
@@ -227,7 +229,7 @@ dir.create(ISIMIP3B_CACHE_DIR, recursive = TRUE, showWarnings = FALSE)
 ## =================================================================
 .scn_native <- function(v) { f <- file.path(env_dir, paste0(v, "_monthly_native.tif")); if (file.exists(f)) f else NA_character_ }
 scn_vars <- ENV_SCEN_VARS[!is.na(vapply(ENV_SCEN_VARS, .scn_native, ""))]
-scn_used <- list(); scn_ts <- list(); scn_join <- list(); scn_chk <- list()
+scn_used <- list(); scn_ts <- list(); scn_join <- list(); scn_chk <- list(); scn_val <- list(); scn_native <- list()
 if (!length(scn_vars)) {
   .scn_msg("No monthly maps of 05 to continue - scenarios skipped.")
 } else for (v in scn_vars) {
@@ -240,6 +242,8 @@ if (!length(scn_vars)) {
   if (max(hym$y) >= ENV_SCEN_END) { .scn_msg(v, ": the hindcast already reaches ", ENV_SCEN_END, " - nothing to add."); next }
   Hclim <- terra::rast(lapply(1:12, function(m) terra::app(H[[which(hym$y %in% ref & hym$m == m)]], mean, na.rm = TRUE)))
   hist_fields <- setNames(lapply(ENV_SCEN_MODELS, function(mod) .scn_get(mod, "historical", v)), ENV_SCEN_MODELS)
+  for (mod in names(hist_fields)) if (!is.null(hist_fields[[mod]])) scn_native[[paste0(v, " ", mod, " (model units)")]] <- hist_fields[[mod]]
+  vv <- setdiff(intersect(tw, full_y), ref)                          # validation years: in the hindcast, not calibrated on
   for (sc in ENV_SCENARIOS) {
     anoms <- list()
     nsm <- max(0L, as.integer(ENV_SCEN_SMOOTH_YEARS)); half <- nsm %/% 2L
@@ -307,6 +311,18 @@ if (!length(scn_vars)) {
       }
       hc <- terra::values(Hclim[[m]], mat = FALSE)
       Xm <- if (ratio) Am * hc else Am + hc
+      ## validation on years not calibrated on (after the bias correction, before the join and the
+      ## observed variability, which use the hindcast itself)
+      kv <- which(xa %in% vv)
+      if (length(kv)) {
+        kh2 <- which(hym$m == m & hym$y %in% xa[kv]); kh2 <- kh2[match(xa[kv], hym$y[kh2])]
+        if (!anyNA(kh2)) {
+          Hv <- terra::values(H[[kh2]], mat = TRUE); dv <- Xm[, kv, drop = FALSE] - Hv
+          scn_val[[length(scn_val) + 1]] <- data.table(scenario = sc, variable = v, month = m, years = paste(range(xa[kv]), collapse = "-"), n_years = length(kv),
+            bias = mean(dv, na.rm = TRUE), rmse = sqrt(mean(dv^2, na.rm = TRUE)),
+            bias_pct = 100 * (sum(Xm[, kv, drop = FALSE] * is.finite(Hv), na.rm = TRUE) / sum(Hv, na.rm = TRUE) - 1))
+        }
+      }
       kfm <- which(xa %in% yrs_f)
       w <- if (isTRUE(ENV_SCEN_JOIN) && length(jy) && ENV_SCEN_BLEND_YEARS > 0) pmax(0, 1 - (xa[kfm] - max(jy)) / ENV_SCEN_BLEND_YEARS) else
         rep(if (isTRUE(ENV_SCEN_JOIN) && length(jy)) 1 else 0, length(kfm))   # 1 at the last hindcast year
@@ -375,6 +391,15 @@ if (!length(scn_vars)) {
       hindcast_years = paste(range(jy), collapse = "-"), hindcast_mean = mean(hl), scenario_years = paste(range(fy), collapse = "-"),
       scenario_mean = mean(sl), step = mean(sl) - mean(hl))
     d <- file.path(scen_dir, sc); dir.create(d, showWarnings = FALSE)
+    tryCatch(terra::metags(X) <- c(
+      method = paste0("ISIMIP3b ", paste(names(anoms), collapse = " + "), " ", sc, "; coast filled, bilinear to the hindcast grid; ",
+                      if (ratio) "monthly ratio (multiplicative)" else "monthly additive (linear scaling)", " per cell and calendar month",
+                      if (nsm > 1) paste0("; ", nsm, "-year running mean of the change") else "",
+                      if (do_obs) paste0("; observed detrended anomalies ", min(tw), "-", max(tw), " replayed") else "",
+                      if (isTRUE(ENV_SCEN_JOIN)) paste0("; joined to ", max(jy)) else "", "; land mask of the hindcast"),
+      reference = paste0("hindcast of 05 (", .ref_label(v), ")"), period = paste0("calibration ", min(ref), "-", max(ref), "; scenario ", min(yrs_f), "-", ENV_SCEN_END),
+      depth = if (v == "npp") "reference: euphotic zone; ISIMIP3b intpp full column (change as a ratio)" else if (v == "temp_bot") "sea floor" else "surface",
+      units = ENV_UNITS_OUT[[v]]), error = function(e) NULL)
     terra::writeRaster(X, file.path(d, paste0(v, "_monthly_native.tif")), overwrite = TRUE, gdal = "COMPRESS=DEFLATE")
     st <- .env_domain_stats(X)
     scn_ts[[length(scn_ts) + 1]] <- cbind(data.table(scenario = sc, variable = v, unit = ENV_UNITS_OUT[[v]],
@@ -406,6 +431,17 @@ if (length(scn_ts)) {
               "bias-adjusted toward a regional model's view"))
   fwrite(.ref_tab[variable %in% scn_vars], file.path(scen_dir, "environment_scenarios_reference.csv"), sep = ";", dec = ",")
   if (length(scn_join)) fwrite(rbindlist(scn_join), file.path(scen_dir, "environment_scenarios_continuity.csv"), sep = ";", dec = ",")
+  if (length(scn_val)) {
+    .vl <- rbindlist(scn_val)
+    .va <- .vl[, .(validation_years = years[1], bias = mean(bias), rmse = sqrt(mean(rmse^2)), bias_pct = mean(bias_pct)), by = .(scenario, variable)]
+    fwrite(.vl, file.path(scen_dir, "environment_scenarios_validation_monthly.csv"), sep = ";", dec = ",")
+    fwrite(.va, file.path(scen_dir, "environment_scenarios_validation.csv"), sep = ";", dec = ",")
+    .scn_msg("Validation on years not calibrated on (bias-corrected model vs hindcast, before the join): ",
+             paste(sprintf("%s %s bias %+.2f, RMSE %.2f (%+.1f%%)", .va$variable, .va$scenario, .va$bias, .va$rmse, .va$bias_pct), collapse = "; "),
+             " - environment_scenarios_validation.csv.")
+  }
+  if (length(scn_native) && exists(".env_plot_native"))
+    .env_plot_native(scn_native, file.path(out_dir, "plots", "environment", "scenario_inputs_native_grids.png"))
   if (length(scn_chk)) {
     .ck <- rbindlist(scn_chk)
     fwrite(.ck, file.path(scen_dir, "environment_scenarios_change_check.csv"), sep = ";", dec = ",")

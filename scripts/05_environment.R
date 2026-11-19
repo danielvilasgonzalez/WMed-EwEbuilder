@@ -149,6 +149,7 @@ source(file.path(git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"))   # c
 .env_default("ENV_SST_SOURCE", "reanalysis")                         # SST: "reanalysis" (MEDSEA MedPHY thetao, like SSS and SBT; default), "reanalysis_corrected" (MedPHY corrected to the satellite L4 SST) or "satellite" (satellite L4 only)
 .env_default("ENV_SST_REF_YEARS", 2000:2014)                          # overlap of MedPHY and the satellite SST for the correction
 .env_default("ENV_GAP_RATIO_MAX", 4)
+.env_default("ENV_GAP_VALID_YEARS", 1999)                             # MedBFM years NOT in the calibration (2000-2014): the gap fill is checked on them
 .env_default("ENV_PFT_YEARS", 2002:2004)   # size classes exist from 2002
 .env_default("ENV_INTEGRATION_DEPTH", 200)                            # m, deepest level read for NPP and phytoplankton carbon
 .env_default("ENV_INTEGRATION", "euphotic")                           # "euphotic" (default: depth with 99% of the column NPP) or "column" (surface to seafloor, at most ENV_INTEGRATION_DEPTH)
@@ -569,13 +570,16 @@ for (nm in names(ENV_DATASETS)) {
   if (length(ov) < 3) { .env_msg("[gap fill] ", nm, ": fewer than 3 overlap years - not filled."); return(NULL) }
   .env_msg("[gap fill] ", nm, ": ", min(gap_years), "-", max(gap_years), " from PISCES (", ENV_GLOBAL_BGC,
            ") scaled to MedBFM over ", min(ov), "-", max(ov), " ...")
-  glo <- lapply(sort(unique(c(gap_years, ov))), function(y)
+  vy <- setdiff(intersect(ENV_GAP_VALID_YEARS, as.integer(substr(names(med), 1, 4))), ov)   # validation years (not calibrated on)
+  glo <- lapply(sort(unique(c(gap_years, ov, vy))), function(y)
     .env_year(nm, y, ENV_GLOBAL_BGC, var, c(0, ENV_INTEGRATION_DEPTH), TRUE, tag = paste0(nm, "_pisces")))
   glo <- do.call(c, Filter(Negate(is.null), glo))
   if (is.null(glo)) { .env_msg("[gap fill] ", nm, ": PISCES download failed - not filled."); return(NULL) }
+  .env_plot_native(setNames(list(glo), paste0(nm, " PISCES (", ENV_UNITS_OUT[[nm]], ")")),
+                   file.path(out_dir, "plots", "environment", paste0("inputs_native_grid_pisces_", nm, ".png")), ncol = 1)
   glo <- terra::resample(.env_fill_coast(glo), med[[1]], method = "bilinear")   # fill the coast, then interpolate to the MedBFM grid
   mo <- function(x) as.integer(substr(names(x), 6, 7)); yr <- function(x) as.integer(substr(names(x), 1, 4))
-  out <- list(); ratios <- data.table()
+  out <- list(); ratios <- data.table(); valid <- data.table()
   for (m in 1:12) {
     med_clim <- terra::app(med[[which(mo(med) == m & yr(med) %in% ov)]], mean, na.rm = TRUE)
     glo_clim <- terra::app(glo[[which(mo(glo) == m & yr(glo) %in% ov)]], mean, na.rm = TRUE)
@@ -589,10 +593,50 @@ for (nm in names(ENV_DATASETS)) {
       ratios <- rbind(ratios, data.table(variable = nm, month = names(x),
                                          domain_ratio_pisces_to_clim = .env_domain_mean(ratio)))
     }
+    for (y in vy) {                                                       # same method on a year MedBFM has
+      k <- which(mo(glo) == m & yr(glo) == y); km <- which(mo(med) == m & yr(med) == y); if (!length(k) || !length(km)) next
+      ratio <- terra::ifel(is.na(glo[[k]] / glo_clim), 1, terra::clamp(glo[[k]] / glo_clim, 1 / ENV_GAP_RATIO_MAX, ENV_GAP_RATIO_MAX))
+      obs <- .env_domain_mean(med[[km]]); est <- .env_domain_mean(med_clim * ratio); clim <- .env_domain_mean(med_clim)
+      valid <- rbind(valid, data.table(variable = nm, year = y, month = m, medbfm = obs, gap_fill = est, climatology_only = clim,
+                                       bias_pct = 100 * (est / obs - 1), bias_climatology_only_pct = 100 * (clim / obs - 1)))
+    }
+  }
+  if (nrow(valid)) {
+    fwrite(valid, file.path(diag_dir, paste0(nm, "_gapfill_validation.csv")))
+    .env_msg("[gap fill] ", nm, " checked on ", paste(unique(valid$year), collapse = ", "), " (not calibrated on): mean |bias| ",
+             round(mean(abs(valid$bias_pct)), 1), "% (climatology alone: ", round(mean(abs(valid$bias_climatology_only_pct)), 1),
+             "%), annual ", sprintf("%+.1f", 100 * (sum(valid$gap_fill) / sum(valid$medbfm) - 1)), "% (", nm, "_gapfill_validation.csv).")
   }
   fwrite(ratios, file.path(diag_dir, paste0(nm, "_gapfill_ratios.csv")))
   r <- do.call(c, unname(out)); r[[order(names(r))]]
 }
+## --- Every input on its own grid (first month), before any regridding:
+## north up, own coordinates, units in the title. A map upside down, shifted
+## or in the wrong units shows here first. Also used by 05s for ISIMIP3b.
+.env_plot_native <- function(lst, file, ncol = 3) {
+  tryCatch({
+    d <- data.table::rbindlist(lapply(names(lst), function(k) {
+      r <- lst[[k]][[1]]
+      x <- data.table::as.data.table(terra::as.data.frame(r, xy = TRUE, na.rm = TRUE)); data.table::setnames(x, 3, "value")
+      if (!nrow(x)) return(NULL)
+      x[, panel := sprintf("%s\n%s, %.3f x %.3f deg, values %.3g to %.3g", k, names(r), terra::xres(r), terra::yres(r), min(value), max(value))]
+      x[, value := (value - min(value)) / max(diff(range(value)), 1e-12)]   # each panel on its own 0-1 scale
+      x
+    }))
+    if (!nrow(d)) return(invisible())
+    g <- ggplot2::ggplot(d, ggplot2::aes(x, y, fill = value)) + ggplot2::geom_raster() + ggplot2::coord_quickmap() +
+      ggplot2::facet_wrap(~panel, ncol = ncol, scales = "free") +
+      ggplot2::scale_fill_viridis_c(name = "relative\n(0-1 per panel)") +
+      ggplot2::labs(x = "longitude (own grid)", y = "latitude (own grid)", title = "Inputs on their own grids (first month), before regridding") +
+      ggplot2::theme_minimal(base_size = 10) + ggplot2::theme(strip.text = ggplot2::element_text(hjust = 0, size = 8))
+    dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+    ggplot2::ggsave(file, g, width = 4 * min(ncol, length(lst)), height = 3.2 * ceiling(length(lst) / ncol) + 0.8, dpi = 120, bg = "white", limitsize = FALSE)
+  }, error = function(e) .env_msg("[plot] native-grid input maps not drawn: ", conditionMessage(e)))
+}
+if (length(env_maps))
+  .env_plot_native(setNames(lapply(names(env_maps), function(k) env_maps[[k]]), paste0(names(env_maps), " (", ENV_UNITS_OUT[names(env_maps)], ")")),
+                   file.path(out_dir, "plots", "environment", "inputs_native_grids.png"))
+
 ## =================================================================
 ## STEP 1b - SST: MedPHY bias-corrected to the satellite L4 SST
 ## =================================================================
@@ -726,6 +770,25 @@ if (!is.null(env_maps[["phyto_c"]])) {
 ## =================================================================
 ## STEP 3 - write maps and time series
 ## =================================================================
+## method, reference, period, depth and units of each output (rule: write
+## them into the file): GeoTIFF metadata tags and environment_metadata.csv
+.env_meta <- function(nm) {
+  bgc <- nm %in% c("npp", "phyto_c", "phyto_large", "phyto_small")
+  c(method = if (bgc) paste0("Copernicus MedBFM reanalysis, monthly, native grid", if (!is.null(env_gap[[nm]]) || nm %in% c("phyto_large", "phyto_small"))
+                               paste0("; ", min(gap_years_all), "-", max(gap_years_all), " PISCES x MedBFM/PISCES monthly ratio per cell (calibration ",
+                                      min(ENV_OVERLAP_YEARS), "-", max(ENV_OVERLAP_YEARS), "; coast filled, bilinear)") else "",
+                             if (nm %in% c("phyto_large", "phyto_small")) "; x satellite micro share (2002-2004, per cell and month)" else "")
+             else if (nm == "temp_surf" && identical(ENV_SST_SOURCE, "reanalysis_corrected")) paste0("MedPHY reanalysis + satellite-minus-MedPHY monthly offset per cell (", min(ENV_SST_REF_YEARS), "-", max(ENV_SST_REF_YEARS), ")")
+             else if (nm == "temp_surf" && identical(ENV_SST_SOURCE, "satellite")) "Copernicus Med L4 satellite SST, daily averaged to months"
+             else "Copernicus MedPHY reanalysis, monthly, native grid",
+    reference = if (bgc) "MEDSEA_MULTIYEAR_BGC_006_008 (MedBFM)" else if (nm == "temp_surf" && !identical(ENV_SST_SOURCE, "reanalysis")) "SST_MED_SST_L4_REP_OBSERVATIONS_010_021" else "MEDSEA_MULTIYEAR_PHY_006_004 (MedPHY)",
+    period = paste(range(c(ENV_YEARS, ENV_ECOPATH_PB_YEARS)), collapse = "-"),
+    depth = if (nm %in% c("npp", "phyto_c", "phyto_large", "phyto_small")) .int_lab else if (nm == "temp_bot") "sea floor (bottomT)" else "surface (first level, ~1 m)",
+    units = ENV_UNITS_OUT[[nm]])
+}
+gap_years_all <- unlist(lapply(env_gap, function(g) as.integer(substr(names(g), 1, 4))))
+if (!length(gap_years_all)) gap_years_all <- NA_integer_
+env_meta_rows <- list()
 ts_rows <- list(); ann_rows <- list()
 for (nm in names(env_maps)) {
   r <- env_maps[[nm]]; src <- rep(if (nm %in% c("npp", "phyto_c")) "MedBFM reanalysis" else if (nm %in% c("phyto_large", "phyto_small")) "MedBFM x satellite size share" else if (nm == "temp_surf" && identical(ENV_SST_SOURCE, "satellite")) "Satellite L4 SST analysis" else if (nm == "temp_surf" && identical(ENV_SST_SOURCE, "reanalysis_corrected")) "MedPHY reanalysis, corrected to satellite SST" else "MedPHY reanalysis", terra::nlyr(r))
@@ -736,6 +799,9 @@ for (nm in names(env_maps)) {
   }
   keep <- as.integer(substr(names(r), 1, 4)) >= min(c(ENV_YEARS, ENV_ECOPATH_PB_YEARS))
   r <- r[[which(keep)]]; src <- src[keep]
+  .md <- .env_meta(nm)
+  tryCatch(terra::metags(r) <- .md, error = function(e) NULL)       # written into the GeoTIFF
+  env_meta_rows[[nm]] <- data.table::as.data.table(as.list(c(variable = nm, .md)))
   terra::writeRaster(r, file.path(env_dir, paste0(nm, "_monthly_native.tif")), overwrite = TRUE, gdal = "COMPRESS=DEFLATE")
   .env_write_ascii(r[[which(as.integer(substr(names(r), 1, 4)) %in% ENV_YEARS)]], nm)
   keep_y <- as.integer(substr(names(r), 1, 4)) %in% c(ENV_YEARS, ENV_ECOPATH_PB_YEARS, ENV_ECOPATH_B_YEAR)
@@ -753,6 +819,7 @@ for (nm in names(env_maps)) {
   }))
   .env_tick(paste("maps and series", nm))
 }
+if (length(env_meta_rows)) fwrite(rbindlist(env_meta_rows, fill = TRUE), file.path(env_dir, "environment_metadata.csv"), sep = ";", dec = ",")
 env_ts <- rbindlist(ts_rows)
 if (nrow(env_ts)) {
   env_ts[, base := mean(value[year == ENV_BASE_YEAR], na.rm = TRUE), by = variable]
