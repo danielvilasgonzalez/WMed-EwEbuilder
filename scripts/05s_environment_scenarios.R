@@ -25,13 +25,18 @@
 ##   files (e.g. SSP2-4.5 for most models) is reported and skipped.
 ##
 ## METHOD (delta / change-factor method, per model, variable and month)
-##   Reference period R = ENV_SCEN_REF_YEARS (default NULL = the last
-##   ENV_SCEN_REF_N = 20 years of the hindcast, e.g. 2004-2023). A recent
-##   reference makes the scenarios start from today's observed level: with
-##   1995-2014 the hindcast had already warmed ~1 deg C more by 2022-23
-##   than the climate models' change, so the scenarios started below the
-##   last observed years and barely rose above them by 2050. The models'
-##   values for the years after 2014 come from each SSP.
+##   Reference period R = ENV_SCEN_REF_YEARS (default 2000-2014): the
+##   overlap of the reference of each variable (05: satellite L4 SST,
+##   MedPHY salinity and bottom T, MedBFM NPP) with the ISIMIP3b
+##   historical runs, which end in 2014 - so the monthly statistics are
+##   the same for every SSP. The hindcast warmed more than the models
+##   after 2014; the continuity step (3c) makes each scenario start from
+##   the last hindcast year, so that gap does not show as a jump.
+##   NULL = the last ENV_SCEN_REF_N = 20 years of the hindcast (then the
+##   models' years after 2014 come from each SSP).
+##   Reference of each variable, and the label of its scenario:
+##   environment_scenarios_reference.csv (bottom T: no observation-based
+##   reference - delta on the reanalysis, a stated assumption).
 ##   1. Model anomaly of each future month (year y, month m):
 ##        temperature, salinity: A(y,m) = G(y,m) - mean_R G(., m)
 ##        NPP:                   A(y,m) = G(y,m) / mean_R G(., m),
@@ -102,7 +107,7 @@
 .scn_default("ENV_SCENARIOS", character(0))                       # e.g. c("ssp126", "ssp245", "ssp370", "ssp585")
 .scn_default("ENV_SCEN_END", 2050L)                               # last year of the scenarios
 .scn_default("ENV_SCEN_MODELS", c("GFDL-ESM4", "IPSL-CM6A-LR"))   # ISIMIP3b climate models
-.scn_default("ENV_SCEN_REF_YEARS", NULL)                          # reference period of the delta method; NULL = the last ENV_SCEN_REF_N years of the hindcast
+.scn_default("ENV_SCEN_REF_YEARS", 2000:2014)                     # overlap period of the bias adjustment: hindcast reference x ISIMIP3b historical (ends 2014); NULL = the last ENV_SCEN_REF_N years of the hindcast
 .scn_default("ENV_SCEN_REF_N", 20L)
 .scn_default("ENV_SCEN_SMOOTH_YEARS", 11L)                        # running mean of the model change (years); 0 = none
 .scn_default("ENV_SCEN_VARS", c("temp_surf", "temp_bot", "sal_surf", "npp"))
@@ -351,6 +356,17 @@ if (!length(scn_vars)) {
 if (length(scn_ts)) {
   S <- rbindlist(scn_ts, fill = TRUE)
   fwrite(rbindlist(scn_used), file.path(scen_dir, "environment_scenarios_models.csv"))
+  .ref_tab <- data.table(
+    variable  = c("temp_surf", "sal_surf", "temp_bot", "npp"),
+    reference = c(if (exists("ENV_SST_SOURCE") && identical(ENV_SST_SOURCE, "reanalysis")) "MedPHY reanalysis (model, assimilates satellite SST)" else
+                    "Copernicus Med L4 SST analysis (satellite, observation-based, gap-filled)",
+                  "MedPHY reanalysis (model, assimilates profiles)", "MedPHY reanalysis bottomT (model; no observation-based reference)",
+                  "MedBFM regional biogeochemical reanalysis (model)"),
+    overlap_years = paste(range(if (is.null(ENV_SCEN_REF_YEARS)) NA else ENV_SCEN_REF_YEARS), collapse = "-"),
+    label = c("bias-adjusted toward satellite observations", "bias-adjusted toward a reanalysis",
+              "not bias-corrected toward observations: model change added to the reanalysis (stated assumption)",
+              "bias-adjusted toward a regional model's view"))
+  fwrite(.ref_tab[variable %in% scn_vars], file.path(scen_dir, "environment_scenarios_reference.csv"), sep = ";", dec = ",")
   if (length(scn_join)) fwrite(rbindlist(scn_join), file.path(scen_dir, "environment_scenarios_continuity.csv"), sep = ";", dec = ",")
   hind <- if (exists("env_ts") && nrow(env_ts)) env_ts else fread(file.path(env_dir, "environment_timeseries_monthly.csv"))
   base <- hind[year == ENV_BASE_YEAR, .(base = mean(value, na.rm = TRUE)), by = variable]

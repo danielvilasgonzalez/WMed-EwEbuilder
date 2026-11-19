@@ -2574,7 +2574,8 @@ inputs:
 
 | Variable | Source | Units |
 |---|---|---|
-| `temp_surf`, `sal_surf` | Mediterranean physics reanalysis (MEDSEA_MULTIYEAR_PHY_006_004), first level (\~1 m) | °C, PSU |
+| `temp_surf` | Copernicus Mediterranean L4 SST analysis (SST_MED_SST_L4_REP_OBSERVATIONS_010_021, satellite, daily 0.05° averaged to months; `ENV_SST_SOURCE = "satellite"`, default; `"reanalysis"` = the physics reanalysis below) | °C |
+| `sal_surf` | Mediterranean physics reanalysis (MEDSEA_MULTIYEAR_PHY_006_004), first level (\~1 m) | PSU |
 | `temp_bot` | same, `bottomT` | °C |
 | `npp` | Mediterranean biogeochemistry reanalysis (MedBFM, MEDSEA_MULTIYEAR_BGC_006_008), `nppv` integrated over the euphotic zone | g C m⁻² d⁻¹ |
 | `phyto_c` | same, `phyc` integrated over the euphotic zone | g C m⁻² |
@@ -2604,7 +2605,7 @@ MedBFM starts in 1999. For 1994–1998 the global Copernicus model (PISCES,
 GLOBAL_MULTIYEAR_BGC_001_029) is scaled to MedBFM, cell by cell and month
 by month: $X(y,m) = \overline{X}_{MedBFM}(m) \times
 P(y,m)/\overline{P}(m)$, where $\overline{X}_{MedBFM}(m)$ and
-$\overline{P}(m)$ are the 1999–2010 means for calendar month $m$ of
+$\overline{P}(m)$ are the 2000–2014 means for calendar month $m$ of
 MedBFM and PISCES, and $P(y,m)$ is PISCES in year $y$ (the ratio is kept
 within 1/4–4). So the level and seasonal cycle are MedBFM's and only the
 year-to-year change comes from PISCES.
@@ -2621,6 +2622,26 @@ climatology); **target grid**: interpolate again to the output grid
 (the MedBFM grid, or the Ecospace base map in 05b) and apply its land
 mask; **write**. A MedBFM cell still without a PISCES value keeps the
 MedBFM climatology (ratio 1).
+
+**The reference decides what "correct" means.** Each variable rests on
+one reference, the best available for it, and every other source of that
+variable is corrected toward it with the monthly statistics (per cell and
+calendar month) of one overlap period, 2000–2014 (`ENV_OVERLAP_YEARS`,
+`ENV_SCEN_REF_YEARS`): the years the references share with the ISIMIP3b
+historical runs, which end in 2014, so the statistics are the same for
+every scenario. A variable without an observation-based reference is not
+called bias-corrected: its scenario is a stated assumption, labelled so
+(`scenarios/environment_scenarios_reference.csv`).
+
+| Variable | Reference | Corrected toward it | Overlap | Label |
+|---|---|---|---|---|
+| SST | Copernicus Med L4 SST analysis (satellite, daily 0.05° → monthly, from 1982; `ENV_SST_SOURCE = "satellite"`) | ISIMIP3b scenarios | 2000–2014 | bias-adjusted toward observations (a gap-filled analysis, not raw data) |
+| NPP, phytoplankton carbon | MedBFM regional biogeochemical reanalysis (~4 km, from 1999) | PISCES 1994–1998; ISIMIP3b scenarios | 2000–2014 | bias-adjusted toward a regional model's view (3-D, short period) |
+| Salinity | MedPHY reanalysis (assimilates profiles) | ISIMIP3b scenarios | 2000–2014 | bias-adjusted toward a reanalysis |
+| Bottom temperature | none observation-based; MedPHY `bottomT` (model) | ISIMIP3b change added to the reanalysis | 2000–2014 | not bias-corrected toward observations: model change on the reanalysis (stated assumption) |
+| Large / Small phytoplankton | satellite size classes (GlobColour L4) | share applied to MedBFM carbon | 2002–2004 | chlorophyll share used for carbon (ASSUMPTION) |
+| Meso + micro zooplankton, detritus | none | COBALT rescaled by MedBFM / COBALT NPP | Ecopath years | rescaled to the MedBFM production, not bias-corrected (ASSUMPTION) |
+| Habitats (EUSeaMap), response functions (AquaMaps) | none | regridded only | — | regridded, not bias-corrected |
 
 **Large and Small phytoplankton.** MedBFM gives total phytoplankton only.
 The share of microphytoplankton in the chlorophyll of the satellite size
@@ -2727,15 +2748,16 @@ for temperature and salinity, and
 $X(y,m) = \overline{H}_R(m)\,G(y,m)/\overline{G}_R(m)$ (held to
 $[1/4, 4]$) for NPP [@lange2019basd]. $H$ is the Copernicus hindcast of
 05, $\overline{H}_R(m)$ its mean for month $m$ over the reference period
-$R$ (the last 20 complete years of the hindcast, e.g. 2004–2023;
-`ENV_SCEN_REF_YEARS`), $G$ the climate model field (historical run, then
-the SSP after 2014) and $\overline{G}_R(m)$ its mean over the same
+$R$ (2000–2014, `ENV_SCEN_REF_YEARS`: the overlap of the reference with
+the ISIMIP3b historical runs, which end in 2014, so the statistics are
+the same for every SSP), $G$ the climate model field (historical run,
+then the SSP after 2014) and $\overline{G}_R(m)$ its mean over the same
 period; the change is the mean of the two models, smoothed with an
 11-year running mean for each calendar month (`ENV_SCEN_SMOOTH_YEARS`)
-and regridded to the 05 grid. A recent reference period matters: the
-Mediterranean warmed faster than the two models between 1995–2014 and
-the early 2020s, so anchoring on 1995–2014 started the scenarios about
-0.6–1 °C below the last observed years. The running mean removes the
+and regridded to the 05 grid. The Mediterranean warmed faster than the
+two models after 2014, so without more the scenarios would start below
+the last observed years; the continuity step below makes each scenario
+start from the last hindcast year. The running mean removes the
 year-to-year noise of the two model runs (which can otherwise put
 SSP5-8.5 below SSP1-2.6 in a given year), keeping their trend and the
 change of the seasonal cycle. The result keeps the level, spatial pattern

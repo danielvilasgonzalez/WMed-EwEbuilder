@@ -11,7 +11,8 @@
 ##
 ## WHAT IT MAKES
 ##  Monthly, for the run's years (TS_YEARS, plus the Ecopath years):
-##   temp_surf  sea surface temperature, deg C   MedPHY reanalysis, thetao, first level (~1 m)
+##   temp_surf  sea surface temperature, deg C   satellite L4 SST analysis (ENV_SST_SOURCE = "satellite",
+##              default; "reanalysis" = MedPHY thetao, first level ~1 m)
 ##   sal_surf   sea surface salinity             MedPHY reanalysis, so, first level
 ##   temp_bot   sea bottom temperature, deg C    MedPHY reanalysis, bottomT
 ##   npp        net primary production, g C m-2 d-1, integrated over the euphotic zone
@@ -37,8 +38,23 @@
 ##  group (Large / Small phytoplankton).
 ##
 ## SOURCES (Copernicus Marine Service; free account needed)
+##  Each variable rests on one REFERENCE, the best available for it, and
+##  every other source of that variable (the PISCES gap fill, the ISIMIP3b
+##  scenarios of 05s) is corrected toward it over the overlap years
+##  2000-2014 (ISIMIP3b historical runs end in 2014):
+##    SST                   satellite L4 analysis (observation-based)
+##    NPP, phytoplankton    MedBFM regional biogeochemical reanalysis (a
+##                          model: corrected toward its view)
+##    salinity, bottom T    MedPHY reanalysis; bottom T has no
+##                          observation-based reference, so its scenarios
+##                          are a delta on the reanalysis (stated
+##                          assumption, labelled so)
+##  - SST: SST_MED_SST_L4_REP_OBSERVATIONS_010_021 (dataset
+##    cmems_SST_MED_SST_L4_REP_OBSERVATIONS_010_021, analysed_sst, K),
+##    gap-filled L4 analysis of satellite SST, daily, 0.05 deg, night-time,
+##    from 1982; averaged to monthly means (an analysis, not raw data).
 ##  - Physics: MEDSEA_MULTIYEAR_PHY_006_004 (Med reanalysis, 1/24 deg,
-##    from 1987), datasets cmems_mod_med_phy-temp_my_4.2km_P1M-m (thetao,
+##    from 1987; SST only with ENV_SST_SOURCE = "reanalysis"), datasets cmems_mod_med_phy-temp_my_4.2km_P1M-m (thetao,
 ##    bottomT) and cmems_mod_med_phy-sal_my_4.2km_P1M-m (so); the most
 ##    recent months from the "myint" (interim) datasets.
 ##  - Biogeochemistry: MEDSEA_MULTIYEAR_BGC_006_008 (MedBFM, 1/24 deg,
@@ -49,7 +65,7 @@
 ##    cmems_mod_glo_bgc_my_0.25deg_P1M-m (nppv, phyc), SCALED TO MedBFM:
 ##      X_gap(y, m, cell) = MedBFM_clim(m, cell) x PISCES(y, m, cell) / PISCES_clim(m, cell)
 ##    where m = calendar month, the climatologies are the means over
-##    ENV_OVERLAP_YEARS (1999-2010). PISCES is regridded to the MedBFM grid
+##    ENV_OVERLAP_YEARS (2000-2014). PISCES is regridded to the MedBFM grid
 ##    after filling its empty coastal cells from their neighbours (3 x 3
 ##    mean, ENV_COAST_FILL_PASSES = 5 passes), bilinear; a MedBFM cell
 ##    still without a PISCES value keeps the MedBFM climatology (ratio 1);
@@ -124,7 +140,8 @@ source(file.path(git_dir, "scripts", "lib_cmems_phytoplankton_biomass.R"))   # c
 ## P/B: NPP of the Ecopath years up to the B year (1994:1996 -> 1994-1995)
 .env_default("ENV_ECOPATH_PB_YEARS", if (exists("YEAR_ECOPATH", envir = .GlobalEnv)) YEAR_ECOPATH else 1994:1996)   # NPP of the Ecopath years
 .env_default("ENV_BASE_YEAR", ENV_ECOPATH_B_YEAR)                     # Ecosim forcing = value / mean of this year
-.env_default("ENV_OVERLAP_YEARS", 1999:2010)                          # MedBFM vs PISCES, for the gap fill
+.env_default("ENV_OVERLAP_YEARS", 2000:2014)                          # MedBFM vs PISCES, for the gap fill (same overlap as the scenarios)
+.env_default("ENV_SST_SOURCE", "satellite")                          # SST: "satellite" (Copernicus Med L4 SST analysis, observation-based; reference) or "reanalysis" (MedPHY thetao)
 .env_default("ENV_GAP_RATIO_MAX", 4)
 .env_default("ENV_PFT_YEARS", 2002:2004)   # size classes exist from 2002
 .env_default("ENV_INTEGRATION_DEPTH", 200)                            # m, deepest level read for NPP and phytoplankton carbon
@@ -167,8 +184,11 @@ cat("Run started: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n", sep = "", fi
 
 ## --- Datasets (my = reanalysis, myint = interim for the latest months) --
 ENV_DATASETS <- list(
-  temp_surf = list(ids = c("cmems_mod_med_phy-temp_my_4.2km_P1M-m", "cmems_mod_med_phy-temp_myint_4.2km_P1M-m"),
-                   var = "thetao", depth = c(0, 1.5), integrate = FALSE),
+  temp_surf = if (identical(ENV_SST_SOURCE, "satellite"))
+                list(ids = "cmems_SST_MED_SST_L4_REP_OBSERVATIONS_010_021", var = "analysed_sst", depth = NULL,
+                     integrate = FALSE, tag = "temp_surf_satL4")   # daily 0.05 deg, from 1982; monthly means
+              else list(ids = c("cmems_mod_med_phy-temp_my_4.2km_P1M-m", "cmems_mod_med_phy-temp_myint_4.2km_P1M-m"),
+                        var = "thetao", depth = c(0, 1.5), integrate = FALSE),
   sal_surf  = list(ids = c("cmems_mod_med_phy-sal_my_4.2km_P1M-m", "cmems_mod_med_phy-sal_myint_4.2km_P1M-m"),
                    var = "so", depth = c(0, 1.5), integrate = FALSE),
   temp_bot  = list(ids = c("cmems_mod_med_phy-temp_my_4.2km_P1M-m", "cmems_mod_med_phy-temp_myint_4.2km_P1M-m"),
@@ -339,6 +359,11 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
   }
   r <- terra::rast(layers)
   names(r) <- format(dates, "%Y-%m")
+  if (anyDuplicated(names(r))) {                                         # daily file (satellite SST): monthly means
+    mk <- unique(names(r))
+    r <- terra::rast(lapply(mk, function(m) terra::app(r[[which(names(r) == m)]], mean, na.rm = TRUE)))
+    names(r) <- mk
+  }
   if (length(zeu_store) && !is.null(zeu_file)) saveRDS(c(if (file.exists(zeu_file)) readRDS(zeu_file) else list(), zeu_store), zeu_file)
   zq <- if (length(zeu_vals)) stats::quantile(unlist(zeu_vals), c(0.1, 0.5, 0.9), na.rm = TRUE) else rep(NA_real_, 3)
   if (length(zeu_vals) && name == "npp")
@@ -367,7 +392,7 @@ ENV_UNITS_OUT <- c(temp_surf = "deg C", sal_surf = "PSU", temp_bot = "deg C", np
   got <- list(); months_have <- character(0)
   ## no request for years before a product starts; the interim ("myint")
   ## datasets only hold the last few years, so they are only asked then
-  first <- if (any(grepl("med_bgc", ids))) 1999 else if (any(grepl("glo_bgc", ids))) 1993 else 1987
+  first <- if (any(grepl("med_bgc", ids))) 1999 else if (any(grepl("glo_bgc", ids))) 1993 else if (any(grepl("SST_MED_SST_L4", ids))) 1982 else 1987
   if (year < first) return(NULL)
   if (year < as.integer(format(Sys.Date(), "%Y")) - 5) ids <- ids[!grepl("myint", ids)]
   for (id in ids) {
@@ -490,7 +515,7 @@ env_maps <- list()
 for (nm in names(ENV_DATASETS)) {
   ds <- ENV_DATASETS[[nm]]
   .env_msg("[05_environment] ", nm, " (", ds$var, ") ...")
-  yrs <- lapply(ENV_YEARS, function(y) .env_year(nm, y, ds$ids, ds$var, ds$depth, ds$integrate))
+  yrs <- lapply(ENV_YEARS, function(y) .env_year(nm, y, ds$ids, ds$var, ds$depth, ds$integrate, tag = if (is.null(ds$tag)) nm else ds$tag))
   yrs <- Filter(Negate(is.null), yrs)
   if (!length(yrs)) { .env_msg("[05_environment] ", nm, ": no data downloaded - skipped."); next }
   env_maps[[nm]] <- do.call(c, yrs)
@@ -638,7 +663,7 @@ if (!is.null(env_maps[["phyto_c"]])) {
 ## =================================================================
 ts_rows <- list(); ann_rows <- list()
 for (nm in names(env_maps)) {
-  r <- env_maps[[nm]]; src <- rep(if (nm %in% c("npp", "phyto_c")) "MedBFM reanalysis" else if (nm %in% c("phyto_large", "phyto_small")) "MedBFM x satellite size share" else "MedPHY reanalysis", terra::nlyr(r))
+  r <- env_maps[[nm]]; src <- rep(if (nm %in% c("npp", "phyto_c")) "MedBFM reanalysis" else if (nm %in% c("phyto_large", "phyto_small")) "MedBFM x satellite size share" else if (nm == "temp_surf" && identical(ENV_SST_SOURCE, "satellite")) "Satellite L4 SST analysis" else "MedPHY reanalysis", terra::nlyr(r))
   if (!is.null(env_gap[[nm]])) {
     g <- env_gap[[nm]]
     r <- c(g, terra::resample(r, g[[1]])); src <- c(rep("PISCES scaled to MedBFM", terra::nlyr(g)), src)
