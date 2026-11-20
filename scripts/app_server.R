@@ -1864,11 +1864,16 @@ output$fleet_plot_effort <- renderPlot({
   attr(out, "prov") <- if (!is.na(pv)) tryCatch(as.data.frame(fread(pv)), error = function(e) NULL)
   out
 })
-.diet_fg_order <- function(nm) {
-  fg <- tryCatch(.fg_sum()$table, error = function(e) NULL)
-  ord <- if (!is.null(fg) && "FG_name" %in% names(fg)) as.character(fg$FG_name) else character(0)
-  c(intersect(ord, nm), sort(setdiff(nm, ord)))
+## FG number of each FG name (workbook FG list, else the FG summary table)
+.diet_fg_num <- function(nm) {
+  fl <- tryCatch(.fg_list(), error = function(e) NULL)
+  if (is.null(fl)) { fg <- tryCatch(.fg_sum()$table, error = function(e) NULL)
+    if (!is.null(fg) && all(c("FG_num", "FG_name") %in% names(fg))) fl <- data.frame(FG_num = as.integer(fg$FG_num), FG_name = as.character(fg$FG_name)) }
+  if (is.null(fl)) return(setNames(rep(NA_integer_, length(nm)), nm))
+  setNames(as.integer(fl$FG_num[match(nm, fl$FG_name)]), nm)
 }
+## FGs sorted by FG number (names without a number last, alphabetically)
+.diet_fg_order <- function(nm) { nm <- unique(nm); n <- .diet_fg_num(nm); nm[order(is.na(n), n, nm)] }
 observe({
   t <- .diet_tabs(); if (is.null(t) || !length(t)) return()
   preds <- .diet_fg_order(unique(unlist(lapply(t, function(x) if (!is.null(x)) x$predator_fg))))
@@ -1901,14 +1906,16 @@ output$diet_view_plot <- renderPlot({
     if (is.null(x)) return(.gg_msg(paste0("No ", s, " diet in the last run:\n", attr(t, "why")[[s]])))
     pr <- .diet_fg_order(unique(x$predator_fg)); py <- .diet_fg_order(unique(x$prey_fg))
     x <- stats::aggregate(weight ~ predator_fg + prey_fg, data = x, FUN = sum)
+    .num <- .diet_fg_num(unique(c(pr, py)))
+    .lab <- function(v) .gg_short(ifelse(is.na(.num[v]), v, paste(.num[v], v)), 30)   # "12 Hake"
     x$pred <- factor(x$predator_fg, levels = pr); x$prey <- factor(x$prey_fg, levels = rev(py))
     return(ggplot2::ggplot(x, ggplot2::aes(pred, prey, fill = pmin(weight, 1))) +
       ggplot2::geom_tile(colour = "white", linewidth = 0.25) +
       ggplot2::scale_fill_gradientn(colours = grDevices::hcl.colors(30, "YlOrRd", rev = TRUE), limits = c(0, 1), labels = function(v) paste0(round(100 * v), "%"), name = "Share of\nthe diet") +
-      ggplot2::scale_x_discrete(labels = function(v) .gg_short(v, 28), drop = FALSE) + ggplot2::scale_y_discrete(labels = function(v) .gg_short(v, 28), drop = FALSE) +
-      ggplot2::labs(x = "Predator", y = "Prey", title = paste0("Diet matrix: ", s), subtitle = "Columns = predators, rows = prey") +
+      ggplot2::scale_x_discrete(labels = .lab, drop = FALSE, position = "top") + ggplot2::scale_y_discrete(labels = .lab, drop = FALSE) +
+      ggplot2::labs(x = "Predator (columns, by FG number)", y = "Prey (rows, by FG number)", title = paste0("Diet matrix: ", s), subtitle = "Columns = predators, rows = prey, both sorted by FG number (as in EwE)") +
       .gg_th(11, "right") +
-      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7), axis.text.y = ggplot2::element_text(size = 7),
+      ggplot2::theme(axis.text.x.top = ggplot2::element_text(angle = 90, hjust = 0, vjust = 0.5, size = 7), axis.text.y = ggplot2::element_text(size = 7),
                      legend.title = ggplot2::element_text(size = 9, colour = "grey30"), panel.grid = ggplot2::element_blank()))
   }
   m <- .diet_pred_data()
