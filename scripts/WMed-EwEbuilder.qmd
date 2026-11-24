@@ -204,6 +204,7 @@ local({
   "custom_survey_sample_coverage_map.png"             = "custom_region/plots/survey_sample_coverage_map.png",
   "custom_survey_fg_density_timeseries.png"           = "custom_region/plots/survey_fg_density_timeseries.png",
   "biomass_by_fg_source.png"                          = "plots/biomass/biomass_by_fg_source.png",
+  "small_pelagics_source_comparison.png"              = "plots/biomass/small_pelagics_source_comparison.png",
   "biomass_survey_fg_density_timeseries_regional.png" = "plots/biomass/survey_fg_density_timeseries_regional.png",
   "07_catch_by_fg_and_fleet.png"                      = "plots/fisheries/07_catch_by_fg_and_fleet.png",
   "08_discards_by_fg_and_fleet.png"                   = "plots/fisheries/08_discards_by_fg_and_fleet.png",
@@ -1648,6 +1649,19 @@ also in the app): `"medias"` (default, the per-GSA acoustic series),
 its shelf area, 10–200 m; GSAs without an assessment get the median of
 the assessed GSAs, ASSUMPTION; [@ricard2012]; table
 `small_pelagics_stock_assessment_series_REVIEW.csv`).
+
+@fig-small-pelagics-sources compares the three sources on the same basis
+(t/km² of model area), whichever one the model uses: the MEDITS index
+divided by $q$, the MEDIAS survey years and the gap-filled per-GSA
+acoustic series, and the stock-assessment series. Values and ratios to
+MEDIAS: `small_pelagics_source_comparison.csv`.
+
+```{r}
+#| label: show-fig-small-pelagics-sources
+#| eval: true
+#| echo: false
+wm_figure("fig-small-pelagics-sources", r"---(Sardine and anchovy biomass density by source: MEDITS (bottom trawl / q), MEDIAS acoustic survey (surveyed years and per-GSA gap-filled series) and stock assessments (GFCM STAR / RAM Legacy), model-area basis, log scale. Grey band: Ecopath years.)---", "small_pelagics_source_comparison.png", r"---(01_biomass.R)---")
+```
 4.  For FGs the surveys cannot sample (`EXEMPT_FG_NAMES`): the cited
     literature, habitat-map or plankton-model value from `01b` (SOURCES
     B–D). These are never back-filled with survey bycatch. If none

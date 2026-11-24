@@ -2824,8 +2824,9 @@ if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa
 if (!exists("SMALL_PELAGIC_SOURCE")) SMALL_PELAGIC_SOURCE <- "medias"   # also set inside the GSA block above; custom bbox/shapefile runs skip that block
 if (!exists("SMALL_PELAGIC_SERIES_MODE")) SMALL_PELAGIC_SERIES_MODE <- "per_gsa_acoustic"
 if (!exists("SMALL_PELAGIC_POOLED_TREND")) SMALL_PELAGIC_POOLED_TREND <- FALSE
-if (identical(SMALL_PELAGIC_SOURCE, "medias") &&
-    identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic_fg_by_gsa") && nrow(acoustic_fg_by_gsa) > 0) {
+## Computed whatever SMALL_PELAGIC_SOURCE is (for the comparison figure
+## below); it replaces the biomass only with SMALL_PELAGIC_SOURCE = "medias".
+if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic_fg_by_gsa") && nrow(acoustic_fg_by_gsa) > 0) {
   .sa_sp <- as.data.table(strata_area_by_area); .gsp <- intersect(c("AreaID", "GSA"), names(.sa_sp))[1]
   if (exists("FILTER_AREAS") && length(FILTER_AREAS) > 0) .sa_sp <- .sa_sp[get(.gsp) %in% FILTER_AREAS]
   shelf_g <- MODEL_AREA_CELLS[Depth_min_m >= 10 & Depth_max_m <= 200, .(shelf_km2 = sum(area_km2, na.rm = TRUE)), by = .(GSA = as.character(AreaID))]   # all model GSAs; unsurveyed ones = median below
@@ -2888,6 +2889,7 @@ if (identical(SMALL_PELAGIC_SOURCE, "medias") &&
                             n_obs = sum(how %in% c("MEDIAS", "pre-MEDIAS acoustic (GFCM SAF / Palomera et al. 2007)"))), by = .(FG_num, Year)]
   sp_model <- sp_model[Year %in% yrs_all]
   sp_model <- merge(sp_model, unique(fg_index_regional_combined[, .(FG_num, FG_name, FG_ECOLOGY_TYPE)]), by = "FG_num")
+  if (identical(SMALL_PELAGIC_SOURCE, "medias")) {
   fg_index_regional_combined <- merge(fg_index_regional_combined, sp_model[, .(FG_num, Year, mean_density_new, n_obs)],
                                       by = c("FG_num", "Year"), all = TRUE)
   fg_index_regional_combined[is.na(FG_name), FG_name := sp_model$FG_name[match(FG_num, sp_model$FG_num)]]
@@ -2901,6 +2903,7 @@ if (identical(SMALL_PELAGIC_SOURCE, "medias") &&
   message("[Small pelagics] Per-GSA acoustic series (", min(yrs_all), "-", max(yrs_all), "): ",
           paste(sp_model[Year %in% YEAR_ECOPATH, .(B = round(mean(mean_density_new), 3)), by = FG_name][, paste0(FG_name, " ", B, " t/km2 (baseline)")], collapse = "; "),
           ". Written to small_pelagics_per_gsa_series_REVIEW.csv.")
+  }
 }
 
 ## --- Small pelagics from stock assessments (SMALL_PELAGIC_SOURCE) ----
@@ -2910,10 +2913,14 @@ if (identical(SMALL_PELAGIC_SOURCE, "medias") &&
 ## density = sum(D x shelf area) / model area. Years with no assessment
 ## at all keep the survey value. Source: GFCM STAR / RAM Legacy (Ricard
 ## et al. 2012); RAM "biomass" may be total or spawning-stock biomass.
-if (identical(SMALL_PELAGIC_SOURCE, "stock_assessment")) {
-  sa_sp <- if (exists("small_pelagic_assessments")) small_pelagic_assessments[!is.na(biomass) & biomass > 0] else data.table()
+## Computed whenever assessments exist (comparison figure below); it
+## replaces the biomass only with SMALL_PELAGIC_SOURCE = "stock_assessment".
+sa_model <- NULL
+if (exists("small_pelagic_assessments") && exists("MODEL_AREA_CELLS")) {
+  sa_sp <- small_pelagic_assessments[!is.na(biomass) & biomass > 0]
   if (nrow(sa_sp) == 0) {
-    message("[Small pelagics] SMALL_PELAGIC_SOURCE = \"stock_assessment\" but no small-pelagic assessment has biomass - survey values kept.")
+    if (identical(SMALL_PELAGIC_SOURCE, "stock_assessment"))
+      message("[Small pelagics] SMALL_PELAGIC_SOURCE = \"stock_assessment\" but no small-pelagic assessment has biomass - survey values kept.")
   } else {
     shelf_sa <- MODEL_AREA_CELLS[Depth_min_m >= 10 & Depth_max_m <= 200, .(shelf_km2 = sum(area_km2, na.rm = TRUE)), by = .(GSA = as.character(AreaID))]
     sa_sp[, gsa_list := lapply(gsa, function(x) intersect(trimws(unlist(strsplit(as.character(x), "[,;]"))), shelf_sa$GSA))]
@@ -2930,6 +2937,7 @@ if (identical(SMALL_PELAGIC_SOURCE, "stock_assessment")) {
     sa_model <- per_g[, .(sa_density = sum(biomass_t) / MODEL_AREA_KM2,
                           n_gsa = sum(how == "own stock assessment"),
                           stocks = paste(setdiff(unique(unlist(strsplit(na.omit(stocks), ","))), ""), collapse = ",")), by = .(FG_num, Year)]
+    if (identical(SMALL_PELAGIC_SOURCE, "stock_assessment")) {
     fg_index_regional_combined <- merge(fg_index_regional_combined, sa_model, by = c("FG_num", "Year"), all = TRUE)
     fg_index_regional_combined[is.na(FG_name), FG_name := fg_lookup_safe$FG_name[match(FG_num, fg_lookup_safe$FG_num)]]
     fg_index_regional_combined[, FG_ECOLOGY_TYPE := FG_ECOLOGY_TYPE[!is.na(FG_ECOLOGY_TYPE)][1], by = FG_num]
@@ -2943,8 +2951,54 @@ if (identical(SMALL_PELAGIC_SOURCE, "stock_assessment")) {
             paste(sa_model[Year %in% YEAR_ECOPATH, .(B = round(mean(sa_density), 3)), by = FG_num][
               , paste0("FG ", FG_num, " ", B, " t/km2 (baseline)")], collapse = "; "),
             ". Written to small_pelagics_stock_assessment_series_REVIEW.csv.")
+    }
   }
 }
+
+## --- Sardine and anchovy: MEDITS vs MEDIAS vs stock assessment ------
+## The three sources on the same basis (t/km2 of model area), whichever
+## SMALL_PELAGIC_SOURCE is used, to check them against each other:
+##   MEDITS            - bottom-trawl FG index / q (fg_index_medits_only);
+##   MEDIAS (surveyed) - acoustic survey years only (fg_index_medias_only);
+##   MEDIAS per-GSA    - the gap-filled per-GSA acoustic series (sp_model);
+##   Stock assessment  - assessed biomass per GSA (sa_model).
+## Figure: plots/biomass/small_pelagics_source_comparison.png; table:
+## small_pelagics_source_comparison.csv (with the ratios to MEDIAS).
+if (exists("medias_fgs") && length(medias_fgs) > 0) tryCatch({
+  .cmp <- rbindlist(list(
+    if (exists("fg_index_medits_only")) fg_index_medits_only[FG_num %in% medias_fgs, .(FG_num, Year, source = "MEDITS (bottom trawl / q)", density = medits_density)],
+    if (exists("fg_index_medias_only")) fg_index_medias_only[FG_num %in% medias_fgs, .(FG_num, Year, source = "MEDIAS (surveyed years)", density = medias_density)],
+    if (exists("sp_model") && !is.null(sp_model)) sp_model[FG_num %in% medias_fgs, .(FG_num, Year, source = "MEDIAS per-GSA series (gap-filled)", density = mean_density_new)],
+    if (!is.null(sa_model)) sa_model[FG_num %in% medias_fgs, .(FG_num, Year, source = "Stock assessment (GFCM STAR / RAM Legacy)", density = sa_density)]
+  ), use.names = TRUE)
+  .cmp <- .cmp[is.finite(density) & density > 0]
+  if (nrow(.cmp)) {
+    .cmp[, FG_name := fg_lookup_safe$FG_name[match(FG_num, fg_lookup_safe$FG_num)]]
+    .wide <- dcast(.cmp, FG_num + FG_name + Year ~ source, value.var = "density")
+    .ref <- "MEDIAS (surveyed years)"
+    for (cc in setdiff(names(.wide), c("FG_num", "FG_name", "Year", .ref)))
+      if (.ref %in% names(.wide)) .wide[, (paste0("ratio_to_MEDIAS: ", cc)) := get(cc) / get(.ref)]
+    fwrite(.wide, file.path(csv_out_dir, "small_pelagics_source_comparison.csv"))
+    .base <- .cmp[Year %in% YEAR_ECOPATH, .(baseline = mean(density)), by = .(FG_name, source)]
+    message("[Small pelagics] Source comparison, Ecopath years (t/km2): ",
+            paste(.base[, sprintf("%s %s %.3g", FG_name, sub(" \\(.*", "", source), baseline)], collapse = "; "))
+    .cols <- c("MEDITS (bottom trawl / q)" = "#8C6D31", "MEDIAS (surveyed years)" = "#1F77B4",
+               "MEDIAS per-GSA series (gap-filled)" = "#6BAED6", "Stock assessment (GFCM STAR / RAM Legacy)" = "#D62728")
+    p_sp_cmp <- ggplot(.cmp, aes(Year, density, colour = source)) +
+      annotate("rect", xmin = min(YEAR_ECOPATH) - 0.5, xmax = max(YEAR_ECOPATH) + 0.5, ymin = -Inf, ymax = Inf, alpha = 0.12) +
+      geom_line(data = .cmp[source != "MEDIAS (surveyed years)"], linewidth = 0.8) +
+      geom_point(data = .cmp[source == "MEDIAS (surveyed years)"], size = 2) +
+      scale_colour_manual(values = .cols, name = NULL) +
+      scale_y_log10() +
+      facet_wrap(~ FG_name, ncol = 1, scales = "free_y") +
+      labs(title = "Sardine and anchovy: biomass density by source (model area)",
+           subtitle = paste0("Source used in the model: ", SMALL_PELAGIC_SOURCE, " (SMALL_PELAGIC_SOURCE). Grey band = Ecopath years."),
+           x = NULL, y = "Biomass density (t/km2, log scale)") +
+      theme_bw(base_size = 11) + theme(legend.position = "bottom", legend.direction = "vertical")
+    ggsave(file.path(plot_dir, "small_pelagics_source_comparison.png"), p_sp_cmp,
+           width = 10, height = 3 + 3 * uniqueN(.cmp$FG_name), dpi = PLOT_DPI, bg = "white")
+  }
+}, error = function(e) message("[Small pelagics] source comparison figure not made - ", conditionMessage(e)))
 
   ## --- MEDITS invertebrate recording era ---------------------
   ## Non-commercial benthic invertebrates (Other macro-benthos: polychaetes,
