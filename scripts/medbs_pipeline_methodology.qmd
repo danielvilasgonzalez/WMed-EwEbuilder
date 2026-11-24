@@ -1625,7 +1625,7 @@ used when $B_f > 0$. If the window has no positive mean, the nearest single year
 
 1. *Haul cap* (`ECOSIM_HAUL_CAP_Q` = 0.95). Each haul's FG density is capped at the 95th percentile of that FG's positive hauls in the same GSA × stratum over all years (only where there are ≥ 10 positive hauls). The capped index $I^{cap}$ is built with the same estimator, and its shape is carried over as $I^{new}_{f,y} = I_{f,y}\, s_{f,y}\, \overline{I_f}^{EP} / \overline{I_f s_f}^{EP}$, with $s_{f,y} = I^{cap}_{f,y}/I^{raw}_{f,y}$ and $\overline{\cdot}^{EP}$ the 1994–1996 mean. So `Ecopath_B` is unchanged. Capping lowers absolute densities by construction, which is why it is not applied to the baseline. `ecosim_haul_cap_effect_REVIEW.csv` lists, per FG, how much the 1994–1996 mean would fall if capped. A ratio ≫ 1 means the baseline rests on a few very large hauls (e.g. commercial small demersal fish, ×6 from one 1995 haul of *Gymnammodytes cicerelus*).
 2. *Area coverage* (`ECOSIM_MIN_AREA_COVERAGE`, default 0 = off). A year whose sampled strata cover less than this share of the model area would be left blank. It is off because the area-adjusted index (an unsampled GSA is dropped from both numerator and area) already handles partial years (2022: GSAs 7–8 only, 14 %; 2023: 60 %). The 1994–1996 years are never blanked. Coverage by year: `survey_area_coverage_by_year.csv`.
-3. *Outlier years* (`ECOSIM_SPIKE_FILTER` = TRUE, `flag_ts_outliers()`), the series-level counterpart of the haul screening for Ecopath. In every B series (survey, model, literature), on log values, rule `ECOSIM_OUTLIER_METHOD`: `"hampel"` (default; $\log x_y - \text{median}(\log x_{\text{4 nearest years}}) > \max(3 \cdot 1.4826\,\text{MAD}, \log 3)$, one-sided Hampel filter), `"boxplot"` ($Q_3 + 3\,IQR$ of the series), `"mad"` (robust z > 3 over the series) or `"multi"` (combined with `ECOSIM_OUTLIER_CONSENSUS`); all keep the 3-fold floor. `ECOSIM_OUTLIER_SIDE` = `"high"` (default) or `"both"`; `ECOSIM_DROP_OUTLIERS` = TRUE blanks the years, FALSE only reports them in `ecosim_ts_outliers_REVIEW.csv`. ASSUMPTION: thresholds are judgment choices.
+3. *Outlier years* (`ECOSIM_SPIKE_FILTER` = TRUE, `flag_ts_outliers()`): the Ecopath haul rule applied to the years of each B series (survey, model, literature): a year is flagged when $\log(1+x_y) > Q_3 + 3\,IQR$ of the series' positive years, high values only, with at least 10 positive years; none is flagged when 2 or more years cross the fence. `ECOSIM_DROP_OUTLIERS` = TRUE blanks the years, FALSE only reports them in `ecosim_ts_outliers_REVIEW.csv`.
 
 Effect of each rule, tested against the 1995 model's series (simplified MEDITS index without q):
 
@@ -1634,7 +1634,7 @@ Effect of each rule, tested against the 1995 model's series (simplified MEDITS i
 | Zeros not counted | 11 | 22 | −0.05 |
 | Zeros counted | 8 | 24 | −0.03 |
 | + haul cap + coverage | 4 | 20 | 0.02 |
-| + spike filter | 3 | 20 | 0.05 |
+| + isolated-jump filter (earlier rule, replaced by the haul rule) | 3 | 20 | 0.05 |
 
 The effect on the full pipeline is in 06 block 12.
 

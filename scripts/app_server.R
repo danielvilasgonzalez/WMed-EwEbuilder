@@ -1180,9 +1180,7 @@ config_code <- reactive({
     sprintf("DROP_OUTLIERS    <- %s", tf(input$drop_outliers)),
     sprintf("USE_EXTRA_DATA   <- %s   # extra survey/assessment files in data/extra_data", tf(input$extra_data)),
     sprintf("NORMALIZE_TS     <- %s", tf(input$normalize_ts)),
-    sprintf("ECOSIM_SPIKE_FILTER   <- %s", tf(!identical(input$ecosim_outlier_method, "none"))),
-    sprintf("ECOSIM_OUTLIER_METHOD <- \"%s\"   # Ecosim series outliers: hampel / boxplot / mad / multi", if (is.null(input$ecosim_outlier_method) || input$ecosim_outlier_method == "none") "hampel" else input$ecosim_outlier_method),
-    sprintf("ECOSIM_OUTLIER_SIDE   <- \"%s\"", if (is.null(input$ecosim_outlier_side)) "high" else input$ecosim_outlier_side),
+    sprintf("ECOSIM_SPIKE_FILTER   <- TRUE   # Ecosim series: Ecopath haul rule on the years"),
     sprintf("ECOSIM_DROP_OUTLIERS  <- %s", tf(if (is.null(input$ecosim_drop_outliers)) TRUE else input$ecosim_drop_outliers)),
     sprintf("ECOPATH_B_FILL_MODE  <- \"%s\"   # FGs with no Ecopath-years biomass", if (isTRUE(input$fill_b)) "window_mean" else "nearest"),
     if (isTRUE(input$fill_b) && length(input$fill_years) == 2) sprintf("ECOPATH_B_FILL_YEARS <- %s", yr(input$fill_years)),
@@ -2822,9 +2820,6 @@ observeEvent(input$settings_upload, {
   if (!is.null(s$ECOPATH_B_FILL_MODE)) { updateCheckboxInput(session, "fill_b", value = identical(s$ECOPATH_B_FILL_MODE, "window_mean")); u("ECOPATH_B_FILL_MODE") }
   if (!is.null(s$ECOPATH_B_FILL_YEARS)) { updateSliderInput(session, "fill_years", value = rng(s$ECOPATH_B_FILL_YEARS)); u("ECOPATH_B_FILL_YEARS") }
   ## HIGH_F_B_FIX: no longer a choice (high F is reported only)
-  if (isFALSE(s$ECOSIM_SPIKE_FILTER)) { updateSelectInput(session, "ecosim_outlier_method", selected = "none"); u("ECOSIM_SPIKE_FILTER") } else
-    if (!is.null(s$ECOSIM_OUTLIER_METHOD)) { updateSelectInput(session, "ecosim_outlier_method", selected = s$ECOSIM_OUTLIER_METHOD); u("ECOSIM_OUTLIER_METHOD") }
-  if (!is.null(s$ECOSIM_OUTLIER_SIDE)) { updateSelectInput(session, "ecosim_outlier_side", selected = s$ECOSIM_OUTLIER_SIDE); u("ECOSIM_OUTLIER_SIDE") }
   if (!is.null(s$SMALL_PELAGIC_SOURCE)) { updateSelectInput(session, "sp_src", selected = s$SMALL_PELAGIC_SOURCE); u("SMALL_PELAGIC_SOURCE") }
   if (!is.null(s$PHYTO_SOURCE)) { updateSelectInput(session, "phyto_src", selected = s$PHYTO_SOURCE); u("PHYTO_SOURCE") }
   if (!is.null(s$ENV_SCENARIOS)) { updateCheckboxGroupInput(session, "env_scen", selected = as.character(s$ENV_SCENARIOS)); u("ENV_SCENARIOS") }

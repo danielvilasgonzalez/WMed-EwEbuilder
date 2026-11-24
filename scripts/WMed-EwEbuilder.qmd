@@ -1289,27 +1289,17 @@ rules applied only to the year-to-year shape of the B series, not to
     1994–1996 years are never blanked. Coverage by year:
     `survey_area_coverage_by_year.csv`.
 3.  *Outlier years* (`ECOSIM_SPIKE_FILTER` = TRUE,
-    `flag_ts_outliers()`), the series-level counterpart of the haul
-    screening for Ecopath (`OUTLIER_METHOD`, `DROP_OUTLIERS`). Applied
-    to every B series (survey, model, literature), on the log of its
-    positive values. Rule (`ECOSIM_OUTLIER_METHOD`):
-    - `"hampel"` (default): a year is flagged when
-      $\log x_y - \text{median}(\log x_{\text{4 nearest years}}) > \max(3 \cdot 1.4826\,\text{MAD}, \log 3)$,
-      a one-sided Hampel filter [@hampel1974; @pearson2002];
-    - `"boxplot"`: above $Q_3 + 3\,IQR$ of the series (Tukey fences, as
-      the haul rule);
-    - `"mad"`: $(\log x_y - \text{median}) / (1.4826\,\text{MAD}) > 3$
-      over the whole series;
-    - `"multi"`: several rules (`ECOSIM_OUTLIER_MULTI_METHODS`) combined
-      with `ECOSIM_OUTLIER_CONSENSUS` (`"all"`, `"any"`, `"majority"`).
-
-    All rules keep the 3-fold floor, so smooth series are not touched.
-    `ECOSIM_OUTLIER_SIDE` = `"high"` (default) screens high values only,
-    because a low year can be a real decline; `"both"` also screens low
-    values. `ECOSIM_DROP_OUTLIERS` = TRUE blanks the flagged years; FALSE
-    only reports them. ASSUMPTION: the window, the 3 MAD, the 3 IQR and
-    the 3-fold floor are judgment choices. Flagged values:
-    `ecosim_ts_outliers_REVIEW.csv`.
+    `flag_ts_outliers()`). The same rule as the haul screening for
+    Ecopath, applied to the years of each B series (survey, model,
+    literature) instead of the hauls of a GSA × stratum × year. A year
+    is flagged when
+    $\log(1 + x_y) > Q_3 + 3\,IQR$ of the series' positive years
+    (Tukey's far-out fence [@tukey1977]), high values only, and only when the series
+    has at least 10 positive years. If 2 or more years cross the fence,
+    none is flagged: repeated highs are read as a real change, as
+    repeated high hauls are kept for Ecopath. `ECOSIM_DROP_OUTLIERS` =
+    TRUE blanks the flagged years; FALSE only reports them. Flagged
+    values: `ecosim_ts_outliers_REVIEW.csv`.
 
 Effect of each rule, tested against the 1995 model's series (simplified
 MEDITS index without q):
@@ -1319,7 +1309,7 @@ MEDITS index without q):
 | Zeros not counted | 11 | 22 | −0.05 |
 | Zeros counted | 8 | 24 | −0.03 |
 | \+ haul cap + coverage | 4 | 20 | 0.02 |
-| \+ spike filter | 3 | 20 | 0.05 |
+| \+ isolated-jump filter (earlier rule, replaced by the haul rule) | 3 | 20 | 0.05 |
 
 The effect on the full pipeline is in 06 block 12.
 

@@ -520,16 +520,10 @@ if (!exists("ECOPATH_B_EXPANDING_MIN", envir = .GlobalEnv, inherits = FALSE)) EC
 ##                              than this share of the model area are left
 ##                              blank (2022: GSAs 7-8 only = 14 %; 2023 = 60 %).
 ##   ECOSIM_SPIKE_FILTER      - screens every Ecosim B series, survey or
-##                              not, for outliers (flag_ts_outliers()).
-##   ECOSIM_OUTLIER_METHOD    - the rule, as OUTLIER_METHOD for the hauls:
-##                              "hampel" (default: isolated jump > 3x and
-##                              > 3 MAD above the 2 years each side, log
-##                              scale), "boxplot" (Tukey fences of the
-##                              series), "mad" (robust z of the series) or
-##                              "multi" (ECOSIM_OUTLIER_MULTI_METHODS
-##                              combined with ECOSIM_OUTLIER_CONSENSUS).
-##   ECOSIM_OUTLIER_SIDE      - "high" (default; a low year can be a real
-##                              decline) or "both".
+##                              not, with the Ecopath haul rule applied to
+##                              the years of the series (flag_ts_outliers():
+##                              log1p(x) > Q3 + 3 IQR of the positive years,
+##                              high only, >= 10 years, 2+ high years kept).
 ##   ECOSIM_DROP_OUTLIERS     - TRUE blanks them; FALSE only reports them
 ##                              in ecosim_ts_outliers_REVIEW.csv.
 if (!exists("ECOSIM_HAUL_CAP_Q",        envir = .GlobalEnv, inherits = FALSE)) ECOSIM_HAUL_CAP_Q        <- 0.95
@@ -544,10 +538,6 @@ if (!exists("ECOSIM_MIN_AREA_COVERAGE", envir = .GlobalEnv, inherits = FALSE)) E
 ## FALSE = mean over the sampled cells only, no stratum filling.
 if (!exists("SURVEY_IMPUTE_UNSAMPLED_CELLS", envir = .GlobalEnv, inherits = FALSE)) SURVEY_IMPUTE_UNSAMPLED_CELLS <- TRUE
 if (!exists("ECOSIM_SPIKE_FILTER",      envir = .GlobalEnv, inherits = FALSE)) ECOSIM_SPIKE_FILTER      <- TRUE
-if (!exists("ECOSIM_OUTLIER_METHOD",    envir = .GlobalEnv, inherits = FALSE)) ECOSIM_OUTLIER_METHOD    <- "hampel"
-if (!exists("ECOSIM_OUTLIER_SIDE",      envir = .GlobalEnv, inherits = FALSE)) ECOSIM_OUTLIER_SIDE      <- "high"
-if (!exists("ECOSIM_OUTLIER_MULTI_METHODS", envir = .GlobalEnv, inherits = FALSE)) ECOSIM_OUTLIER_MULTI_METHODS <- c("hampel", "boxplot", "mad")
-if (!exists("ECOSIM_OUTLIER_CONSENSUS", envir = .GlobalEnv, inherits = FALSE)) ECOSIM_OUTLIER_CONSENSUS <- "all"
 if (!exists("ECOSIM_DROP_OUTLIERS",     envir = .GlobalEnv, inherits = FALSE)) ECOSIM_DROP_OUTLIERS     <- TRUE
 ## FGs whose Ecopath_B baseline ALSO uses the haul-capped index (2026-10-08):
 ## their 1994-1996 mean rests on a few extreme hauls (ecosim_haul_cap_effect_REVIEW.csv:
@@ -3908,8 +3898,6 @@ export_ecopath_ecosim_excel(
   estimate_b_from_ee = ECOPATH_B_FROM_EE,
   ee_value = ECOPATH_B_EE_VALUE,
   spike_filter = ECOSIM_SPIKE_FILTER,
-  outlier_method = ECOSIM_OUTLIER_METHOD,
-  outlier_args = list(side = ECOSIM_OUTLIER_SIDE, methods = ECOSIM_OUTLIER_MULTI_METHODS, consensus = ECOSIM_OUTLIER_CONSENSUS),
   drop_ts_outliers = ECOSIM_DROP_OUTLIERS,
   fg_index_regional = fg_index_regional_combined,
   species_density_regional = species_density_regional_combined,

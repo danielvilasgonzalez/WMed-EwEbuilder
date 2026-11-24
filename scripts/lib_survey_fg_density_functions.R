@@ -4539,75 +4539,26 @@ resolve_baseline_with_nearest_year_fallback <- function(dt, id_cols, value_col =
 ## no longer requires Step 4 just to appear. If PB_QB_spp already has
 ## real (non-NA) PB values from a prior Step 4 run, this scaffold is
 ## skipped so re-running Step 1 never overwrites Step 4's real numbers.
-## Flags isolated UPWARD spikes in an annual series (one-sided Hampel
-## filter on log values; Hampel 1974, Pearson 2002). For each year with a
-## positive value: neighbours = the 2 x `half` nearest valid years (at
-## least 3); flagged when log(x) - median(log neighbours) > max(k x MAD,
-## log(min_fold)), MAD scaled by 1.4826. The log(min_fold) floor stops
-## the filter firing on smooth series (stock assessments, model output)
-## where the MAD is near zero. ASSUMPTION: half = 2, k = 3 and min_fold = 3
-## are judgment choices, tested against the 1995 model's series
-## (2026-10-07); dips are not flagged (a low value is kept).
-flag_ts_upward_spikes <- function(year, x, half = 2, k = 3, min_fold = 3) {
-  flag <- logical(length(x))
-  ok <- which(!is.na(x) & x > 0)
-  if (length(ok) < 4) return(flag)
-  ok <- ok[order(year[ok])]
-  li <- log(x[ok]); n <- length(li)
-  for (i in seq_len(n)) {
-    ## the 2*half nearest valid years (symmetric inside the series,
-    ## one-sided at its ends so the first and last years are also checked)
-    j <- setdiff(seq_len(n), i); w <- head(j[order(abs(j - i))], 2 * half)
-    if (length(w) < 3) next
-    s <- 1.4826 * stats::mad(li[w], constant = 1)
-    flag[ok[i]] <- (li[i] - stats::median(li[w])) > max(k * s, log(min_fold))
-  }
+## Outlier years in an annual Ecosim B series: the same rule as the haul
+## screening for Ecopath (remove_sample_outliers_haul()), applied to the
+## years of the series instead of the hauls of a GSA x stratum x year.
+##  - log1p(x) of the series' positive years;
+##  - a year is flagged when log1p(x) > Q3 + k x IQR (k = 3, Tukey's
+##    far-out fence), high values only;
+##  - judged only with >= min_n (10) positive years;
+##  - if min_repeated_high (2) or more years cross the fence none is
+##    flagged (repeated highs = a real change, as repeated high hauls in
+##    the same GSA x year are kept for Ecopath).
+## Returns a logical vector (TRUE = outlier).
+flag_ts_outliers <- function(year, x, k = 3, min_n = 10, min_repeated_high = 2) {
+  flag <- logical(length(x)); ok <- which(!is.na(x) & x > 0)
+  if (length(ok) < min_n) return(flag)
+  lv <- log1p(x[ok])
+  fence <- stats::quantile(lv, 0.75, names = FALSE) + k * stats::IQR(lv)
+  above <- lv > fence
+  if (sum(above) >= min_repeated_high) return(flag)
+  flag[ok] <- above
   flag
-}
-
-## Outliers in an annual Ecosim B series, with the same choice of rules
-## as the haul-level screening for Ecopath (OUTLIER_METHOD), applied to
-## the log of the series' positive values:
-##   "hampel"  - isolated jump above the neighbouring years
-##               (flag_ts_upward_spikes(), default);
-##   "boxplot" - outside the Tukey fences, Q1 - coef x IQR / Q3 + coef x IQR
-##               of the whole series (Tukey 1977);
-##   "mad"     - |log x - median| / (1.4826 MAD) > k over the whole series;
-##   "multi"   - several of these, combined with `consensus`
-##               ("all" / "any" / "majority").
-## side = "high" flags only high values (as the haul rule; a low year can
-## be a real decline), "both" flags both. The log(min_fold) floor keeps
-## the rules off smooth series. ASSUMPTION: k, coef and min_fold are
-## judgment choices. Returns a logical vector (TRUE = outlier).
-flag_ts_outliers <- function(year, x, method = "hampel", side = "high", methods = c("hampel", "boxplot", "mad"),
-                             consensus = "all", half = 2, k = 3, coef = 3, min_fold = 3) {
-  one <- function(m) {
-    if (m == "hampel") {
-      f <- flag_ts_upward_spikes(year, x, half = half, k = k, min_fold = min_fold)
-      if (side == "both") {   # mirror image for low values
-        f <- f | flag_ts_upward_spikes(year, ifelse(!is.na(x) & x > 0, 1 / x, x), half = half, k = k, min_fold = min_fold)
-      }
-      return(f)
-    }
-    flag <- logical(length(x)); ok <- which(!is.na(x) & x > 0)
-    if (length(ok) < 5) return(flag)
-    li <- log(x[ok]); med <- stats::median(li)
-    if (m == "boxplot") {
-      q <- stats::quantile(li, c(0.25, 0.75), names = FALSE); iqr <- q[2] - q[1]
-      hi <- li > max(q[2] + coef * iqr, med + log(min_fold)); lo <- li < min(q[1] - coef * iqr, med - log(min_fold))
-    } else if (m == "mad") {
-      s <- 1.4826 * stats::mad(li, constant = 1)
-      hi <- (li - med) > max(k * s, log(min_fold)); lo <- (med - li) > max(k * s, log(min_fold))
-    } else stop("unknown Ecosim outlier method: ", m)
-    flag[ok] <- if (side == "both") hi | lo else hi
-    flag
-  }
-  if (identical(method, "none")) return(logical(length(x)))
-  if (!identical(method, "multi")) return(one(method))
-  fl <- vapply(methods, one, logical(length(x)))
-  if (is.null(dim(fl))) fl <- matrix(fl, nrow = length(x))
-  n <- rowSums(fl)
-  switch(consensus, all = n == ncol(fl), any = n >= 1, majority = n > ncol(fl) / 2)
 }
 
 export_ecopath_ecosim_excel <- function(fg_index_regional, species_density_regional,
@@ -4619,10 +4570,7 @@ export_ecopath_ecosim_excel <- function(fg_index_regional, species_density_regio
                                         no_zero_fill_fg = integer(0),  ## FGs whose Ecosim gaps stay BLANK (not 0) in survey years - non-survey sources (model, literature, stock assessment) and recording-era FGs
                                         estimate_b_from_ee = character(0),  ## FG names whose Ecopath B is left blank for Ecopath to estimate from EE (poorly sampled groups)
                                         ee_value = 0.95,                    ## EE given to those FGs (EE_input column of Ecopath_B)
-                                        spike_filter = FALSE,               ## TRUE = screen each Ecosim B series for outliers (flag_ts_outliers())
-                                        spike_args = list(half = 2, k = 3, min_fold = 3),
-                                        outlier_method = "hampel",          ## flag_ts_outliers() rule: hampel / boxplot / mad / multi
-                                        outlier_args = list(),              ## side, methods, consensus, coef ... for flag_ts_outliers()
+                                        spike_filter = FALSE,               ## TRUE = screen each Ecosim B series for outlier years (flag_ts_outliers(), Ecopath haul rule)
                                         drop_ts_outliers = TRUE,            ## FALSE = report only, keep the values
 
                                         csv_out_dir = NULL) {    ## directory for this function's own native CSV outputs - defaults to dirname(out_path) for back-compat, but 01_biomass.R passes its own "biomass" subfolder here so this block's CSVs land there instead of at the shared workbook's top level
@@ -4877,8 +4825,7 @@ export_ecopath_ecosim_excel <- function(fg_index_regional, species_density_regio
     ## Applied to every B series (survey, model, literature); listed in
     ## ecosim_ts_outliers_REVIEW.csv.
     if (isTRUE(spike_filter)) {
-      fl <- do.call(flag_ts_outliers, c(list(year = vals$Year, x = vals$mean_density, method = outlier_method),
-                                        spike_args, outlier_args))
+      fl <- flag_ts_outliers(vals$Year, vals$mean_density)
       if (any(fl)) {
         spike_log[[length(spike_log) + 1L]] <<- data.table(FG_num = fg_num, Year = vals$Year[fl],
                                                           value_flagged = vals$mean_density[fl],
@@ -4959,9 +4906,9 @@ export_ecopath_ecosim_excel <- function(fg_index_regional, species_density_regio
       spikes <- data.table(FG_num = integer(), FG_name = character(), Year = integer(),
                            value_flagged = numeric(), series_median = numeric(), fold_over_median = numeric())
     }
-    spikes[, `:=`(method = outlier_method, was_dropped = isTRUE(drop_ts_outliers))]
+    spikes[, was_dropped := isTRUE(drop_ts_outliers)]
     fwrite(spikes, file.path(out_dir, "ecosim_ts_outliers_REVIEW.csv"))
-    message("[Ecosim_ts] outlier screening (", outlier_method, "): ", nrow(spikes), " year(s) flagged in ",
+    message("[Ecosim_ts] outlier screening (Ecopath haul rule: Q3 + 3 IQR on log1p, high only): ", nrow(spikes), " year(s) flagged in ",
             uniqueN(spikes$FG_num), " B series - ", if (isTRUE(drop_ts_outliers)) "blanked" else "kept (report only)",
             " (ecosim_ts_outliers_REVIEW.csv).")
   }
