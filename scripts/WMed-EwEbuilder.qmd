@@ -793,8 +793,7 @@ P/B, Q/B and diets), F = C/B, and the diet split by prey biomass.
     MB252/MB2522 and coralligenous MC151/MC251; dead mattes MB2523
     excluded):
 
-    $$B_{region} = \frac{B_{WM}\, A_{WM}\; a_{hab,region} / a_{hab,WM}}{A_{region}}
-    $$$$B_{region} = \frac{B_{WM}\, A_{WM}\; a_{hab,region} / a_{hab,WM}}{A_{region}}$$
+    $$B_{region} = \frac{B_{WM}\, A_{WM}\; a_{hab,region} / a_{hab,WM}}{A_{region}}$$
 
     where $B_{WM}$ is the FG's Western Med biomass (t/km²), $A_{WM}$ the
     Western Med model area, $a_{hab,region}$ and $a_{hab,WM}$ the mapped
@@ -806,7 +805,19 @@ P/B, Q/B and diets), F = C/B, and the diet split by prey biomass.
     `custom_habitat_map_share.csv`.
 
   - *Other FGs* (megafauna, plankton, groups MEDITS does not sample)
-    take the Western Med density per km² (ASSUMPTION).
+    take the Western Med density per km² (ASSUMPTION), minus the species
+    that do not live in the region (`CUSTOM_PRESENCE_CHECK` = TRUE):
+
+    $$B_{region} = B_{WM} \sum_{s \in f,\ s\ \text{present}} p_{s|f}^{WM}$$
+
+    A species is present when its AquaMaps native range
+    [@kaschner2019] has a 0.5° cell with probability ≥
+    `CUSTOM_PRESENCE_MIN_PROB` (0.4, ASSUMPTION) overlapping the region
+    and its AquaMaps depth range overlaps the region's depths. Species
+    without an AquaMaps record are kept. An FG with no species present
+    gets $B = 0$. Absent species are left out of the species shares
+    below, and the shares of the rest are renormalised. Check
+    `custom_species_presence_REVIEW.csv`.
 
   - The species shares inside these FGs come from the Western Med run,
     so P/B and Q/B (03) stay biomass-weighted averages of the species,
@@ -1151,7 +1162,7 @@ Every valid haul is kept; only outliers are removed.
 - **Partial-coverage years** are kept (`ECOSIM_MIN_AREA_COVERAGE` = 0).
 - ASSUMPTION: the mean over the sampled GSAs represents the year. In a
   year with few GSAs (2022: 14 % of the area), the value reflects those
-  GSAs only. The spike filter still applies.
+  GSAs only. The outlier screening still applies.
 
 **Model area (`MODEL_AREA_BASIS = "whole_gsa"`, `MODEL_GSAS = 1:12`).**
 $A_{model}$ is the whole sea area of GSAs 1–12, from the coast to the
@@ -1277,14 +1288,28 @@ rules applied only to the year-to-year shape of the B series, not to
     handles partial years (2022: GSAs 7–8 only, 14 %; 2023: 60 %). The
     1994–1996 years are never blanked. Coverage by year:
     `survey_area_coverage_by_year.csv`.
-3.  *Spike filter* (`ECOSIM_SPIKE_FILTER` = TRUE,
-    `flag_ts_upward_spikes()`). In every B series (survey, model,
-    literature), a year is blanked when
-    $\log x_y - \text{median}(\log x_{\text{4 nearest years}}) > \max(3 \cdot 1.4826\,\text{MAD}, \log 3)$.
-    This is a one-sided Hampel filter [@hampel1974; @pearson2002].
-    ASSUMPTION: the window, the 3 MAD and the 3-fold floor are judgment
-    choices. Dips are kept. Removed values:
-    `ecosim_ts_spikes_removed_REVIEW.csv`.
+3.  *Outlier years* (`ECOSIM_SPIKE_FILTER` = TRUE,
+    `flag_ts_outliers()`), the series-level counterpart of the haul
+    screening for Ecopath (`OUTLIER_METHOD`, `DROP_OUTLIERS`). Applied
+    to every B series (survey, model, literature), on the log of its
+    positive values. Rule (`ECOSIM_OUTLIER_METHOD`):
+    - `"hampel"` (default): a year is flagged when
+      $\log x_y - \text{median}(\log x_{\text{4 nearest years}}) > \max(3 \cdot 1.4826\,\text{MAD}, \log 3)$,
+      a one-sided Hampel filter [@hampel1974; @pearson2002];
+    - `"boxplot"`: above $Q_3 + 3\,IQR$ of the series (Tukey fences, as
+      the haul rule);
+    - `"mad"`: $(\log x_y - \text{median}) / (1.4826\,\text{MAD}) > 3$
+      over the whole series;
+    - `"multi"`: several rules (`ECOSIM_OUTLIER_MULTI_METHODS`) combined
+      with `ECOSIM_OUTLIER_CONSENSUS` (`"all"`, `"any"`, `"majority"`).
+
+    All rules keep the 3-fold floor, so smooth series are not touched.
+    `ECOSIM_OUTLIER_SIDE` = `"high"` (default) screens high values only,
+    because a low year can be a real decline; `"both"` also screens low
+    values. `ECOSIM_DROP_OUTLIERS` = TRUE blanks the flagged years; FALSE
+    only reports them. ASSUMPTION: the window, the 3 MAD, the 3 IQR and
+    the 3-fold floor are judgment choices. Flagged values:
+    `ecosim_ts_outliers_REVIEW.csv`.
 
 Effect of each rule, tested against the 1995 model's series (simplified
 MEDITS index without q):
@@ -1399,16 +1424,13 @@ MEDIAS_HANDBOOK_AREAS <- data.table(
 )
 ```
 
-::: callout-warning
-### Handbook areas are hand-transcribed - verify against your own institute's reports
+::: callout-note
+### Survey areas from the MEDIAS handbook
 
-These six rows were transcribed from the MEDIAS Handbook [@medias2025]
-and restricted to entries plausibly overlapping the Western Med
-(`FILTER_AREAS`, GSA 1-11) - Adriatic/Black Sea entries were left out as
-out of scope, not because they don't exist. Verify against your own
-institute's current MEDIAS survey reports before trusting these for
-anything beyond this pipeline's own internal density calculation -
-handbook figures can be revised between editions.
+These six rows come from the MEDIAS handbook [@medias2025], restricted
+to the entries in the Western Med (`FILTER_AREAS`, GSA 1-11); Adriatic
+and Black Sea entries are out of scope. The handbook can be revised
+between editions; update the rows if a new edition changes them.
 :::
 
 For any country/GSA combination *not* covered by Table 1, the pipeline
@@ -1628,6 +1650,14 @@ First available wins, per FG × year:
 2.  MEDIAS acoustic density (pelagic FGs; sardine and anchovy via the
     per-GSA series, eq. 9).
 3.  MEDITS density / $q$.
+
+For sardine and anchovy the source is a choice (`SMALL_PELAGIC_SOURCE`,
+also in the app): `"medias"` (default, the per-GSA acoustic series),
+`"medits"` (the bottom-trawl index, which undersamples pelagic fish) or
+`"stock_assessment"` (assessed biomass of the stock covering each GSA /
+its shelf area, 10–200 m; GSAs without an assessment get the median of
+the assessed GSAs, ASSUMPTION; [@ricard2012]; table
+`small_pelagics_stock_assessment_series_REVIEW.csv`).
 4.  For FGs the surveys cannot sample (`EXEMPT_FG_NAMES`): the cited
     literature, habitat-map or plankton-model value from `01b` (SOURCES
     B–D). These are never back-filled with survey bycatch. If none
@@ -1744,17 +1774,17 @@ whole GSA area); they change with the model area and years chosen.
 | FG | Method | B | Sources | Assumptions (flagged in the code) |
 |---------------|---------------|---------------|---------------|---------------|
 | Posidonia | $B = D_{DW}\, f_{season} / (DW{:}WW) \times A_{map} \times occ / A_{model}$, $D_{DW} = \sum_b A_b\, e^{a + b z_b} / \sum_b A_b$: leaf biomass fitted against depth ($\ln B = a + b z$) to the Western Med meadows in `posidonia_leaf_biomass_sites.csv` and averaged over the depth distribution of the mapped meadow (5 m bins); DW:WW = 0.2132; $A_{map}$ = EUSeaMap 2025 [@euseamap2025] meadow deeper than 10 m (or MEDISEH); $occ$ = 0.7; $f_{season}$ = 0.62 = annual mean / late-summer leaf biomass (the site values are summer samples; leaves are 40 % of shoot biomass in summer and 14 % in winter, so winter leaf biomass ≈ 0.24 × summer and the annual mean ≈ (1 + 0.24)/2) [@alcoverro2001]. Without the EUSeaMap depth histogram the fit is not used: $D_{DW}$ = 280 g DW/m² (2–4 m) × depth factor 0.6 | ≈ 4.3 (2026-10-23) | site values: [@azcarate2023; @pergent1997] (Marseille, Ischia, 10–20 m); Nueva Tabarca reserve, [@romero1998] (left out, `POSIDONIA_MPA_WEIGHT` = 0); DW:WW 0.2132 [@mateo1996]; maps: EUSeaMap 2025 MB252 + MB2522 [@euseamap2025]; MEDISEH [@scardi2013] | marine-reserve meadows left out (small and denser than the regional mean); 6 values, mostly summer; occupancy 0.7; $f_{season}$ assumes constant below-ground biomass |
-| Cymodocea | $B = D_{DW} / (DW{:}WW) \times A_{map} \times occ / A_{model}$; $D_{DW}$ = weighted mean of the sites in `habitat_biomass_sites.csv` = (155.2 + 82.1)/2 = 118.7 g DW/m²; DW:WW 0.24; $A_{map}$ 88 km²; $occ$ 0.47; no depth factor | ≈ 0.025 | [@mascaro2009] (Menorca, Alfacs Bay, 0.8–10 m); [@guidetti2002] with leaf share from [@cancemi2002]; Urbinu lagoon [@agostini2003] left out (lagoon); DW:WW [@zavodnik1998]; area and cover *Informe Mar Balear 2020* [@marbalear2020] + EUSeaMap [@euseamap2025] | area from the Balearic ratio (ASSUMPTION); Guidetti site to verify |
-| Macroalgae | $B = D_{DW} \times [f_{calc}/0.7405 + (1-f_{calc})/0.1376] \times A_{map} \times occ / A_{model}$; $D_{DW}$ = mean of shallow (1,650) and deep (1,600) coralligenous algal biomass = 1,625 g DW/m²; $f_{calc}$ 0.7; 325.05 km²; occ 0.4; no depth factor | 0.79 | [@ballesteros2006] (pp. 140, 143); DW:WW [@haberman2023]; EMODnet macroalgae EOV [@emodnetmacroalgae2025] | calcareous share 0.7 (conservative; \~90% coralline cover); occupancy 0.4; area is the ICES ecoregion |
+| Cymodocea | $B = D_{DW} / (DW{:}WW) \times A_{map} \times occ / A_{model}$; $D_{DW}$ = weighted mean of the sites in `habitat_biomass_sites.csv` = (155.2 + 82.1)/2 = 118.7 g DW/m²; DW:WW 0.24; $A_{map}$ 88 km²; $occ$ 0.47; no depth factor | ≈ 0.025 | [@mascaro2009] (Menorca, Alfacs Bay, 0.8–10 m); [@guidetti2002] with leaf share from [@cancemi2002]; Urbinu lagoon [@agostini2003] left out (lagoon); DW:WW [@zavodnik1998]; area and cover *Informe Mar Balear 2020* [@marbalear2020] + EUSeaMap [@euseamap2025] | area from the Balearic ratio (ASSUMPTION) |
+| Macroalgae | $B = D_{DW} \times [f_{calc}/0.7405 + (1-f_{calc})/0.1376] \times A_{map} \times occ / A_{model}$; $D_{DW}$ = mean of shallow (1,650) and deep (1,600) coralligenous algal biomass = 1,625 g DW/m²; $f_{calc}$ 0.7; 325.05 km²; occ 0.4; no depth factor | 0.79 | [@ballesteros2006] (pp. 140, 143); DW:WW [@haberman2023]; EMODnet macroalgae EOV [@emodnetmacroalgae2025] | calcareous share 0.7 (conservative; \~90% coralline cover); occupancy 0.4 (ASSUMPTION: no cover estimate exists for the mapped polygons; algae cover less than half of a mapped rocky polygon, patchier than Posidonia meadows, 0.7; B scales linearly with it); area is the ICES ecoregion |
 | Corals and gorgonians | $B = \overline{\sum(N_{col} \times AFDM_{col})} \div 0.143 \times f_z \times A_{map} / A_{model}$; mean of Cap de Creus (4.87) and Gulf of Naples (3.09) = 3.98 g AFDM/m² → 27.8 g WW/m² (living tissue) × $f_z$ × 1,442.4 km² | ≈ 0.048 × $f_z$ | [@coppari2019; @ferrigno2026] (ROV, \~1.8 km²); AFDM:WW 0.143 [@ricciardi1998]; EUSeaMap MC151/MC251 | both sites partly protected; *E. cavolini* uses the *E. singularis* AFDM per colony; skeleton not counted |
-| Large / small phytoplankton | ISIMIP3a GFDL-MOM6-COBALT2 obsclim, vertically integrated, mean over the domain; C:WW 1:9 (0.111) | ≈ 8.2 / 9.1 (5.70 / 6.30 with the earlier C:WW 0.16) | [@isimip3a_cobalt; @stock2020]; C:WW [@pauly1995] | model, not observation; C:WW 1:9 is the EwE convention, phytoplankton C:WW varies with cell size |
+| Large / small phytoplankton | Copernicus MEDSEA MedBFM reanalysis (`PHYTO_SOURCE = "copernicus"`, default): phytoplankton carbon integrated over the euphotic zone (99 % of the NPP), mean of the Ecopath years, × 9 (C:WW); Large/Small = satellite microphytoplankton share per cell and month (2002–2004); P/B = annual NPP / carbon (1994–1998: PISCES scaled to MedBFM) | ≈ 6.5 in total (≈ 1.3 large, ≈ 5.2 small); P/B ≈ 170 /yr (exact values in `environment/ecopath_phytoplankton_B_PB.csv`) | [@medbfm]; C:WW [@pauly1995]; size classes [@dicicco2017] | chlorophyll share used for carbon; C:WW 1:9 is the EwE convention, phytoplankton C:WW varies with cell size |
 | Meso and micro zooplankton | COBALT zmicro-vint + zmeso-vint, whole water column, level and trend; C:WW 0.07 micro, 0.09 meso; × $k = \overline{NPP}_{MedBFM} / \overline{NPP}_{COBALT}$ over the Ecopath years (`PLANKTON_MATCH_MEDBFM`, default, ASSUMPTION), so the COBALT zooplankton:NPP ratio sits on the MedBFM production of the phytoplankton (k ≈ 0.48) | 29.6 before matching (≈ 15 after; `plankton_match_medbfm_REVIEW.csv`) | [@stock2020; @fenchel1983; @kiorboe2013]; field reference in `zooplankton_mesomicro_cobalt_vs_field_REVIEW.csv` | the net value (0.87 t DM/km², 0–100 m, ≥ 250 µm; [@fernandez2023]) is a different quantity: COBALT integrates the whole column (mean 290 m) and includes microzooplankton |
 | Macro zooplankton | MAREDAT macrozooplankton (23 cells, 67 values in the Western Med box): median mg C/m³ (0–350 m) × $z_{eff}$ 214.5 m / 0.04 (C:WW) / 1000 | 3.15 | [@moriarty2013]; C:WW from [@molina2015] | C:WW 0.04 (krill would be 0.086, `MACRO_C_FRACTION_WW`); 1990s–2000s nets, sparse cells |
 | Suprabenthos | literature density × depth band (10–388 m and 389–1,255 m), plus the literature AquaMaps extension (+35.1 t, 9 species) | 0.0205 (reference only; Ecopath estimates B from EE = 0.95) | [@cartes2007; @cartes1999] | figure hand-read; 1991/2003 data |
 | Salps and other gelatinous zooplankton; Jellyfish | no B: Ecopath estimates it from EE = 0.95 | — | [@luo2020] (*ESSD* 12:1047) cell values are computed and written to `gelatinous_macrozoo_biomass_REVIEW.csv` for review only (`GEL_LUO_USE_FOR_B = FALSE`); salp upper bound 10.8 t/km² from the field check (@sec-validation) | Luo data are few, patchy and dominated by bloom samples |
 | Detritus | [@pauly1993] equation from COBALT intpp and euphotic depth; C:WW 1:9; × $k^{0.954}$ (the same NPP ratio, `PLANKTON_MATCH_MEDBFM`) | ≈ 288 before matching (≈ 140 after) | [@pauly1995; @morel1989] | — |
-| Bluefin tuna | GBYP aerial survey density, Balearic A-core block, 2017–2021 mean | 0.153 | ICCAT GBYP Phase 11 [@creem2021] | spawning snapshot; 2017–21 ≠ 1995 |
-| Swordfish | $B_{2018} = 0.72 \times B_{MSY}$ (JABBA) on the Mediterranean stock | 0.0205 | ICCAT SWO-MED assessment [@iccat2020swo] | 2018 ≠ 1995 |
+| Bluefin tuna | GBYP aerial survey density, Balearic A-core block, 2017–2021 mean (0.153), × the BFT-E SSB ratio 1995/2015 = 176,000/605,000 t = 0.29 | 0.045 | ICCAT GBYP Phase 11 [@creem2021]; BFT-E assessment series in RAM Legacy v4.44 [@ricard2012] | spawning snapshot; SSB rose after 2015, so 1995 may be slightly high |
+| Swordfish | 1995 total biomass of the Mediterranean stock, 66,100 t ($B/B_{MSY}$ = 0.95), / Mediterranean area | 0.026 | ICCAT 2010 SWO-MED assessment series in RAM Legacy v4.44 [@ricard2012]; check: 0.95 × $B_{MSY}$ 71,319 t of the 2020 JABBA assessment [@iccat2020swo] | uniform density over the Mediterranean |
 | Cetaceans, monk seal, seabirds, loggerhead turtle | survey density (ind/km²) × mean body mass, applied to the whole $A_{model}$ (`Model_area_density_t_km2`); `Scale_to_1995` multiplies by a trend ratio when one is published; monk seal and fin whale are counts | see `marine_megafauna_biomass.csv` | striped dolphin: 1991 survey, [@forcada1998]; fin whale: 1991 survey, [@forcada1996]; bottlenose dolphin, Risso's dolphin, pilot and beaked whales: ACCOBAMS ASI 2018–2019 [@panigada2024]; sperm whale: [@boisseau2024]; body mass of bottlenose, striped and Risso's dolphins: [@carlucci2024]; monk seal: [@johnson2006] (Monk Seal Fact Files); seabirds: [@pettex2017] (SAMM 2011–12) with the Scopoli's shearwater detection correction (× 3.89) from [@lambert2024]; loggerhead: [@dimatteo2022], summer 2018 count not corrected for turtles underwater (343,321 for the basin; a minimum) | striped dolphin and fin whale are 1991 surveys; the others are 2003–2019 surveys with no published trend to 1995 (`Scale_to_1995` = 1, flagged); seabird and turtle masses not from a primary source; little gull, gannet and auks excluded (not in the FG species list) |
 
 **Survey zeros do not override cited values.** In the source-priority
@@ -1806,9 +1836,9 @@ t/km² (`small_pelagics_per_gsa_series_REVIEW.csv`).
   GSAs only.
 - 123 species in 7 FGs still use an even within-FG biomass split
   (`fg_species_biomass_needs_review.csv`).
-- Values from 2017–2021 surveys (bluefin tuna, cetaceans) stand in for
-  1995; the direction of the bias is documented in each
-  `Source_citation`.
+- Values from 2017–2021 surveys (cetaceans) stand in for 1995; the
+  direction of the bias is documented in each `Source_citation`.
+  Bluefin tuna is scaled to 1995 with the assessment SSB ratio.
 :::
 
 ### Output plots
@@ -1973,7 +2003,9 @@ year.
     corrections replace or rescale the commercial rows only. Check
     `recreational_share_by_country_REVIEW.csv` against the
     Mediterranean-wide order of magnitude (recreational catch about 10 %
-    of commercial landings; FAO-GFCM SoMFi). Effort (ASSUMPTION): index
+    of commercial landings; FAO-GFCM SoMFi). Context only, not used in
+    the calculation: European participation, effort and catch of
+    recreational sea fishing [@hyder2018]. Effort (ASSUMPTION): index
     of SAU's reconstructed recreational catch of the country (built from
     participation estimates), 1 = Ecopath years, held outside SAU's
     years; constant where SAU has none; `RECREATIONAL_EFFORT_MANUAL`
@@ -2107,7 +2139,7 @@ protocol "Quick guide on how to calculate P/B and Q/B for EwE models".
 | Fish | $P/B = Z = M + F$ [@allen1971]. $M$ priority: [@then2015] \> [@pauly1980] ($\log_{10} M = -0.0066 - 0.279\log_{10}L_\infty + 0.6543\log_{10}K + 0.4634\log_{10}T$) \> [@hoenig1983] \> [@alverson1975] (via TropFishR; [@mildenberger2017]) \> FishLife [@thorson2017] \> [@gascuel2008] ($M = 2.31\,TL^{-1.72}e^{0.053T}$). $F$ from 02 (@sec-fisheries). | [@palomares1998]: $\log_{10} Q/B = 5.847 + 0.280\log_{10}Z - 0.152\log_{10}W_\infty - 1.360\,T' + 0.062A + 0.510h + 0.390d$, $T' = 1000/(T+273.15)$; no-$Z$ variant; [@christensen1992]; Q/P = 3 fallback |
 | Marine mammals | Siler survivorship [@barlow1991], else $20.19\,TL^{-3.26}e^{0.041T}$ [@gascuel2008] | $365 \times 0.1\,W^{0.8}/W$ [@innes1987; @trites1997], $W$ = mean body mass in kg (`homeotherm_mean_body_mass.csv`: [@carlucci2024], to be completed from [@tritespauly1998]; else FishBase/SeaLifeBase maximum mass, flagged) |
 | Seabirds | [@gascuel2008] | $365 \times 10^{-0.293 + 0.85\log_{10}W}/W$ [@nilsson1976], $W$ = mean body mass in g (to be completed from [@dunning2008]; else maximum mass, flagged) |
-| Invertebrates | [@tumbiolo1994]: $\log_{10}P = 0.24 + 0.96\log_{10}B - 0.21\log_{10}W_{max} + 0.03T - 0.16\log_{10}(z+1)$; [@brey1999] ($M_{max}$ at 4.5 kJ/g, ASSUMPTION); [@gascuel2008] fallback | $Q/B = 3\,P/B$ [@christensen2008] |
+| Invertebrates | [@tumbiolo1994]: $\log_{10}P = 0.24 + 0.96\log_{10}B - 0.21\log_{10}W_{max} + 0.03T - 0.16\log_{10}(z+1)$; [@brey1999] ($M_{max}$ = maximum wet mass × energy density, only inside this equation: cephalopods 4.4, crustaceans 4.8, jellyfish 0.7 kJ/g [@spitz2010]; other taxa 4.5 kJ/g, ASSUMPTION); [@gascuel2008] fallback | $Q/B = 3\,P/B$ [@christensen2008] |
 | Primary producers | — | $Q/B = 0$ |
 
 FG level: $X_f = \sum_s B_s X_s / \sum_s B_s$. Missing species values
@@ -2246,8 +2278,8 @@ within the study, $j$ a prey FG, $DC_{s,j}$ the fraction of FG $j$ in
 the diet of species $s$, $f$ the predator FG and $DC_{f,j}$ its diet
 composition. $w_{k \to j}$ is the share of prey item $k$ assigned to FG
 $j$: prey species in `FG_WMed_2026.csv` → its FG; else the genus,
-family, order, class or phylum shared with model species → equal split
-over the FGs holding that taxon (`DIET_TAXON_SPLIT`); else a
+family, order, class or phylum shared with model species → split by
+Ecopath B of the FGs holding that taxon (`DIET_TAXON_SPLIT`); else a
 food-category rule
 (`diet_reference_tables/fishbase_food_category_to_fg.csv`, about 44
 regex rules) → split by Ecopath B of the target FGs
@@ -2435,7 +2467,8 @@ to a CSV with columns `input, pattern, index, category`).
 | B | Biomass left for Ecopath with a fixed EE | Estimated by Ecopath from the EE (indirect)\* | 0.2 |
 | B | ISIMIP ocean-model hindcast (plankton) | Approximate / indirect\* | 0.4 |
 | B | Megafauna sighting density × body mass; habitat cover × site density | Approximate or indirect method | 0.4 |
-| B | MEDITS trawl, MEDIAS / acoustic series, stock assessment | Sampling-based, low precision | 0.7 |
+| B | MEDITS trawl, MEDIAS / acoustic series (surveys of the model area) | Sampling-based, high precision | 1.0 |
+| B | Stock assessment | Sampling-based, low precision | 0.7 |
 | P/B, Q/B | EcoBase (other Mediterranean EwE models) | From other model | 0.2 |
 | P/B, Q/B | Empirical equation (e.g. Tumbiolo & Downing, Palomares & Pauly) | Empirical relationship | 0.5 |
 | P/B, Q/B | Published estimates for the same species | Same species, similar system | 0.8 |
@@ -2453,10 +2486,11 @@ to a CSV with columns `input, pattern, index, category`).
 "from other model" score 0: a biomass estimated from a fixed EE still
 rests on a chosen EE and on the predators' consumption, and the ISIMIP
 hindcast is forced by observed climate, so both carry some information
-(project decision). MEDITS biomass is classed as low precision because
-it depends on an assumed catchability and on the swept-area expansion
-(ASSUMPTION; it could be argued up to 1.0 for well-sampled demersal
-fish). The overall index is
+(project decision). MEDITS and MEDIAS biomass are classed as high
+precision: both are standardised surveys that sample the model area
+itself (project decision; the catchability applied to MEDITS and the
+swept-area expansion remain sources of uncertainty, visible in the
+survey CVs). The overall index is
 
 $$P = \frac{1}{n}\sum_{i=1}^{n} \frac{1}{J_i}\sum_{j=1}^{J_i} I_{ij}$$
 
@@ -2483,10 +2517,13 @@ area-weighted sampled depth, $DM$ the field zooplankton concentration
 (mg dry mass/m³), $DW{:}WW$ the dry-to-wet weight ratio and $B_{tot}$
 the total zooplankton biomass (t WW/km²: $DM \times z_{eff}$ is in mg
 DW/m², and 1 mg/m² = 0.001 t/km², hence the 1000). DW:WW 0.1–0.2
-(ASSUMPTION). Salp upper bound: $DM \times z_{eff} / 0.0804 / 1000$
+(conversion factors 0.13–0.2 compiled for mesozooplankton in
+[@postel2000]). Salp upper bound: $DM \times z_{eff} / 0.0804 / 1000$
 (salp DW:WW 0.0804, *Thalia democratica*, Add-my-Pet). Result: field
-0.87–15 t/km² (mean 5.8); model FGs 68 + 69 + 71 + 72 ≈ 33 t/km² (meso +
-micro at the COBALT level, 29.6, + macro 3.15); salp bound 10.8 t/km².
+0.87–15 t/km² (mean 5.8); model FGs 71 + 72 ≈ 20 t/km² (meso + micro
+from COBALT rescaled to the MedBFM primary production, ≈ 15.5, + macro
+from MAREDAT, ≈ 4.6; salps and jellyfish are left to Ecopath); salp
+bound 10.8 t/km².
 The net misses most microzooplankton, so the model total should sit
 above the field value.
 
@@ -3003,8 +3040,7 @@ Each one is written to the file in the third column at every run.
 Numbered in order of first citation; the number in square brackets in
 the text points to this list. References used by the code but not cited
 above are listed after the cited ones. All entries are in
-`scripts/references.bib`; entries marked \[verify\] still need checking
-against the original.
+`scripts/references.bib`, checked against the original publications.
 
 ::: {#refs}
 :::

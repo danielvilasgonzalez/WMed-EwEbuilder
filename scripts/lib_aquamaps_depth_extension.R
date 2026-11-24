@@ -778,3 +778,64 @@ apply_aquamaps_depth_adjustment <- function(dt, per_group_fg, per_group_sp, n_sa
     audit = multipliers
   )
 }
+## =================================================================
+## Species presence in a custom region (AREA_MODE == "custom")
+## A species counts as present when (1) its AquaMaps native range has a
+## 0.5-degree cell with probability >= min_prob that overlaps the region
+## polygon and (2) its AquaMaps depth range [DepthMin, DepthMax] overlaps
+## the region's depth range. Species without an AquaMaps record get NA
+## (unknown; the caller keeps them). Genus-level matches use every
+## congener (present if any congener is). ASSUMPTION: min_prob is a
+## judgment choice; AquaMaps probabilities are relative habitat
+## suitability, not observed occurrence (Kaschner et al. 2019, AquaMaps
+## version 10/2019, www.aquamaps.org).
+## =================================================================
+aquamaps_presence_in_region <- function(scientific_names, region_sf, min_prob = 0.4, depth_range = NULL) {
+  ids <- resolve_aquamaps_species_ids(scientific_names)
+  long <- ids[!is.na(SpeciesID), .(SpeciesID = strsplit(SpeciesID, "|", fixed = TRUE)[[1]]), by = ScientificName]
+  out <- data.table(ScientificName = unique(scientific_names), present = NA, in_range = NA, depth_ok = NA,
+                    max_prob_in_region = NA_real_, presence_basis = "no AquaMaps record")
+  if (!nrow(long)) return(out)
+  .am_need_db()
+  nm <- getNamespaceExports("aquamapsdata")
+  if (!"am_nativemaps" %in% nm) stop("aquamapsdata::am_nativemaps() not available in this aquamapsdata version")
+  nat <- aquamapsdata::am_nativemaps()
+  cn <- colnames(nat)
+  .c <- function(x) cn[tolower(cn) == tolower(x)][1]
+  c_id <- .c("SpeciesID"); c_lat <- .c("CenterLat"); c_lon <- .c("CenterLong"); c_p <- .c("Probability")
+  if (anyNA(c(c_id, c_lat, c_lon, c_p))) stop("native-map table without SpeciesID/CenterLat/CenterLong/Probability (columns: ", paste(cn, collapse = ", "), ")")
+  reg <- sf::st_union(sf::st_make_valid(sf::st_transform(region_sf, 4326)))
+  bb <- sf::st_bbox(reg)
+  .ids <- unique(long$SpeciesID)
+  cells <- as.data.table(dplyr::collect(dplyr::filter(nat, .data[[c_id]] %in% !!.ids,
+                                                       .data[[c_lat]] >= !!(bb[["ymin"]] - 0.5), .data[[c_lat]] <= !!(bb[["ymax"]] + 0.5),
+                                                       .data[[c_lon]] >= !!(bb[["xmin"]] - 0.5), .data[[c_lon]] <= !!(bb[["xmax"]] + 0.5))))
+  setnames(cells, c(c_id, c_lat, c_lon, c_p), c("SpeciesID", "lat", "lon", "prob"))
+  cells[, SpeciesID := as.character(SpeciesID)]
+  if (nrow(cells)) {
+    u <- unique(cells[, .(lat, lon)])
+    sq <- sf::st_sfc(lapply(seq_len(nrow(u)), function(i) sf::st_polygon(list(cbind(
+      u$lon[i] + c(-0.25, 0.25, 0.25, -0.25, -0.25), u$lat[i] + c(-0.25, -0.25, 0.25, 0.25, -0.25))))), crs = 4326)
+    .old_s2 <- suppressMessages(sf::sf_use_s2(FALSE)); on.exit(suppressMessages(sf::sf_use_s2(.old_s2)), add = TRUE)
+    u[, inside := lengths(sf::st_intersects(sq, reg)) > 0]
+    cells <- merge(cells, u, by = c("lat", "lon"))[inside == TRUE]
+  }
+  pr <- cells[, .(max_prob = max(prob, na.rm = TRUE)), by = SpeciesID]
+  long <- merge(long, pr, by = "SpeciesID", all.x = TRUE)
+  long[is.na(max_prob), max_prob := 0]
+  env <- fetch_aquamaps_depth_envelope(ids)
+  sp <- long[, .(max_prob_in_region = max(max_prob)), by = ScientificName]
+  sp <- merge(sp, env[, .(ScientificName, DepthMin, DepthMax)], by = "ScientificName", all.x = TRUE)
+  sp[, in_range := max_prob_in_region >= min_prob]
+  sp[, depth_ok := if (is.null(depth_range)) TRUE else
+                     is.na(DepthMin) | is.na(DepthMax) | (DepthMin <= depth_range[2] & DepthMax >= depth_range[1])]
+  sp[, present := in_range & depth_ok]
+  sp[, presence_basis := fifelse(present, sprintf("AquaMaps native range in the region (max probability %.2f)", max_prob_in_region),
+                         fifelse(!in_range, sprintf("outside AquaMaps native range (max probability in the region %.2f < %.2f)", max_prob_in_region, min_prob),
+                                 sprintf("depth range %g-%g m outside the region's depths", DepthMin, DepthMax)))]
+  out <- rbind(sp[, .(ScientificName, present, in_range, depth_ok, max_prob_in_region, presence_basis)],
+               out[!ScientificName %in% sp$ScientificName])
+  message("[AquaMaps presence] ", sum(out$present %in% TRUE), " present, ", sum(out$present %in% FALSE), " absent, ",
+          sum(is.na(out$present)), " without AquaMaps record (kept), of ", nrow(out), " species.")
+  out
+}

@@ -151,7 +151,10 @@ if (RUN_MODE == "westmed_default") {
   # AQUAMAPS_B_MAX_DEPTH          <- Inf    # AquaMaps pseudo-strata biomass counted down to this depth (whole_gsa: all depths; medits_10_800: 1000)
   # ECOSIM_HAUL_CAP_Q             <- 0.95   # Ecosim trend only: cap haul FG density at this quantile (GSA x stratum); NA = off
   # ECOSIM_MIN_AREA_COVERAGE      <- 0      # Ecosim trend only: blank survey years below this sampled-area share; 0 = off
-  # ECOSIM_SPIKE_FILTER           <- TRUE   # Ecosim B series: blank isolated upward spikes
+  # ECOSIM_SPIKE_FILTER           <- TRUE   # Ecosim B series: screen for outlier years
+  # ECOSIM_OUTLIER_METHOD         <- "hampel"   # hampel / boxplot / mad / multi
+  # ECOSIM_OUTLIER_SIDE           <- "high"     # high / both
+  # ECOSIM_DROP_OUTLIERS          <- TRUE   # FALSE = report only
   # ECOPATH_B_HAUL_CAP_FGS        <- c("Commercial small demersal fish")  # Ecopath_B baseline also from the haul-capped index
   # GEL_MACRO_SOURCE              <- "datasets"  # Jellyfish, Salps (Luo et al. 2020) and Macro zooplankton (MAREDAT); "none" = old behaviour
   # MACRO_C_FRACTION_WW           <- 0.04   # macrozooplankton C as share of WW (krill: 0.086)

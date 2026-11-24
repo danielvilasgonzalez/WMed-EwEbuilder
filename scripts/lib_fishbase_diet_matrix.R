@@ -44,10 +44,10 @@
 ##   3. food category: regex rules on ItemName, FoodIII, FoodII, FoodI
 ##      (fishbase_food_category_to_fg.csv); J(k) = the FGs of the rule;
 ##      non-food items (plastic, sand, ...) are excluded.
-##   Split over J(k): DIET_TAXON_SPLIT for rules 1-2 (default "equal",
-##   w = 1/|J|) and DIET_CATEGORY_SPLIT for rule 3 (default "biomass",
-##   w_j = B_j / sum_J B, prey taken in proportion to availability -
-##   ASSUMPTION).
+##   Split over J(k): DIET_TAXON_SPLIT for rules 1-2 and
+##   DIET_CATEGORY_SPLIT for rule 3, both "biomass" by default:
+##   w_j = B_j / sum_J B, prey taken in proportion to availability
+##   (ASSUMPTION; "equal" gives w = 1/|J|).
 ##  Detritus/debris items are dropped for carnivores (FishBase trophic
 ##  level >= DIET_DETRITUS_MAX_TL = 3, ASSUMPTION: digested remains, not
 ##  detritus feeding).
@@ -67,7 +67,7 @@ if (!exists("FB_DIET_MED_REGEX")) {
                               "ionian|aegean|sicil|sardin|corsic|spain|france|italy|malta|algeria|morocco|tunisia|",
                               "greece|turkey|ebro|valencia|marseille|naples|genoa")
 }
-if (!exists("DIET_TAXON_SPLIT"))    DIET_TAXON_SPLIT    <- "equal"     # "equal" | "biomass"
+if (!exists("DIET_TAXON_SPLIT"))    DIET_TAXON_SPLIT    <- "biomass"     # "equal" | "biomass"
 ## FGs never assigned as prey by a broad match (a genus or higher rank, a
 ## food category or WoRMS): no Mediterranean predator eats adult large
 ## whales or monk seals; such items in stomachs are carcasses (scavenging).

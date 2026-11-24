@@ -188,7 +188,9 @@ while (sink.number() > 0) sink()
 ##  + 0.03 T - 0.16 log10(z + 1); Brey 1999 (NAGA ICLARM Q. 22(3):24-28):
 ##  log10 P/B =
 ##  1.672 + 0.993 log10(1/Amax) - 0.035 log10 Mmax - 300.447/(T + 273),
-##  Mmax in kJ (4.5 kJ/g wet, ASSUMPTION); Q/B = 3 P/B.
+##  Mmax in kJ: wet mass x energy density by taxon (Spitz et al. 2010,
+##  ICES J. Mar. Sci. 67:909-915; 4.5 kJ/g for other taxa, ASSUMPTION);
+##  Q/B = 3 P/B.
 ## Missing values: borrowed from the closest relative (genus > family >
 ##  order > class), tagged in *_source columns.
 ## FG level: X_f = sum_s B_s X_s / sum_s B_s (biomass-weighted).
@@ -2833,15 +2835,31 @@ calc_invertebrate <- function(out) {
   ## methods fail due to missing Depth/TrophicLevel, as long as max
   ## age or max weight data exists.
   ## Amax reuses the Longevity field (max age, years) already fetched
-  ## for other groups. Mmax needs body mass in KJ, not grams - converting
-  ## requires an energy-density constant that genuinely varies by tissue
-  ## type (roughly 4-24 KJ/g across taxa). Using ~4.5 KJ/g as a rough
-  ## wet-weight marine invertebrate estimate (commonly cited order of
-  ## magnitude in the literature) - this is an approximation, not a
-  ## precise per-taxon value, and adds real uncertainty on top of the
-  ## formula itself. Flagged here so it's not mistaken for an exact input.
-  ENERGY_DENSITY_KJ_PER_G <- 4.5
-  out[, Mmax_KJ := MaxWeight * ENERGY_DENSITY_KJ_PER_G]
+  ## for other groups. Brey's equation needs the maximum body mass as
+  ## energy (Mmax, kJ); the model itself does not use energy anywhere.
+  ## Wet mass is converted with a taxon-specific energy density (kJ per
+  ## g wet mass, Spitz et al. 2010, ICES J. Mar. Sci. 67:909-915,
+  ## Table 1, forage species of the Bay of Biscay): cephalopods 4.4,
+  ## crustaceans 4.8, jellyfish (Aurelia aurita) 0.7. Taxa with no value
+  ## there (bivalves, gastropods, polychaetes, echinoderms...) keep
+  ## ENERGY_DENSITY_KJ_PER_G = 4.5 (ASSUMPTION, within the 3.4-5.6
+  ## invertebrate range of the same table). The value used is in
+  ## energy_density_source.
+  if (!exists("ENERGY_DENSITY_KJ_PER_G")) ENERGY_DENSITY_KJ_PER_G <- 4.5
+  if (!exists("ENERGY_DENSITY_BY_TAXON")) ENERGY_DENSITY_BY_TAXON <- data.table(
+    rank  = c("Class", "Phylum", "Class", "Phylum"),
+    taxon = c("Cephalopoda", "Arthropoda", "Scyphozoa", "Cnidaria"),
+    kJ_g  = c(4.4, 4.8, 0.7, 0.7),
+    source = "Spitz et al. 2010, ICES J. Mar. Sci. 67:909-915, Table 1")
+  out[, `:=`(energy_kJ_g = ENERGY_DENSITY_KJ_PER_G,
+             energy_density_source = "default 4.5 kJ/g wet mass (ASSUMPTION)")]
+  for (i in rev(seq_len(nrow(ENERGY_DENSITY_BY_TAXON)))) {   # first row wins (Class before Phylum)
+    e <- ENERGY_DENSITY_BY_TAXON[i]
+    if (e$rank %in% names(out))
+      out[get(e$rank) %in% e$taxon, `:=`(energy_kJ_g = e$kJ_g,
+                                         energy_density_source = paste0(e$taxon, " ", e$kJ_g, " kJ/g (", e$source, ")"))]
+  }
+  out[, Mmax_KJ := MaxWeight * energy_kJ_g]
   out[, PB_Brey_1999 := 10^(1.672 + 0.993 * log10(1 / Longevity) -
                               0.035 * log10(Mmax_KJ) - 300.447 * (1 / (Temp + 273)))]
   

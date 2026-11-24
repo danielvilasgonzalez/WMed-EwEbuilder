@@ -6114,35 +6114,16 @@ if (isTRUE(APPLY_UNREPORTED_ADJUSTMENT)) {
 ## figures are found; anything left unfilled stays explicitly "not
 ## estimated" rather than defaulting to zero.
 ##
-## Seeded with the
-## one quantitative, gear-resolved figure found so far, for sharks & rays
-## in EU Mediterranean fisheries: Bargnesi et al. 2024 (Sustainability,
-## "Assessing the relevance of sharks and rays for Mediterranean EU
-## fisheries") - elasmobranch discard rate by gear: bottom trawls ~40%
-## (of the ~75% of elasmobranch catch trawls take); fixed nets/longlines
-## <2.5%. Applied here to EU-3 (Spain/France/Italy) trawl and longline
-## FleetTypes only, matched by gear-name keyword (robust to this run's
-## exact FleetType spelling, e.g. "Bottom trawls" vs "Trawls -n.e.i-").
-## NOT extended to Morocco/Algeria/Tunisia - the source paper covers EU
-## Med fisheries specifically, and non-EU gear/discard practice is not
-## confirmed to match. Every other Country x FleetType x FG cell (every
-## other FG entirely, and every non-trawl/non-longline gear for sharks &
-## rays too) stays "not estimated" - this is a STARTING POINT, not a
-## comprehensive multi-species Mediterranean bycatch dataset.
+## Starts empty: the literature figure used before for sharks and rays
+## could not be traced to a verifiable publication, so every cell takes
+## the rates from this run's own catch data below (STECF FDI, then SAU,
+## then FishMIP). Add rows to BYCATCH_RATE_MANUAL (Country,
+## FleetType_keyword, FG_num, bycatch_rate, source_citation) where a
+## published, gear-resolved rate exists; they take precedence.
 ## =================================================================
-sharkray_fg <- full_fg_list[grepl("shark|ray|elasmobranch", FG_name, ignore.case = TRUE)]  # find this run's own FG_num/FG_name for sharks & rays, whatever its exact numbering
-BYCATCH_RATE_MANUAL <- if (nrow(sharkray_fg) > 0) {
-  rbindlist(lapply(sharkray_fg$FG_num, function(fg) data.table(
-    Country = rep(c("Spain", "France", "Italy"), 2),
-    FleetType_keyword = c(rep("trawl", 3), rep("longlin", 3)),  # matched against FleetType by regex below, not an exact FleetType string
-    FG_num = fg,
-    bycatch_rate = c(rep(0.40, 3), rep(0.025, 3)),
-    source_citation = "Bargnesi et al. 2024, Sustainability - elasmobranch discard rate by gear, EU Mediterranean fisheries (bottom trawl ~40%, fixed nets/longlines <2.5%)"
-  )))
-} else {
-  data.table(Country = character(), FleetType_keyword = character(), FG_num = integer(),
-             bycatch_rate = numeric(), source_citation = character())
-}
+if (!exists("BYCATCH_RATE_MANUAL", envir = .GlobalEnv, inherits = FALSE))
+  BYCATCH_RATE_MANUAL <- data.table(Country = character(), FleetType_keyword = character(), FG_num = integer(),
+                                    bycatch_rate = numeric(), source_citation = character())
 bycatch_placeholder <- unique(fleet_prop[, .(Country, FleetType, FG_num)])  # one row per country x fleet x FG for the bycatch placeholder table (fleet-resolved, not just country x FG)
 bycatch_placeholder <- merge(bycatch_placeholder, unique(catch_with_unreported[, .(FG_num, FG_name)]), by = "FG_num", all.x = TRUE)  # attach FG_name for readability
 if (nrow(BYCATCH_RATE_MANUAL) > 0) {
@@ -6156,18 +6137,17 @@ if (nrow(BYCATCH_RATE_MANUAL) > 0) {
 } else {
   bycatch_placeholder[, `:=`(bycatch_rate = NA_real_, source_citation = NA_character_)]  # no manual entries at all - leave empty
 }
-n_bargnesi_filled <- sum(!is.na(bycatch_placeholder$bycatch_rate))
-message("\n[Bycatch] ", n_bargnesi_filled, " of ", nrow(bycatch_placeholder),
-        " Country x FleetType x FG cell(s) filled from Bargnesi et al. 2024 (sharks & rays x",
-        " EU-3 trawl/longline).")
+n_manual_filled <- sum(!is.na(bycatch_placeholder$bycatch_rate))
+message("\n[Bycatch] ", n_manual_filled, " of ", nrow(bycatch_placeholder),
+        " Country x FleetType x FG cell(s) filled from BYCATCH_RATE_MANUAL (published rates).")
 
-## For every cell Bargnesi doesn't cover, fall
+## For every cell BYCATCH_RATE_MANUAL doesn't cover, fall
 ## back to this pipeline's OWN discard-rate-from-catch data, already
 ## computed above from real STECF FDI/SAU/FishMIP catch+discard
 ## tonnage - a discard % derived from actual reported catch for that
 ## FG, rather than leaving every non-shark/ray cell "not estimated".
 ## Priority (most gear/country-resolved first, same reasoning as the
-## Bargnesi table being fleet-resolved rather than country-only):
+## manual table being fleet-resolved rather than country-only):
 ##   1. stecf_discard_ratio_by_fleet - Country x FG x FleetType x Year,
 ##      real landed/discarded tonnage from STECF FDI, fleet-resolved
 ##   2. stecf_discard_ratio         - Country x FG x Year, STECF FDI,
@@ -6179,7 +6159,7 @@ message("\n[Bycatch] ", n_bargnesi_filled, " of ", nrow(bycatch_placeholder),
 ##      Country/FleetType resolution at all - broadest fallback,
 ##      applied to every Country x FleetType cell for that FG
 ## Each tier only fills cells still NA after the previous ones (and
-## after Bargnesi) - never overwrites a more specific/reliable value.
+## after the manual rates) - never overwrites a more specific/reliable value.
 if (nrow(stecf_discard_ratio_by_fleet) > 0) {
   fleet_fill <- stecf_discard_ratio_by_fleet[, .(bycatch_rate_fill = mean(discard_ratio, na.rm = TRUE)),
                                              by = .(Country, FG_num, FleetType)]
@@ -6220,12 +6200,12 @@ if (nrow(discard_by_fg) > 0) {
 
 bycatch_placeholder[, data_status := fifelse(
   is.na(bycatch_rate), "not estimated - no source in this pipeline captures bycatch/discards for this Country x FleetType x FG cell",
-  fifelse(grepl("^Bargnesi", source_citation), "literature-sourced (elasmobranch-specific rate) - see source_citation",
+  fifelse(source_citation %in% BYCATCH_RATE_MANUAL$source_citation, "literature-sourced (BYCATCH_RATE_MANUAL) - see source_citation",
           "data-derived (this run's own catch/discard tonnage) - see source_citation")
 )]
 message("[Bycatch] After the catch-data fallback: ", sum(!is.na(bycatch_placeholder$bycatch_rate)), " of ",
-        nrow(bycatch_placeholder), " Country x FleetType x FG cell(s) filled total (", n_bargnesi_filled,
-        " literature-sourced from Bargnesi et al. 2024, ", sum(!is.na(bycatch_placeholder$bycatch_rate)) - n_bargnesi_filled,
+        nrow(bycatch_placeholder), " Country x FleetType x FG cell(s) filled total (", n_manual_filled,
+        " from BYCATCH_RATE_MANUAL, ", sum(!is.na(bycatch_placeholder$bycatch_rate)) - n_manual_filled,
         " data-derived from this run's own STECF FDI/SAU/FishMIP catch+discard tonnage); the rest still",
         " flagged 'not estimated'.")
 

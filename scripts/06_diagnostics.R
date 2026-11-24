@@ -1546,8 +1546,8 @@ if (!exists("PEDIGREE_RULES", envir = .GlobalEnv, inherits = FALSE)) PEDIGREE_RU
   data.table(input = "B", pattern = "^benthic habitat",            index = 0.4, category = "Approximate or indirect method (habitat cover x site density)"),
   data.table(input = "B", pattern = "^primary producer|ISIMIP",    index = 0.4, category = "Approximate (ISIMIP ocean-model hindcast, observed climate)"),
   data.table(input = "B", pattern = "^(ICCAT )?stock assessment",  index = 0.7, category = "Sampling-based, low precision (stock assessment)"),
-  data.table(input = "B", pattern = "^Per-GSA acoustic|^MEDIAS",   index = 0.7, category = "Sampling-based, low precision (acoustic survey)"),
-  data.table(input = "B", pattern = "^MEDITS",                     index = 0.7, category = "Sampling-based, low precision (trawl survey, assumed catchability)"),
+  data.table(input = "B", pattern = "^Per-GSA acoustic|^MEDIAS",   index = 1.0, category = "Sampling-based, high precision (acoustic survey of the model area)"),
+  data.table(input = "B", pattern = "^MEDITS",                     index = 1.0, category = "Sampling-based, high precision (trawl survey of the model area)"),
   data.table(input = "B", pattern = "^$",                          index = 0.0, category = "Guesstimate (placeholder biomass, no data)"),
   ## P/B and Q/B (PB_source / QB_source, with the FG Reference)
   data.table(input = "PBQB", pattern = "EcoBase",                         index = 0.2, category = "From other model (EcoBase)"),

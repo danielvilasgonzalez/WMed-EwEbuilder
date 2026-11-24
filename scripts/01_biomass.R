@@ -519,10 +519,19 @@ if (!exists("ECOPATH_B_EXPANDING_MIN", envir = .GlobalEnv, inherits = FALSE)) EC
 ##   ECOSIM_MIN_AREA_COVERAGE - survey years whose sampled strata cover less
 ##                              than this share of the model area are left
 ##                              blank (2022: GSAs 7-8 only = 14 %; 2023 = 60 %).
-##   ECOSIM_SPIKE_FILTER      - isolated upward spikes (> 3x and > 3 MAD
-##                              above the median of the 2 years each side,
-##                              on log scale) are blanked in every Ecosim B
-##                              series, survey or not.
+##   ECOSIM_SPIKE_FILTER      - screens every Ecosim B series, survey or
+##                              not, for outliers (flag_ts_outliers()).
+##   ECOSIM_OUTLIER_METHOD    - the rule, as OUTLIER_METHOD for the hauls:
+##                              "hampel" (default: isolated jump > 3x and
+##                              > 3 MAD above the 2 years each side, log
+##                              scale), "boxplot" (Tukey fences of the
+##                              series), "mad" (robust z of the series) or
+##                              "multi" (ECOSIM_OUTLIER_MULTI_METHODS
+##                              combined with ECOSIM_OUTLIER_CONSENSUS).
+##   ECOSIM_OUTLIER_SIDE      - "high" (default; a low year can be a real
+##                              decline) or "both".
+##   ECOSIM_DROP_OUTLIERS     - TRUE blanks them; FALSE only reports them
+##                              in ecosim_ts_outliers_REVIEW.csv.
 if (!exists("ECOSIM_HAUL_CAP_Q",        envir = .GlobalEnv, inherits = FALSE)) ECOSIM_HAUL_CAP_Q        <- 0.95
 if (!exists("ECOSIM_MIN_AREA_COVERAGE", envir = .GlobalEnv, inherits = FALSE)) ECOSIM_MIN_AREA_COVERAGE <- 0    # 0 = off: unsampled cells are imputed instead (SURVEY_IMPUTE_UNSAMPLED_CELLS); was 0.80 on 2026-10-07
 ## SURVEY_IMPUTE_UNSAMPLED_CELLS (2026-10-08): every valid haul is kept
@@ -535,6 +544,11 @@ if (!exists("ECOSIM_MIN_AREA_COVERAGE", envir = .GlobalEnv, inherits = FALSE)) E
 ## FALSE = mean over the sampled cells only, no stratum filling.
 if (!exists("SURVEY_IMPUTE_UNSAMPLED_CELLS", envir = .GlobalEnv, inherits = FALSE)) SURVEY_IMPUTE_UNSAMPLED_CELLS <- TRUE
 if (!exists("ECOSIM_SPIKE_FILTER",      envir = .GlobalEnv, inherits = FALSE)) ECOSIM_SPIKE_FILTER      <- TRUE
+if (!exists("ECOSIM_OUTLIER_METHOD",    envir = .GlobalEnv, inherits = FALSE)) ECOSIM_OUTLIER_METHOD    <- "hampel"
+if (!exists("ECOSIM_OUTLIER_SIDE",      envir = .GlobalEnv, inherits = FALSE)) ECOSIM_OUTLIER_SIDE      <- "high"
+if (!exists("ECOSIM_OUTLIER_MULTI_METHODS", envir = .GlobalEnv, inherits = FALSE)) ECOSIM_OUTLIER_MULTI_METHODS <- c("hampel", "boxplot", "mad")
+if (!exists("ECOSIM_OUTLIER_CONSENSUS", envir = .GlobalEnv, inherits = FALSE)) ECOSIM_OUTLIER_CONSENSUS <- "all"
+if (!exists("ECOSIM_DROP_OUTLIERS",     envir = .GlobalEnv, inherits = FALSE)) ECOSIM_DROP_OUTLIERS     <- TRUE
 ## FGs whose Ecopath_B baseline ALSO uses the haul-capped index (2026-10-08):
 ## their 1994-1996 mean rests on a few extreme hauls (ecosim_haul_cap_effect_REVIEW.csv:
 ## Commercial small demersal fish x6.4 from one 1995 haul of Gymnammodytes
@@ -2580,6 +2594,17 @@ if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa
   ## row matching none of the four named conditions comes back NA),
   ## then an explicit is.na() backfill to avg_density for exactly those
   ## rows - a true row-wise fallback, which `default=` cannot express.
+  ## --- Small-pelagic biomass source (SMALL_PELAGIC_SOURCE) ----------
+  ## For the FGs the acoustic survey measures (sardine, anchovy):
+  ##   "medias"           MEDIAS acoustic, per-GSA series (default)
+  ##   "medits"           MEDITS bottom-trawl index (undersamples pelagics)
+  ##   "stock_assessment" GFCM STAR / RAM Legacy assessed biomass per GSA
+  if (!exists("SMALL_PELAGIC_SOURCE")) SMALL_PELAGIC_SOURCE <- "medias"
+  SMALL_PELAGIC_SOURCE <- match.arg(SMALL_PELAGIC_SOURCE, c("medias", "medits", "stock_assessment"))
+  .sp_fgs <- if (exists("medias_fgs")) medias_fgs else integer(0)
+  if (SMALL_PELAGIC_SOURCE == "medits" && length(.sp_fgs) > 0)
+    fg_index_regional_combined[FG_num %in% .sp_fgs, medias_density := NA_real_]
+  message("[Small pelagics] Biomass source: ", SMALL_PELAGIC_SOURCE, " (SMALL_PELAGIC_SOURCE).")
   fg_index_regional_combined[, `:=`(
     mean_density = fcase(
       ## "survey_exempt" checked FIRST: prefer the manual/EcoBase-cited
@@ -2670,6 +2695,7 @@ if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa
   ## is ON by default (forced, so a stale value from .RData can't switch
   ## it off). Set MEDIAS_BACKCAST_APPLY_OVERRIDE <- FALSE to compare.
   MEDIAS_BACKCAST_APPLY <- if (exists("MEDIAS_BACKCAST_APPLY_OVERRIDE")) MEDIAS_BACKCAST_APPLY_OVERRIDE else TRUE
+  if (!identical(SMALL_PELAGIC_SOURCE, "medias")) MEDIAS_BACKCAST_APPLY <- FALSE   # other sources set below
   if (!exists("MEDIAS_BACKCAST_ANCHOR_N")) MEDIAS_BACKCAST_ANCHOR_N <- 3
   ## GSAs MEDIAS never surveyed (e.g. 2, 5, 8, 11) get the "median" (or
   ## "min") back-cast shelf density of the surveyed GSAs.
@@ -2804,9 +2830,12 @@ if (AREA_MODE == "westmed" || (AREA_MODE == "custom" && CUSTOM_AREA_TYPE == "gsa
 ##   4. model-area density = sum(D x shelf area) / model area.
 ## Ecopath_B = YEAR_ECOPATH mean of this series; it replaces the hybrid
 ## back-cast above. Set SMALL_PELAGIC_SERIES_MODE <- "backcast" to keep it.
+## Runs only with SMALL_PELAGIC_SOURCE = "medias" (default).
+if (!exists("SMALL_PELAGIC_SOURCE")) SMALL_PELAGIC_SOURCE <- "medias"   # also set inside the GSA block above; custom bbox/shapefile runs skip that block
 if (!exists("SMALL_PELAGIC_SERIES_MODE")) SMALL_PELAGIC_SERIES_MODE <- "per_gsa_acoustic"
 if (!exists("SMALL_PELAGIC_POOLED_TREND")) SMALL_PELAGIC_POOLED_TREND <- FALSE
-if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic_fg_by_gsa") && nrow(acoustic_fg_by_gsa) > 0) {
+if (identical(SMALL_PELAGIC_SOURCE, "medias") &&
+    identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic_fg_by_gsa") && nrow(acoustic_fg_by_gsa) > 0) {
   .sa_sp <- as.data.table(strata_area_by_area); .gsp <- intersect(c("AreaID", "GSA"), names(.sa_sp))[1]
   if (exists("FILTER_AREAS") && length(FILTER_AREAS) > 0) .sa_sp <- .sa_sp[get(.gsp) %in% FILTER_AREAS]
   shelf_g <- MODEL_AREA_CELLS[Depth_min_m >= 10 & Depth_max_m <= 200, .(shelf_km2 = sum(area_km2, na.rm = TRUE)), by = .(GSA = as.character(AreaID))]   # all model GSAs; unsurveyed ones = median below
@@ -2882,6 +2911,49 @@ if (identical(SMALL_PELAGIC_SERIES_MODE, "per_gsa_acoustic") && exists("acoustic
   message("[Small pelagics] Per-GSA acoustic series (", min(yrs_all), "-", max(yrs_all), "): ",
           paste(sp_model[Year %in% YEAR_ECOPATH, .(B = round(mean(mean_density_new), 3)), by = FG_name][, paste0(FG_name, " ", B, " t/km2 (baseline)")], collapse = "; "),
           ". Written to small_pelagics_per_gsa_series_REVIEW.csv.")
+}
+
+## --- Small pelagics from stock assessments (SMALL_PELAGIC_SOURCE) ----
+## Per GSA and year: assessed biomass of the stock covering the GSA /
+## shelf area (10-200 m) of the stock's GSAs. GSAs without an assessment
+## that year = median of the assessed GSAs (ASSUMPTION). Model-area
+## density = sum(D x shelf area) / model area. Years with no assessment
+## at all keep the survey value. Source: GFCM STAR / RAM Legacy (Ricard
+## et al. 2012); RAM "biomass" may be total or spawning-stock biomass.
+if (identical(SMALL_PELAGIC_SOURCE, "stock_assessment")) {
+  sa_sp <- if (exists("small_pelagic_assessments")) small_pelagic_assessments[!is.na(biomass) & biomass > 0] else data.table()
+  if (nrow(sa_sp) == 0) {
+    message("[Small pelagics] SMALL_PELAGIC_SOURCE = \"stock_assessment\" but no small-pelagic assessment has biomass - survey values kept.")
+  } else {
+    shelf_sa <- MODEL_AREA_CELLS[Depth_min_m >= 10 & Depth_max_m <= 200, .(shelf_km2 = sum(area_km2, na.rm = TRUE)), by = .(GSA = as.character(AreaID))]
+    sa_sp[, gsa_list := lapply(gsa, function(x) intersect(trimws(unlist(strsplit(as.character(x), "[,;]"))), shelf_sa$GSA))]
+    sa_sp <- sa_sp[lengths(gsa_list) > 0]
+    sa_sp[, stock_shelf := vapply(gsa_list, function(g) shelf_sa[GSA %in% g, sum(shelf_km2)], numeric(1))]
+    per_g <- sa_sp[, .(GSA = unlist(gsa_list), dens = biomass / stock_shelf), by = .(FG_num, Year = year, stock_key)]
+    per_g <- per_g[, .(dens = mean(dens), stocks = paste(unique(stock_key), collapse = ",")), by = .(FG_num, Year, GSA)]
+    grid <- CJ(FG_num = unique(per_g$FG_num), Year = unique(per_g$Year), GSA = shelf_sa$GSA)
+    per_g <- merge(grid, per_g, by = c("FG_num", "Year", "GSA"), all.x = TRUE)
+    per_g[, how := fifelse(is.na(dens), "no assessment for this GSA - median of the assessed GSAs (ASSUMPTION)", "own stock assessment")]
+    per_g[, dens := fifelse(is.na(dens), median(dens, na.rm = TRUE), dens), by = .(FG_num, Year)]
+    per_g <- merge(per_g, shelf_sa, by = "GSA")[, biomass_t := dens * shelf_km2]
+    fwrite(per_g, file.path(csv_out_dir, "small_pelagics_stock_assessment_series_REVIEW.csv"))
+    sa_model <- per_g[, .(sa_density = sum(biomass_t) / MODEL_AREA_KM2,
+                          n_gsa = sum(how == "own stock assessment"),
+                          stocks = paste(setdiff(unique(unlist(strsplit(na.omit(stocks), ","))), ""), collapse = ",")), by = .(FG_num, Year)]
+    fg_index_regional_combined <- merge(fg_index_regional_combined, sa_model, by = c("FG_num", "Year"), all = TRUE)
+    fg_index_regional_combined[is.na(FG_name), FG_name := fg_lookup_safe$FG_name[match(FG_num, fg_lookup_safe$FG_num)]]
+    fg_index_regional_combined[, FG_ECOLOGY_TYPE := FG_ECOLOGY_TYPE[!is.na(FG_ECOLOGY_TYPE)][1], by = FG_num]
+    fg_index_regional_combined[!is.na(sa_density), `:=`(
+      mean_density = sa_density,
+      biomass_source = paste0("Stock assessment per GSA (GFCM STAR / RAM Legacy, Ricard et al. 2012; stocks ", stocks, "; ", n_gsa,
+                              " GSA(s) assessed this year, others = median) - see small_pelagics_stock_assessment_series_REVIEW.csv"))]
+    fg_index_regional_combined[, c("sa_density", "n_gsa", "stocks") := NULL]
+    setorder(fg_index_regional_combined, FG_num, Year)
+    message("[Small pelagics] Stock-assessment series: ",
+            paste(sa_model[Year %in% YEAR_ECOPATH, .(B = round(mean(sa_density), 3)), by = FG_num][
+              , paste0("FG ", FG_num, " ", B, " t/km2 (baseline)")], collapse = "; "),
+            ". Written to small_pelagics_stock_assessment_series_REVIEW.csv.")
+  }
 }
 
   ## --- MEDITS invertebrate recording era ---------------------
@@ -3836,6 +3908,9 @@ export_ecopath_ecosim_excel(
   estimate_b_from_ee = ECOPATH_B_FROM_EE,
   ee_value = ECOPATH_B_EE_VALUE,
   spike_filter = ECOSIM_SPIKE_FILTER,
+  outlier_method = ECOSIM_OUTLIER_METHOD,
+  outlier_args = list(side = ECOSIM_OUTLIER_SIDE, methods = ECOSIM_OUTLIER_MULTI_METHODS, consensus = ECOSIM_OUTLIER_CONSENSUS),
+  drop_ts_outliers = ECOSIM_DROP_OUTLIERS,
   fg_index_regional = fg_index_regional_combined,
   species_density_regional = species_density_regional_combined,
   n_samples_by_area_year = n_samples_by_stratum[, .(n_samples = sum(n_samples)), by = .(AreaID, Year)],
@@ -4961,6 +5036,38 @@ if (AREA_MODE == "custom" && CUSTOM_AREA_TYPE %in% c("bbox", "shapefile")) tryCa
   if (nrow(.from)) {
     .from[, hab := .hab_fg_class(FG_name)]
     .from[, `:=`(B_region = B_wm, how = "Western Med density per km2 assumed in the region (ASSUMPTION)")]
+    ## Species that do not live in the region: the Western Med density
+    ## of an FG includes them, so B is scaled by the Western Med share of
+    ## the species present (AquaMaps native range with probability >=
+    ## CUSTOM_PRESENCE_MIN_PROB in a cell overlapping the region, and an
+    ## AquaMaps depth range overlapping the region's depths). Species with
+    ## no AquaMaps record are kept. Habitat FGs use the habitat map below.
+    ## Review: custom_species_presence_REVIEW.csv.
+    if (!exists("CUSTOM_PRESENCE_CHECK")) CUSTOM_PRESENCE_CHECK <- TRUE
+    if (!exists("CUSTOM_PRESENCE_MIN_PROB")) CUSTOM_PRESENCE_MIN_PROB <- 0.4
+    .pres <- NULL
+    .bp_main_p <- file.path(.main_dir, "biomass", "biomass_proportion_by_species_fg.csv")
+    if (isTRUE(CUSTOM_PRESENCE_CHECK) && file.exists(.bp_main_p) && any(is.na(.from$hab))) .pres <- tryCatch({
+      if (!exists("aquamaps_presence_in_region", mode = "function")) source(file.path(git_dir, "scripts/lib_aquamaps_depth_extension.R"))
+      .sp <- fread(.bp_main_p)[FG_num %in% .from[is.na(hab), FG_num], .(FG_num, Species, prop_sp_fg)]
+      .dr <- if (exists("MODEL_AREA_CELLS")) range(c(MODEL_AREA_CELLS$Depth_min_m, MODEL_AREA_CELLS$Depth_max_m), na.rm = TRUE) else NULL
+      .pr <- aquamaps_presence_in_region(unique(.sp$Species), area_shp, min_prob = CUSTOM_PRESENCE_MIN_PROB, depth_range = .dr)
+      merge(.sp, .pr, by.x = "Species", by.y = "ScientificName", all.x = TRUE)
+    }, error = function(e) { message("[Custom region] species presence check skipped - ", conditionMessage(e)); NULL })
+    if (!is.null(.pres) && nrow(.pres)) {
+      .pres[is.na(present), `:=`(present = TRUE, presence_basis = "no AquaMaps record - kept")]
+      fwrite(.pres[order(FG_num, -prop_sp_fg)], file.path(csv_out_dir, "custom_species_presence_REVIEW.csv"))
+      .ps <- .pres[, .(share_present = sum(prop_sp_fg[present], na.rm = TRUE) / sum(prop_sp_fg, na.rm = TRUE),
+                       n_absent = sum(!present), absent = paste(Species[!present], collapse = ", ")), by = FG_num]
+      .ps[!is.finite(share_present), share_present := 1]
+      .from[.ps, on = "FG_num", `:=`(B_region = B_wm * i.share_present,
+                                     how = fifelse(i.n_absent > 0,
+                                                   sprintf("%s; %d species absent from the region (AquaMaps), Western Med share of the species present %.3f: %s",
+                                                           how, i.n_absent, i.share_present, substr(i.absent, 1, 200)), how))]
+      .from[FG_num %in% .ps[share_present == 0, FG_num], how := "all species absent from the region (AquaMaps native range or depth) - B = 0"]
+      message("[Custom region] species presence: ", sum(!.pres$present), " of ", nrow(.pres), " species absent from the region",
+              " (custom_species_presence_REVIEW.csv).")
+    }
     if (any(!is.na(.from$hab))) {
       .ma_main <- file.path(.main_dir, "biomass", "model_area_by_gsa.csv")
       if (!file.exists(.ma_main)) stop("no ", .ma_main, " (Western Med model area)")
@@ -4998,9 +5105,12 @@ if (AREA_MODE == "custom" && CUSTOM_AREA_TYPE %in% c("bbox", "shapefile")) tryCa
 
     ## Species shares of these FGs from the Western Med run (P/B, Q/B and
     ## diets are weighted by species biomass in 03 and 04)
-    .bp_main_p <- file.path(.main_dir, "biomass", "biomass_proportion_by_species_fg.csv")
     if (file.exists(.bp_main_p)) {
       .bp_main <- fread(.bp_main_p)[FG_num %in% .from$FG_num]
+      if (!is.null(.pres) && nrow(.pres)) {   # absent species out, shares of the rest renormalised
+        .bp_main <- .bp_main[!.pres[present == FALSE, .(FG_num, Species)], on = c("FG_num", "Species")]
+        .bp_main[, prop_sp_fg := prop_sp_fg / sum(prop_sp_fg), by = FG_num]
+      }
       .bp_main[.from, on = "FG_num", `:=`(Ecopath_B_Biomass = i.B_region, Biomass_t_km2 = prop_sp_fg * i.B_region, Density = prop_sp_fg * i.B_region)]
       .bp_main[, prop_sp_fg_basis := paste0("Western Med run species share (custom region): ", prop_sp_fg_basis)]
       .bp_reg_p <- file.path(csv_out_dir, "biomass_proportion_by_species_fg.csv")

@@ -127,7 +127,9 @@
 ##     x2.5 = ASSUMPTION, EUSeaMap coralligenous MC151/MC251 area.
 ##   - Macroalgae: 1650 g DW/m2 (Ballesteros 2006, Oceanogr. Mar. Biol.
 ##     Annu. Rev. 44:123-195); EMODnet macroalgae area; occupancy 0.4 =
-##     ASSUMPTION.
+##     ASSUMPTION (no cover estimate exists for the mapped polygons;
+##     algae cover less than half of a mapped rocky polygon, patchier
+##     than Posidonia meadows at 0.7; B scales linearly with it).
 ##  In 01_biomass.R (small pelagics): MEDIAS acoustic surveys (Leonori et
 ##  al. 2021, Mediterranean Marine Science); shelf/model-area rescaling
 ##  from the MEDITS strata areas; unsurveyed-GSA fill = ASSUMPTION.
@@ -587,16 +589,11 @@ if (!file.exists(iccat_biomass_path)) {
   ## figure, e.g. Bethoux 1979-style Mediterranean physical geography
   ## references) is used as the stock's range.
   ##
-  ## Swordfish: ICCAT's own SS assessment reports SSB only as a B/Bmsy
-  ## ratio, not a tonnage - but the 2020 Mediterranean swordfish
-  ## assessment's JABBA (surplus-production) model gives an absolute
-  ## Bmsy: joint posterior median 71,319 t (67,509-73,928 t across model
-  ## variants), with B2018/Bmsy = 0.72 for the terminal year -> B2018 =
-  ## 0.72 x 71,319 = 51,350 t (whole Mediterranean stock, one year only -
-  ## no public year-by-year SSB table exists, so this is used as the
-  ## single closest-available point to the 1994-1996 baseline, same
-  ## "closest available, flagged not guessed" convention as every other
-  ## manual-cited source in this pipeline). See iccat_ssb_biomass.csv's
+  ## Swordfish: 1995 total biomass of the whole-Mediterranean stock
+  ## from the ICCAT 2010 assessment series (RAM Legacy v4.44, SWORDMED,
+  ## 66,100 t; B/Bmsy = 0.95). The 2020 JABBA assessment gives
+  ## Bmsy = 71,319 t, so 0.95 x Bmsy = 67,750 t, a consistent check. See
+  ## iccat_ssb_biomass.csv's
   ## SWO row for the full citation. Albacore (ALB) has no equivalent
   ## figure sourced yet - the mechanism is ready, the number isn't found.
   ##
@@ -624,8 +621,9 @@ if (!file.exists(iccat_biomass_path)) {
   ##   (b) density WITHIN the core aggregation block itself, applied
   ##       here as the FG's domain-wide West Med average - same
   ##       simplification already used for gorgonians/Posidonia;
-  ##   (c) 2017-2021 data used as a stand-in for 1995 (no aerial survey
-  ##       existed then - GBYP itself only started ~2010).
+  ##   (c) no aerial survey existed in 1995, so the 2017-2021 density is
+  ##       scaled by the BFT-E SSB ratio 1995/2015 (RAM Legacy v4.44,
+  ##       ATBTUNAEATL: 176,000 / 605,000 t = 0.29).
   ## Because this is already a density, not a whole-stock tonnage/area
   ## division like Swordfish/Albacore, the mechanism is reused by
   ## setting stock_area_km2 = 1 for BFT - iccat_ssb_biomass.csv's BFT
@@ -675,37 +673,21 @@ if (!file.exists(iccat_biomass_path)) {
   ), by = .(FG_num, FG_name, Year, iccat_code)]
   iccat_biomass_fg_year <- iccat_biomass_fg_year[iccat_biomass_t > 0]
   
-  ## --- temporal-baseline mismatch flag ---------------------------
-  ## BFT's density comes from a 2017-2021 GBYP aerial survey (see the
-  ## code comment above this ICCAT block) and SWO's from a 2018 JABBA
-  ## model estimate - both real measurements, but for the wrong year,
-  ## applied here to a 1994-1996 baseline as-is. The DIRECTION of the
-  ## bias is documented for both stocks (see ICCAT_TEMPORAL_BASELINE_NOTE
-  ## below for the full citations and reasoning), but no source gives a
-  ## citable 1994-1996 vs. modern-year numeric ratio (ICCAT's own
-  ## SSB-by-year series is graphical/appendix-only in the reports
-  ## checked) - so no numeric correction is applied (that would be
-  ## guessing a number, which this pipeline deliberately never does -
-  ## see the "mechanism is ready, number isn't found" convention used
-  ## elsewhere, e.g. Albacore). The direction and likely bias are
-  ## flagged prominently in stock_assessment_source/biomass_source (so
-  ## it reaches B_ref) rather than left as a silent mismatch.
+  ## --- temporal baseline note ----------------------------------
+  ## The 1995 values in iccat_ssb_biomass.csv come from the assessment
+  ## series in the RAM Legacy database (v4.44): SWO total biomass for
+  ## 1995 directly; BFT as the GBYP 2017-2021 density scaled by the
+  ## SSB ratio 1995/2015. The note is appended to the source label so
+  ## it reaches B_ref.
   ICCAT_TEMPORAL_BASELINE_NOTE <- list(
     BFT = paste0(
-      "TEMPORAL MISMATCH: this density is from a 2017-2021 GBYP aerial survey, applied as-is to the ",
-      "1994-1996 baseline. ICCAT SCRS 2022 BFT-E assessment (ASAP model, Collect. Vol. Sci. Pap. ICCAT ",
-      "79(3), SCRS/2022/013): SSB declined from the 1970s to a trough ~2007, then rose steadily 2010-2020 ",
-      "to the highest level since the 1960s - so 1995 SSB was LOWER than 2017-2021. No citable numeric ",
-      "ratio found in the SCRS report tables checked (SSB-by-year is graphical/appendix-only there) - NOT ",
-      "numerically adjusted. Likely OVERESTIMATES 1995 biomass - review before trusting as a baseline value."
+      "BACK-CAST TO 1995: 2017-2021 GBYP aerial-survey density scaled by the BFT-E SSB ratio ",
+      "1995/2015 (RAM Legacy v4.44, ATBTUNAEATL). SSB kept rising after 2015, so 1995 may still be ",
+      "slightly overestimated."
     ),
     SWO = paste0(
-      "TEMPORAL MISMATCH: this density is from a 2018 JABBA model estimate, applied as-is to the ",
-      "1994-1996 baseline. ICCAT SCRS 2020 SWO-MED assessment (JABBA Bayesian state-space model): stock ",
-      "was already overfished by the mid-1990s (sharp 1950-1970 decline), with only modest further decline ",
-      "1996-2010 before accelerating decline into 2018 - so 1995 biomass was likely HIGHER than the 2018 ",
-      "estimate used here. No citable numeric ratio found - NOT numerically adjusted. Likely UNDERESTIMATES ",
-      "1995 biomass, probably by a smaller margin than BFT's overestimate - review before trusting."
+      "1995 total biomass from the ICCAT 2010 SWO-MED assessment (RAM Legacy v4.44, SWORDMED); ",
+      "consistent with 0.95 x Bmsy of the 2020 JABBA assessment."
     )
   )
   for (code in names(ICCAT_TEMPORAL_BASELINE_NOTE)) {
@@ -2767,7 +2749,9 @@ if (ENABLE_CMEMS_PLANKTON && length(plankton_missing) > 0) {
       ## g DM/m2 over z_eff = sum_k A_k min(zmid_k, 100) / sum_k A_k.
       ## ZOO_MESOMICRO_ANCHOR = "field" restores the old field-anchored
       ## level (it needs a DW:WW and a micro share, ZOO_FIELD, which are
-      ## not measured for this region).
+      ## not measured for this region). DW:WW 0.15 lies in the 0.13-0.2
+      ## conversion factors compiled by Postel, Fock & Hagen 2000 (ICES
+      ## Zooplankton Methodology Manual, Academic Press, 83-192).
       if (!exists("ZOO_MESOMICRO_ANCHOR")) ZOO_MESOMICRO_ANCHOR <- "model"
       if (!exists("ZOO_FIELD")) ZOO_FIELD <- list(dm_mg_m3 = 10, dw_to_ww = 0.15, micro_share = 0.35)
       .zidx <- tolower(plankton_model_rows$Group) == "mesomicrozooplankton"

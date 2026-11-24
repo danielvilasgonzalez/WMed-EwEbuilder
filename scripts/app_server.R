@@ -1180,6 +1180,10 @@ config_code <- reactive({
     sprintf("DROP_OUTLIERS    <- %s", tf(input$drop_outliers)),
     sprintf("USE_EXTRA_DATA   <- %s   # extra survey/assessment files in data/extra_data", tf(input$extra_data)),
     sprintf("NORMALIZE_TS     <- %s", tf(input$normalize_ts)),
+    sprintf("ECOSIM_SPIKE_FILTER   <- %s", tf(!identical(input$ecosim_outlier_method, "none"))),
+    sprintf("ECOSIM_OUTLIER_METHOD <- \"%s\"   # Ecosim series outliers: hampel / boxplot / mad / multi", if (is.null(input$ecosim_outlier_method) || input$ecosim_outlier_method == "none") "hampel" else input$ecosim_outlier_method),
+    sprintf("ECOSIM_OUTLIER_SIDE   <- \"%s\"", if (is.null(input$ecosim_outlier_side)) "high" else input$ecosim_outlier_side),
+    sprintf("ECOSIM_DROP_OUTLIERS  <- %s", tf(if (is.null(input$ecosim_drop_outliers)) TRUE else input$ecosim_drop_outliers)),
     sprintf("ECOPATH_B_FILL_MODE  <- \"%s\"   # FGs with no Ecopath-years biomass", if (isTRUE(input$fill_b)) "window_mean" else "nearest"),
     if (isTRUE(input$fill_b) && length(input$fill_years) == 2) sprintf("ECOPATH_B_FILL_YEARS <- %s", yr(input$fill_years)),
     if (!is.na(fg_path())) sprintf("FG_SPECIES_FILE  <- \"%s\"   # species -> FG table", .fwd(fg_path())),
@@ -1210,6 +1214,7 @@ config_code <- reactive({
     if (!is.null(survey_files()$TC)) sprintf("MEDITS_TC_FILE   <- \"%s\"   # own MEDITS length/maturity", .fwd(survey_files()$TC$path)),
     if (!is.null(survey_files()$MEDIAS_abundance) && !is.null(survey_files()$MEDIAS_biomass))
       sprintf("MEDIAS_DIR       <- \"%s\"   # own MEDIAS abundance.csv + biomass.csv", .fwd(dirname(survey_files()$MEDIAS_biomass$path))),
+    sprintf("SMALL_PELAGIC_SOURCE <- \"%s\"   # sardine/anchovy biomass: medias / medits / stock_assessment", if (is.null(input$sp_src)) "medias" else input$sp_src),
     sprintf("PHYTO_SOURCE     <- \"%s\"   # phytoplankton B and P/B: isimip / copernicus (05)", if (is.null(input$phyto_src)) "copernicus" else input$phyto_src),
     sprintf("EWE_MODEL_NAME   <- \"%s\"   # EwE import files (ewe_import/): file name start", if (is.null(input$ewe_model) || !nzchar(input$ewe_model)) "Western_Mediterranean_Sea" else input$ewe_model),
     sprintf("EWE_EXPORT_FORMAT <- \"both\"   # csv files and one xlsx"),
@@ -2811,11 +2816,16 @@ observeEvent(input$settings_upload, {
   used <- character(0); u <- function(k) used <<- c(used, k)
   if (!is.null(s$YEAR_ECOPATH)) { updateSliderInput(session, "ecopath_years", value = rng(s$YEAR_ECOPATH)); u("YEAR_ECOPATH") }
   if (!is.null(s$TS_YEARS))     { updateSliderInput(session, "ts_years", value = rng(s$TS_YEARS)); u("TS_YEARS") }
-  sw <- c(STRATA = "strata", DROP_OUTLIERS = "drop_outliers", NORMALIZE_TS = "normalize_ts", APPLY_CATCHABILITY = "catch_q")
+  sw <- c(STRATA = "strata", DROP_OUTLIERS = "drop_outliers", NORMALIZE_TS = "normalize_ts", APPLY_CATCHABILITY = "catch_q",
+          ECOSIM_DROP_OUTLIERS = "ecosim_drop_outliers")
   for (k in names(sw)) if (is.logical(s[[k]])) { updateCheckboxInput(session, sw[[k]], value = isTRUE(s[[k]])); u(k) }
   if (!is.null(s$ECOPATH_B_FILL_MODE)) { updateCheckboxInput(session, "fill_b", value = identical(s$ECOPATH_B_FILL_MODE, "window_mean")); u("ECOPATH_B_FILL_MODE") }
   if (!is.null(s$ECOPATH_B_FILL_YEARS)) { updateSliderInput(session, "fill_years", value = rng(s$ECOPATH_B_FILL_YEARS)); u("ECOPATH_B_FILL_YEARS") }
   ## HIGH_F_B_FIX: no longer a choice (high F is reported only)
+  if (isFALSE(s$ECOSIM_SPIKE_FILTER)) { updateSelectInput(session, "ecosim_outlier_method", selected = "none"); u("ECOSIM_SPIKE_FILTER") } else
+    if (!is.null(s$ECOSIM_OUTLIER_METHOD)) { updateSelectInput(session, "ecosim_outlier_method", selected = s$ECOSIM_OUTLIER_METHOD); u("ECOSIM_OUTLIER_METHOD") }
+  if (!is.null(s$ECOSIM_OUTLIER_SIDE)) { updateSelectInput(session, "ecosim_outlier_side", selected = s$ECOSIM_OUTLIER_SIDE); u("ECOSIM_OUTLIER_SIDE") }
+  if (!is.null(s$SMALL_PELAGIC_SOURCE)) { updateSelectInput(session, "sp_src", selected = s$SMALL_PELAGIC_SOURCE); u("SMALL_PELAGIC_SOURCE") }
   if (!is.null(s$PHYTO_SOURCE)) { updateSelectInput(session, "phyto_src", selected = s$PHYTO_SOURCE); u("PHYTO_SOURCE") }
   if (!is.null(s$ENV_SCENARIOS)) { updateCheckboxGroupInput(session, "env_scen", selected = as.character(s$ENV_SCENARIOS)); u("ENV_SCENARIOS") }
   if (!is.null(s$ENV_SCEN_END)) { updateNumericInput(session, "env_scen_end", value = as.integer(s$ENV_SCEN_END)); u("ENV_SCEN_END") }

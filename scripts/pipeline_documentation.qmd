@@ -275,7 +275,7 @@ Predator FG × prey FG diet composition $DC_{f,j}$ (each predator column sums to
 
 1.  Tier per predator FG: metaweb → MAISHA (per species with records) → FishBase/SeaLifeBase → EcoBase (`DIET_FALLBACK_ENABLE_MAISHA`, `DIET_FALLBACK_ENABLE_FISHBASE`, `DIET_FALLBACK_ENABLE_ECOBASE`; `DIET_FISHBASE_METHOD = "fg_matrix"`).
 2.  Study proportions $p_{s,d,k} = v_k/\sum_k v_k$ with $v$ = first available of IRI, %W, %N, %FO (`DIET_METRIC_PRIORITY`); Mediterranean studies only when a species has any.
-3.  Prey → FG: species → genus/family/order/class/phylum (equal split, `DIET_TAXON_SPLIT`) → food-category regex (split by Ecopath B, `DIET_CATEGORY_SPLIT`) → WoRMS second pass; eggs/larvae → zooplankton; detritus dropped for predators with TL ≥ 3 (`DIET_DETRITUS_MAX_TL`); non-food items dropped and the study renormalised.
+3.  Prey → FG: species → genus/family/order/class/phylum (split by Ecopath B, `DIET_TAXON_SPLIT`) → food-category regex (split by Ecopath B, `DIET_CATEGORY_SPLIT`) → WoRMS second pass; eggs/larvae → zooplankton; detritus dropped for predators with TL ≥ 3 (`DIET_DETRITUS_MAX_TL`); non-food items dropped and the study renormalised.
 4.  $DC_{s,j}$ = mean over studies; $DC_{f,j} = \sum_s b_{s|f} DC_{s,j} / \sum_s b_{s|f}$; columns renormalised to 1.
 5.  Checks: column sums, cannibalism \> 0.1.
 
@@ -1055,7 +1055,7 @@ Each column is a best-effort summary (distinct values `" | "`-joined when a FG d
 | `DIET_FALLBACK_ENABLE_FISHBASE` | `TRUE` | use FishBase/SeaLifeBase |
 | `DIET_FISHBASE_METHOD` | `"fg_matrix"` | build the FG matrix with `lib_fishbase_diet_matrix.R` |
 | `DIET_FALLBACK_ENABLE_ECOBASE` | `TRUE` | try EcoBase diet matrices |
-| `DIET_TAXON_SPLIT` / `DIET_CATEGORY_SPLIT` | `"equal"` / `"biomass"` | split of a prey taxon / food category over its FGs |
+| `DIET_TAXON_SPLIT` / `DIET_CATEGORY_SPLIT` | `"biomass"` / `"biomass"` | split of a prey taxon / food category over its FGs |
 | `DIET_DETRITUS_MAX_TL` | 3 | detritus dropped for predators with TL ≥ 3 |
 | `DIET_METRIC_PRIORITY` | `diet_metric_priority.csv` | IRI \> %W \> %N \> %FO \> presence |
 
